@@ -36,6 +36,10 @@ pub struct Upstreams {
     pub npm: String,
     #[serde(default = "default_go_proxy")]
     pub go_proxy: String,
+    #[serde(default = "default_crates_index")]
+    pub crates_index: String,
+    #[serde(default = "default_crates_api")]
+    pub crates_api: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +75,7 @@ impl Config {
             .collect();
         for proxy in enabled.keys() {
             match *proxy {
-                "github" | "composer" | "oci" | "npm" | "go" => {}
+                "github" | "composer" | "oci" | "npm" | "go" | "crates" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -108,6 +112,8 @@ impl Default for Upstreams {
             kubernetes: default_kubernetes_registry(),
             npm: default_npm_registry(),
             go_proxy: default_go_proxy(),
+            crates_index: default_crates_index(),
+            crates_api: default_crates_api(),
         }
     }
 }
@@ -135,6 +141,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "oci".to_string(),
         "npm".to_string(),
         "go".to_string(),
+        "crates".to_string(),
     ]
 }
 
@@ -172,6 +179,14 @@ fn default_npm_registry() -> String {
 
 fn default_go_proxy() -> String {
     "https://proxy.golang.org".to_string()
+}
+
+fn default_crates_index() -> String {
+    "https://index.crates.io".to_string()
+}
+
+fn default_crates_api() -> String {
+    "https://crates.io".to_string()
 }
 
 fn default_request_timeout_secs() -> u64 {

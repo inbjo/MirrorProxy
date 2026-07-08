@@ -8,7 +8,7 @@ use anyhow::Context;
 use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
 use clap::Parser;
 use config::Config;
-use proxy::{composer, github, go, npm, oci, ProxyError};
+use proxy::{composer, cratesio, github, go, npm, oci, ProxyError};
 use reqwest::Client;
 use serde::Serialize;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -84,6 +84,22 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/goproxy", get(go::root).head(go::root))
         .route("/goproxy/", get(go::root).head(go::root))
         .route("/goproxy/{*path}", get(go::proxy).head(go::proxy))
+        .route(
+            "/crates/api/v1/crates/{crate}/{version}/download",
+            get(cratesio::download).head(cratesio::download),
+        )
+        .route(
+            "/crates-index",
+            get(cratesio::index_root).head(cratesio::index_root),
+        )
+        .route(
+            "/crates-index/",
+            get(cratesio::index_root).head(cratesio::index_root),
+        )
+        .route(
+            "/crates-index/{*path}",
+            get(cratesio::index).head(cratesio::index),
+        )
         .route("/v2", get(oci::root).head(oci::root))
         .route("/v2/", get(oci::root).head(oci::root))
         .route("/v2/{*path}", get(oci::proxy).head(oci::proxy))
@@ -232,6 +248,11 @@ mod tests {
             .unwrap()
             .iter()
             .any(|proxy| proxy == "go"));
+        assert!(value["enabled_proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|proxy| proxy == "crates"));
     }
 
     #[tokio::test]
@@ -263,6 +284,25 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("Go module proxy"));
+    }
+
+    #[tokio::test]
+    async fn crates_index_config_points_to_local_downloads() {
+        let app = build_router(Config::default()).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/crates-index/config.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["dl"], "http://127.0.0.1:3000/crates/api/v1/crates");
     }
 
     #[tokio::test]
