@@ -6,6 +6,7 @@ use crate::{proxy, AppState};
 use super::ProxyError;
 
 const ALLOWED_HOSTS: &[&str] = &[
+    "api.github.com",
     "github.com",
     "raw.githubusercontent.com",
     "objects.githubusercontent.com",
@@ -14,6 +15,7 @@ const ALLOWED_HOSTS: &[&str] = &[
 
 pub fn is_github_proxy_path(path: &str) -> bool {
     path.starts_with("/https://github.com/")
+        || path.starts_with("/https://api.github.com/")
         || path.starts_with("/https://raw.githubusercontent.com/")
         || path.starts_with("/https://objects.githubusercontent.com/")
         || path.starts_with("/https://codeload.github.com/")
@@ -63,6 +65,9 @@ mod tests {
         assert!(is_github_proxy_path("/https://github.com/inbjo/Conductor"));
         assert!(is_github_proxy_path(
             "/https://raw.githubusercontent.com/org/repo/main/file"
+        ));
+        assert!(is_github_proxy_path(
+            "/https://api.github.com/repos/org/repo/zipball/v1.0.0"
         ));
         assert!(!is_github_proxy_path("/https://example.com/repo"));
     }

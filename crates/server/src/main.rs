@@ -161,3 +161,65 @@ impl IntoResponse for ProxyError {
             .into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn healthz_returns_ok() {
+        let app = build_router(Config::default()).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("\"status\":\"ok\""));
+    }
+
+    #[tokio::test]
+    async fn exposes_public_config() {
+        let app = build_router(Config::default()).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["public_base_url"], "http://127.0.0.1:3000");
+        assert_eq!(value["enabled_proxies"][0], "github");
+    }
+
+    #[tokio::test]
+    async fn serves_embedded_index() {
+        let app = build_router(Config::default()).unwrap();
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("MirrorProxy"));
+    }
+}
