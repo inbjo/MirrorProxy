@@ -2,7 +2,7 @@ mod config;
 mod proxy;
 mod static_assets;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
@@ -58,9 +58,11 @@ fn init_tracing() {
 }
 
 fn build_router(config: Config) -> anyhow::Result<Router> {
+    let request_timeout = Duration::from_secs(config.timeout.request_secs);
     let client = Client::builder()
         .user_agent(format!("MirrorProxy/{}", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(request_timeout)
         .build()?;
 
     let state = AppState {

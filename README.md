@@ -173,6 +173,18 @@ pypi_files = "https://files.pythonhosted.org"
 
 `public_base_url` is used by the web console and metadata rewriters. Set it to the externally reachable URL, especially when MirrorProxy is behind Nginx, Caddy, Traefik, or another reverse proxy.
 
+Common environment overrides:
+
+```bash
+MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
+MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
+MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
+MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,crates,pypi
+MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
+```
+
+MirrorProxy validates `public_base_url`, all upstream URLs, enabled proxy names, and timeout values during startup. Invalid configuration fails fast with a field-specific error.
+
 ## Development
 
 Build the web console:

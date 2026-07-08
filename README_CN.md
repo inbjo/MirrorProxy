@@ -173,6 +173,18 @@ pypi_files = "https://files.pythonhosted.org"
 
 `public_base_url` 会用于 Web 控制台和元数据重写。部署在 Nginx、Caddy、Traefik 等反向代理后时，请设置为用户实际访问的外部地址。
 
+常用环境变量覆盖：
+
+```bash
+MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
+MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
+MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
+MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,crates,pypi
+MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
+```
+
+MirrorProxy 会在启动时校验 `public_base_url`、所有上游 URL、启用的代理名称和超时配置。配置非法会快速失败，并提示具体字段。
+
 ## 开发
 
 构建 Web 控制台：
