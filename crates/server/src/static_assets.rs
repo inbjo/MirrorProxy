@@ -39,8 +39,15 @@ fn normalize_path(path: &str) -> String {
 
 fn asset_response(path: &str, bytes: &'static [u8]) -> Response {
     let content_type = mime_guess::from_path(path).first_or_octet_stream();
+    let cache_control = if path == "index.html" {
+        HeaderValue::from_static("no-cache")
+    } else {
+        HeaderValue::from_static("public, max-age=31536000, immutable")
+    };
+
     Response::builder()
         .status(StatusCode::OK)
+        .header(header::CACHE_CONTROL, cache_control)
         .header(
             header::CONTENT_TYPE,
             HeaderValue::from_str(content_type.as_ref())

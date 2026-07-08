@@ -103,6 +103,7 @@ fn rewrite_json_response(
 
     Response::builder()
         .status(status)
+        .header(header::CACHE_CONTROL, super::metadata_cache_value())
         .header(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),

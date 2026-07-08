@@ -74,6 +74,7 @@ async fn proxy_simple_path(
         let body = rewrite_file_links(&html, &state.config.public_base_url);
         return Response::builder()
             .status(status)
+            .header(header::CACHE_CONTROL, super::metadata_cache_value())
             .header(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("text/html; charset=utf-8"),

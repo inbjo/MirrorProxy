@@ -8,7 +8,7 @@ pub mod pypi;
 
 use axum::{
     body::Body,
-    http::{HeaderMap, HeaderName, Method, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::Response,
 };
 use futures_util::TryStreamExt;
@@ -91,6 +91,10 @@ pub fn build_url(base: &str, path: &str, query: Option<&str>) -> Result<Url, Pro
 
 pub fn proxied_absolute_url(public_base_url: &str, absolute: &str) -> String {
     format!("{}/{}", public_base_url.trim_end_matches('/'), absolute)
+}
+
+pub fn metadata_cache_value() -> HeaderValue {
+    HeaderValue::from_static("public, max-age=300, stale-while-revalidate=3600")
 }
 
 fn should_forward_request_header(name: &HeaderName) -> bool {
