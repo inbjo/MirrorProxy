@@ -221,6 +221,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test
 ```
 
+Run the local smoke test on Windows PowerShell:
+
+```powershell
+.\scripts\smoke-local.ps1
+```
+
+The smoke test builds the debug binary, starts MirrorProxy on a temporary local port, checks the embedded web UI and key proxy endpoints, then stops the process.
+
 ## Static Linux Build
 
 On Linux:

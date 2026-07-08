@@ -221,6 +221,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test
 ```
 
+在 Windows PowerShell 运行本地 smoke test：
+
+```powershell
+.\scripts\smoke-local.ps1
+```
+
+smoke test 会构建 debug 二进制，在临时本地端口启动 MirrorProxy，检查内嵌 Web UI 和关键代理端点，然后自动停止进程。
+
 ## Linux 静态构建
 
 在 Linux 上运行：
