@@ -1,0 +1,28 @@
+{
+  "name": "mirrorproxy-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "vite": "^8.1.2",
+    "typescript": "^5.9.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "lucide-react": "^0.560.0",
+    "@tailwindcss/vite": "latest",
+    "tailwindcss": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "vitest": "^4.0.0"
+  }
+}
+

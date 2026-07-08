@@ -1,6 +1,6 @@
 /target/
 /web/node_modules/
-/web/dist/assets/
+/web/.tmp/
 *.log
 .env
 .env.*

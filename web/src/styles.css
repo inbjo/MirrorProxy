@@ -1,0 +1,368 @@
+@import "tailwindcss";
+
+:root {
+  font-family: "Aptos", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  color: #172033;
+  background: #eef2f5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --bg: #eef2f5;
+  --panel: #fbfcfd;
+  --panel-strong: #ffffff;
+  --text: #172033;
+  --muted: #607086;
+  --line: #d6dee7;
+  --accent: #0e7490;
+  --accent-strong: #155e75;
+  --ok: #16804f;
+  --code: #111827;
+  --code-bg: #e8edf2;
+  --shadow: 0 18px 60px rgba(28, 43, 62, 0.12);
+}
+
+:root[data-theme="dark"] {
+  color: #e4edf7;
+  background: #111820;
+  --bg: #111820;
+  --panel: #18222d;
+  --panel-strong: #202c38;
+  --text: #e4edf7;
+  --muted: #a2b2c4;
+  --line: #2f4051;
+  --accent: #67e8f9;
+  --accent-strong: #a5f3fc;
+  --ok: #65d18f;
+  --code: #f8fafc;
+  --code-bg: #0d131a;
+  --shadow: 0 20px 70px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    linear-gradient(135deg, rgba(14, 116, 144, 0.12), transparent 32rem),
+    repeating-linear-gradient(90deg, transparent 0 33px, rgba(96, 112, 134, 0.08) 34px),
+    var(--bg);
+}
+
+button {
+  font: inherit;
+}
+
+.shell {
+  width: min(1180px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 32px 0 56px;
+}
+
+.topbar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 24px;
+  align-items: start;
+  padding: 28px 0 24px;
+}
+
+.brand-mark {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+  font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+  font-size: 13px;
+}
+
+h1 {
+  margin: 18px 0 12px;
+  color: var(--text);
+  font-size: clamp(44px, 9vw, 92px);
+  line-height: 0.9;
+  letter-spacing: 0;
+}
+
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+.topbar p {
+  max-width: 760px;
+  color: var(--muted);
+  font-size: clamp(17px, 2vw, 21px);
+  line-height: 1.55;
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+}
+
+.icon-button {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--panel);
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.status-strip {
+  display: grid;
+  grid-template-columns: 0.8fr 1.4fr 1fr;
+  gap: 12px;
+  margin: 24px 0;
+}
+
+.metric {
+  display: flex;
+  min-width: 0;
+  gap: 12px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.metric-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.metric-icon.ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+
+.metric small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.metric strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.rail {
+  position: sticky;
+  top: 16px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.rail a {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: 7px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.rail a:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.panels {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.proxy-panel,
+.info-block {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.proxy-panel {
+  padding: 22px;
+}
+
+.panel-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.panel-head h2 {
+  color: var(--text);
+  font-size: 23px;
+}
+
+.panel-head p,
+.info-block p {
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.badge.enabled {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+
+.badge.disabled {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+
+.commands {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.command {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.command code {
+  overflow-x: auto;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--code);
+  background: var(--code-bg);
+  font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: nowrap;
+}
+
+.command button {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-width: 92px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--panel-strong);
+  cursor: pointer;
+}
+
+.command button:hover,
+.icon-button:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+
+.note-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.info-block {
+  min-height: 150px;
+  padding: 20px;
+}
+
+.info-block h3 {
+  color: var(--text);
+  font-size: 17px;
+}
+
+.mono {
+  white-space: pre-wrap;
+  font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+  font-size: 13px;
+}
+
+@media (max-width: 860px) {
+  .topbar,
+  .status-strip,
+  .workspace,
+  .note-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rail {
+    position: static;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .rail a {
+    justify-content: center;
+  }
+}
+
+@media (max-width: 620px) {
+  .shell {
+    width: min(100vw - 20px, 1180px);
+    padding-top: 18px;
+  }
+
+  .panel-head,
+  .command {
+    grid-template-columns: 1fr;
+  }
+
+  .command button {
+    min-height: 42px;
+  }
+
+  .rail {
+    grid-template-columns: 1fr;
+  }
+}
