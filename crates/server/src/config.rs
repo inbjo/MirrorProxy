@@ -32,6 +32,8 @@ pub struct Upstreams {
     pub quay: String,
     #[serde(default = "default_kubernetes_registry")]
     pub kubernetes: String,
+    #[serde(default = "default_npm_registry")]
+    pub npm: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,7 +69,7 @@ impl Config {
             .collect();
         for proxy in enabled.keys() {
             match *proxy {
-                "github" | "composer" | "oci" => {}
+                "github" | "composer" | "oci" | "npm" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -102,6 +104,7 @@ impl Default for Upstreams {
             ghcr: default_ghcr_registry(),
             quay: default_quay_registry(),
             kubernetes: default_kubernetes_registry(),
+            npm: default_npm_registry(),
         }
     }
 }
@@ -127,6 +130,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "github".to_string(),
         "composer".to_string(),
         "oci".to_string(),
+        "npm".to_string(),
     ]
 }
 
@@ -156,6 +160,10 @@ fn default_quay_registry() -> String {
 
 fn default_kubernetes_registry() -> String {
     "https://registry.k8s.io".to_string()
+}
+
+fn default_npm_registry() -> String {
+    "https://registry.npmjs.org".to_string()
 }
 
 fn default_request_timeout_secs() -> u64 {

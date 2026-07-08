@@ -1,6 +1,6 @@
 # MirrorProxy
 
-MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, and public Docker/OCI registry pull-through routing, with a React + Vite + Tailwind web console embedded into the Rust binary.
+MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, public Docker/OCI registry pull-through routing, and npm registry proxying, with a React + Vite + Tailwind web console embedded into the Rust binary.
 
 The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go modules, operating system mirrors, and other ecosystems can be added behind the same proxy core.
 
@@ -12,6 +12,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - GitHub proxy for repository pages, raw files, release assets, archives, and Composer GitHub dist URLs
 - Composer proxy at `/composer`
 - Docker/OCI proxy at `/v2/*` for Docker Hub, GHCR, Quay, and Kubernetes public images
+- npm/yarn/pnpm proxy at `/npm`
 - Streamed upstream responses with hop-by-hop header filtering
 - Safe defaults that reject unsupported absolute proxy targets
 
@@ -83,6 +84,23 @@ Mapping rules:
 
 The first implementation handles public pull-through requests and upstream Bearer token challenges. Private registry credentials are intentionally left for a later adapter extension.
 
+## npm / yarn / pnpm Proxy
+
+Configure your package manager to use MirrorProxy:
+
+```bash
+npm config set registry http://127.0.0.1:3000/npm
+npm install react
+
+yarn config set npmRegistryServer http://127.0.0.1:3000/npm
+yarn add react
+
+pnpm config set registry http://127.0.0.1:3000/npm
+pnpm add react
+```
+
+MirrorProxy proxies npm package metadata and rewrites `dist.tarball` URLs to keep tarball downloads flowing through `/npm`.
+
 ## Configuration
 
 Copy `config.example.toml` and adjust the public URL for your deployment:
@@ -90,7 +108,7 @@ Copy `config.example.toml` and adjust the public URL for your deployment:
 ```toml
 listen_addr = "127.0.0.1:3000"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci"]
+enabled_proxies = ["github", "composer", "oci", "npm"]
 
 [upstreams]
 github = "https://github.com"
@@ -100,6 +118,7 @@ docker_hub = "https://registry-1.docker.io"
 ghcr = "https://ghcr.io"
 quay = "https://quay.io"
 kubernetes = "https://registry.k8s.io"
+npm = "https://registry.npmjs.org"
 ```
 
 `public_base_url` is used by the web console and metadata rewriters. Set it to the externally reachable URL, especially when MirrorProxy is behind Nginx, Caddy, Traefik, or another reverse proxy.
@@ -147,7 +166,6 @@ The script builds the web console first, then builds a `x86_64-unknown-linux-mus
 
 ## Roadmap
 
-- npm/yarn/pnpm registry proxying
 - PyPI simple repository proxying
 - Cargo sparse registry proxying
 - Go module proxying

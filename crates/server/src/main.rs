@@ -8,7 +8,7 @@ use anyhow::Context;
 use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
 use clap::Parser;
 use config::Config;
-use proxy::{composer, github, oci, ProxyError};
+use proxy::{composer, github, npm, oci, ProxyError};
 use reqwest::Client;
 use serde::Serialize;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -78,6 +78,9 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
             "/composer/{*path}",
             get(composer::proxy).head(composer::proxy),
         )
+        .route("/npm", get(npm::root).head(npm::root))
+        .route("/npm/", get(npm::root).head(npm::root))
+        .route("/npm/{*path}", get(npm::proxy).head(npm::proxy))
         .route("/v2", get(oci::root).head(oci::root))
         .route("/v2/", get(oci::root).head(oci::root))
         .route("/v2/{*path}", get(oci::proxy).head(oci::proxy))
@@ -216,6 +219,11 @@ mod tests {
             .unwrap()
             .iter()
             .any(|proxy| proxy == "oci"));
+        assert!(value["enabled_proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|proxy| proxy == "npm"));
     }
 
     #[tokio::test]
