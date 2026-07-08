@@ -219,6 +219,44 @@ cargo test
 
 脚本会先构建 Web 控制台，再构建 `x86_64-unknown-linux-musl` release 二进制。
 
+## 反向代理部署
+
+MirrorProxy 通常应部署在 TLS 反向代理之后。`public_base_url` 请设置为用户实际访问的外部 HTTPS 地址，而不是内部监听地址。
+
+Nginx 示例：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name mirror.example.com;
+
+    client_max_body_size 0;
+    proxy_request_buffering off;
+    proxy_buffering off;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+```
+
+Caddy 示例：
+
+```caddyfile
+mirror.example.com {
+    reverse_proxy 127.0.0.1:3000 {
+        flush_interval -1
+    }
+}
+```
+
+Docker/OCI blob 和 GitHub release 大文件建议关闭反向代理请求缓冲，确保大文件流式转发，而不是先完整缓存在反向代理中。
+
 ## 安全说明
 
 - MirrorProxy 不是开放代理。

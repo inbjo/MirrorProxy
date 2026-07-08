@@ -219,6 +219,44 @@ On Linux:
 
 The script builds the web console first, then builds a `x86_64-unknown-linux-musl` release binary.
 
+## Reverse Proxy Deployment
+
+MirrorProxy should usually run behind a TLS reverse proxy. Set `public_base_url` to the external HTTPS URL, not the internal bind address.
+
+Nginx example:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name mirror.example.com;
+
+    client_max_body_size 0;
+    proxy_request_buffering off;
+    proxy_buffering off;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+```
+
+Caddy example:
+
+```caddyfile
+mirror.example.com {
+    reverse_proxy 127.0.0.1:3000 {
+        flush_interval -1
+    }
+}
+```
+
+For Docker/OCI and large release files, keep request buffering disabled in the reverse proxy so large blobs stream instead of being fully buffered.
+
 ## Security Notes
 
 - MirrorProxy is not an open proxy.
