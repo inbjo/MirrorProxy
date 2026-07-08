@@ -39,6 +39,7 @@ const messages = {
     composer: 'Composer proxy',
     oci: 'Docker / OCI proxy',
     npm: 'npm / yarn / pnpm proxy',
+    go: 'Go module proxy',
     enabled: 'Enabled',
     disabled: 'Disabled',
     copy: 'Copy',
@@ -47,9 +48,10 @@ const messages = {
     composerDesc: 'Use MirrorProxy as a Packagist-compatible Composer repository.',
     ociDesc: 'Pull Docker Hub, GHCR, Quay, and Kubernetes public images through the same registry endpoint.',
     npmDesc: 'Use MirrorProxy as an npm-compatible registry for npm, yarn, and pnpm public packages.',
+    goDesc: 'Point GOPROXY at MirrorProxy and fetch public Go modules through proxy.golang.org.',
     configExample: 'Configuration example',
     future: 'Planned adapters',
-    futureText: 'PyPI, Cargo, Go modules, and operating system mirrors will use the same adapter boundary.',
+    futureText: 'PyPI, Cargo, and operating system mirrors will use the same adapter boundary.',
     apiHint: 'Runtime config is loaded from /api/config and reflected here.',
     faq: 'Notes',
     faqText: 'Only configured upstreams are proxied. Arbitrary open proxy targets are rejected by default.',
@@ -65,6 +67,7 @@ const messages = {
     composer: 'Composer 代理',
     oci: 'Docker / OCI 代理',
     npm: 'npm / yarn / pnpm 代理',
+    go: 'Go 模块代理',
     enabled: '已启用',
     disabled: '未启用',
     copy: '复制',
@@ -73,9 +76,10 @@ const messages = {
     composerDesc: '将 MirrorProxy 配置为兼容 Packagist 的 Composer 仓库。',
     ociDesc: '通过同一个 registry 地址拉取 Docker Hub、GHCR、Quay 和 Kubernetes 公开镜像。',
     npmDesc: '将 MirrorProxy 作为兼容 npm registry 的公开包代理，npm、yarn、pnpm 可共用。',
+    goDesc: '将 GOPROXY 指向 MirrorProxy，通过 proxy.golang.org 拉取公开 Go modules。',
     configExample: '配置示例',
     future: '后续适配器',
-    futureText: 'PyPI、Cargo、Go modules、操作系统镜像源都会沿用同一套 adapter 边界。',
+    futureText: 'PyPI、Cargo、操作系统镜像源都会沿用同一套 adapter 边界。',
     apiHint: '页面会读取 /api/config 并按运行时配置展示命令。',
     faq: '说明',
     faqText: '默认只代理配置好的上游，任意开放代理目标会被拒绝。',
@@ -126,6 +130,8 @@ function App() {
   const yarnConfig = `yarn config set npmRegistryServer ${baseUrl}/npm`
   const pnpmConfig = `pnpm config set registry ${baseUrl}/npm`
   const npmInstall = 'npm install react'
+  const goProxy = `GOPROXY=${baseUrl}/goproxy go list -m github.com/gin-gonic/gin@latest`
+  const goEnv = `go env -w GOPROXY=${baseUrl}/goproxy,direct`
   const enabled = (proxy: string) => config.enabled_proxies.includes(proxy)
 
   const copyCommand = async (id: string, value: string) => {
@@ -164,6 +170,7 @@ function App() {
           <a href="#composer"><PackageOpen size={17} /> {t.composer}</a>
           <a href="#oci"><Container size={17} /> {t.oci}</a>
           <a href="#npm"><PackageOpen size={17} /> {t.npm}</a>
+          <a href="#go"><Code2 size={17} /> {t.go}</a>
           <a href="#future"><ServerCog size={17} /> {t.future}</a>
         </aside>
 
@@ -220,8 +227,20 @@ function App() {
             <Command value={npmInstall} copied={copied === 'npm-install'} labels={t} onCopy={() => copyCommand('npm-install', npmInstall)} />
           </ProxyPanel>
 
+          <ProxyPanel
+            id="go"
+            title={t.go}
+            description={t.goDesc}
+            enabled={enabled('go')}
+            enabledLabel={t.enabled}
+            disabledLabel={t.disabled}
+          >
+            <Command value={goEnv} copied={copied === 'go-env'} labels={t} onCopy={() => copyCommand('go-env', goEnv)} />
+            <Command value={goProxy} copied={copied === 'go-proxy'} labels={t} onCopy={() => copyCommand('go-proxy', goProxy)} />
+          </ProxyPanel>
+
           <section className="note-grid">
-            <InfoBlock title={t.configExample} body={`public_base_url = "${baseUrl}"\nenabled_proxies = ["github", "composer", "oci", "npm"]`} mono />
+            <InfoBlock title={t.configExample} body={`public_base_url = "${baseUrl}"\nenabled_proxies = ["github", "composer", "oci", "npm", "go"]`} mono />
             <InfoBlock title={t.future} body={t.futureText} />
             <InfoBlock title={t.faq} body={t.faqText} />
             <InfoBlock title="Runtime" body={t.apiHint} />

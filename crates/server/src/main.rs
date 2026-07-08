@@ -8,7 +8,7 @@ use anyhow::Context;
 use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
 use clap::Parser;
 use config::Config;
-use proxy::{composer, github, npm, oci, ProxyError};
+use proxy::{composer, github, go, npm, oci, ProxyError};
 use reqwest::Client;
 use serde::Serialize;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -81,6 +81,9 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/npm", get(npm::root).head(npm::root))
         .route("/npm/", get(npm::root).head(npm::root))
         .route("/npm/{*path}", get(npm::proxy).head(npm::proxy))
+        .route("/goproxy", get(go::root).head(go::root))
+        .route("/goproxy/", get(go::root).head(go::root))
+        .route("/goproxy/{*path}", get(go::proxy).head(go::proxy))
         .route("/v2", get(oci::root).head(oci::root))
         .route("/v2/", get(oci::root).head(oci::root))
         .route("/v2/{*path}", get(oci::proxy).head(oci::proxy))
@@ -224,6 +227,11 @@ mod tests {
             .unwrap()
             .iter()
             .any(|proxy| proxy == "npm"));
+        assert!(value["enabled_proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|proxy| proxy == "go"));
     }
 
     #[tokio::test]
@@ -237,6 +245,24 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(&body[..], b"{}");
+    }
+
+    #[tokio::test]
+    async fn go_root_returns_proxy_info() {
+        let app = build_router(Config::default()).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/goproxy/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("Go module proxy"));
     }
 
     #[tokio::test]

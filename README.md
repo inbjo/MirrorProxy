@@ -1,6 +1,6 @@
 # MirrorProxy
 
-MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, public Docker/OCI registry pull-through routing, and npm registry proxying, with a React + Vite + Tailwind web console embedded into the Rust binary.
+MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, public Docker/OCI registry pull-through routing, npm registry proxying, and Go module proxying, with a React + Vite + Tailwind web console embedded into the Rust binary.
 
 The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go modules, operating system mirrors, and other ecosystems can be added behind the same proxy core.
 
@@ -13,6 +13,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - Composer proxy at `/composer`
 - Docker/OCI proxy at `/v2/*` for Docker Hub, GHCR, Quay, and Kubernetes public images
 - npm/yarn/pnpm proxy at `/npm`
+- Go module proxy at `/goproxy`
 - Streamed upstream responses with hop-by-hop header filtering
 - Safe defaults that reject unsupported absolute proxy targets
 
@@ -101,6 +102,17 @@ pnpm add react
 
 MirrorProxy proxies npm package metadata and rewrites `dist.tarball` URLs to keep tarball downloads flowing through `/npm`.
 
+## Go Module Proxy
+
+Use MirrorProxy as `GOPROXY`:
+
+```bash
+go env -w GOPROXY=http://127.0.0.1:3000/goproxy,direct
+go list -m github.com/gin-gonic/gin@latest
+```
+
+The Go adapter forwards GOPROXY protocol paths such as `@v/list`, `.info`, `.mod`, and `.zip` to `proxy.golang.org`.
+
 ## Configuration
 
 Copy `config.example.toml` and adjust the public URL for your deployment:
@@ -108,7 +120,7 @@ Copy `config.example.toml` and adjust the public URL for your deployment:
 ```toml
 listen_addr = "127.0.0.1:3000"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci", "npm"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go"]
 
 [upstreams]
 github = "https://github.com"
@@ -119,6 +131,7 @@ ghcr = "https://ghcr.io"
 quay = "https://quay.io"
 kubernetes = "https://registry.k8s.io"
 npm = "https://registry.npmjs.org"
+go_proxy = "https://proxy.golang.org"
 ```
 
 `public_base_url` is used by the web console and metadata rewriters. Set it to the externally reachable URL, especially when MirrorProxy is behind Nginx, Caddy, Traefik, or another reverse proxy.
@@ -168,6 +181,5 @@ The script builds the web console first, then builds a `x86_64-unknown-linux-mus
 
 - PyPI simple repository proxying
 - Cargo sparse registry proxying
-- Go module proxying
 - OS mirror source adapters
 - Optional caching, rate limiting, and richer observability

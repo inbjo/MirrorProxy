@@ -34,6 +34,8 @@ pub struct Upstreams {
     pub kubernetes: String,
     #[serde(default = "default_npm_registry")]
     pub npm: String,
+    #[serde(default = "default_go_proxy")]
+    pub go_proxy: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,7 +71,7 @@ impl Config {
             .collect();
         for proxy in enabled.keys() {
             match *proxy {
-                "github" | "composer" | "oci" | "npm" => {}
+                "github" | "composer" | "oci" | "npm" | "go" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -105,6 +107,7 @@ impl Default for Upstreams {
             quay: default_quay_registry(),
             kubernetes: default_kubernetes_registry(),
             npm: default_npm_registry(),
+            go_proxy: default_go_proxy(),
         }
     }
 }
@@ -131,6 +134,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "composer".to_string(),
         "oci".to_string(),
         "npm".to_string(),
+        "go".to_string(),
     ]
 }
 
@@ -164,6 +168,10 @@ fn default_kubernetes_registry() -> String {
 
 fn default_npm_registry() -> String {
     "https://registry.npmjs.org".to_string()
+}
+
+fn default_go_proxy() -> String {
+    "https://proxy.golang.org".to_string()
 }
 
 fn default_request_timeout_secs() -> u64 {
