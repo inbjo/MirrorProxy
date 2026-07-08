@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: mirrorproxy-linux-x86_64-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: mirrorproxy-linux-aarch64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: mirrorproxy-macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: mirrorproxy-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build web console
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        run: |
+          cp target/${{ matrix.target }}/release/mirrorproxy ${{ matrix.artifact }}
+          shasum -a 256 ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item target/${{ matrix.target }}/release/mirrorproxy.exe ${{ matrix.artifact }}
+          Get-FileHash ${{ matrix.artifact }} -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  ${{ matrix.artifact }}" } | Set-Content "${{ matrix.artifact }}.sha256"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256

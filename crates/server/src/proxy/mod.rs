@@ -63,9 +63,7 @@ pub async fn forward(
     let upstream = request.send().await?;
     let status = upstream.status();
     let headers = upstream.headers().clone();
-    let stream = upstream
-        .bytes_stream()
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err));
+    let stream = upstream.bytes_stream().map_err(std::io::Error::other);
 
     let mut builder = Response::builder().status(status);
     for (name, value) in headers.iter() {

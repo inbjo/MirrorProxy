@@ -68,10 +68,10 @@ async fn proxy_composer_path(
             return rewrite_json_response(&state, status, bytes);
         }
 
-        return Ok(Response::builder()
+        return Response::builder()
             .status(status)
             .body(Body::from(bytes))
-            .map_err(|_| ProxyError::InvalidHeader)?);
+            .map_err(|_| ProxyError::InvalidHeader);
     }
 
     let headers = request
@@ -104,14 +104,14 @@ fn rewrite_json_response(
     rewrite_urls(&mut value, &state.config.public_base_url);
     let body = serde_json::to_vec(&value).map_err(|_| ProxyError::InvalidUrl)?;
 
-    Ok(Response::builder()
+    Response::builder()
         .status(status)
         .header(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         )
         .body(Body::from(body))
-        .map_err(|_| ProxyError::InvalidHeader)?)
+        .map_err(|_| ProxyError::InvalidHeader)
 }
 
 fn rewrite_urls(value: &mut Value, public_base_url: &str) {
