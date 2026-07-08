@@ -15,6 +15,8 @@ pub struct Config {
     pub upstreams: Upstreams,
     #[serde(default)]
     pub timeout: TimeoutConfig,
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +55,14 @@ pub struct TimeoutConfig {
     pub request_secs: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_rate_limit_requests_per_minute")]
+    pub requests_per_minute: u32,
+}
+
 impl Config {
     pub fn load(path: Option<&Path>) -> anyhow::Result<Self> {
         let mut config = path
@@ -89,6 +99,18 @@ impl Config {
                 self.timeout.request_secs = timeout;
             }
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_RATE_LIMIT_ENABLED") {
+            self.rate_limit.enabled = matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE") {
+            if let Ok(limit) = value.parse() {
+                self.rate_limit.requests_per_minute = limit;
+                self.rate_limit.enabled = true;
+            }
+        }
     }
 
     fn validate(&self) -> anyhow::Result<()> {
@@ -98,6 +120,9 @@ impl Config {
         validate_http_url("public_base_url", &self.public_base_url)?;
         if self.timeout.request_secs == 0 {
             anyhow::bail!("timeout.request_secs must be greater than 0");
+        }
+        if self.rate_limit.enabled && self.rate_limit.requests_per_minute == 0 {
+            anyhow::bail!("rate_limit.requests_per_minute must be greater than 0 when enabled");
         }
 
         let enabled: BTreeMap<_, _> = self
@@ -142,6 +167,7 @@ impl Default for Config {
             enabled_proxies: default_enabled_proxies(),
             upstreams: Upstreams::default(),
             timeout: TimeoutConfig::default(),
+            rate_limit: RateLimitConfig::default(),
         }
     }
 }
@@ -170,6 +196,15 @@ impl Default for TimeoutConfig {
     fn default() -> Self {
         Self {
             request_secs: default_request_timeout_secs(),
+        }
+    }
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            requests_per_minute: default_rate_limit_requests_per_minute(),
         }
     }
 }
@@ -250,6 +285,10 @@ fn default_request_timeout_secs() -> u64 {
     60
 }
 
+fn default_rate_limit_requests_per_minute() -> u32 {
+    600
+}
+
 fn validate_http_url(field: &str, value: &str) -> anyhow::Result<()> {
     let url = Url::parse(value).map_err(|error| anyhow::anyhow!("{field} is invalid: {error}"))?;
     match url.scheme() {
@@ -290,6 +329,19 @@ mod tests {
     fn rejects_unknown_enabled_proxy() {
         let config = Config {
             enabled_proxies: vec!["github".to_string(), "unknown".to_string()],
+            ..Config::default()
+        };
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_enabled_zero_rate_limit() {
+        let config = Config {
+            rate_limit: RateLimitConfig {
+                enabled: true,
+                requests_per_minute: 0,
+            },
             ..Config::default()
         };
 

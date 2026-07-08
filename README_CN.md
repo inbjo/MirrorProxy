@@ -181,9 +181,21 @@ MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
 MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,crates,pypi
 MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
+MIRRORPROXY_RATE_LIMIT_ENABLED=true
+MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
 ```
 
 MirrorProxy 会在启动时校验 `public_base_url`、所有上游 URL、启用的代理名称和超时配置。配置非法会快速失败，并提示具体字段。
+
+可选全局限流配置：
+
+```toml
+[rate_limit]
+enabled = true
+requests_per_minute = 600
+```
+
+超过限制时，MirrorProxy 会返回 `429 Too Many Requests`，并带上 `Retry-After` 响应头。
 
 ## 开发
 

@@ -2,10 +2,22 @@ mod config;
 mod proxy;
 mod static_assets;
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
-use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
+use axum::{
+    extract::{Request, State},
+    http::{header, HeaderValue, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
 use clap::Parser;
 use config::Config;
 use proxy::{composer, cratesio, github, go, npm, oci, pypi, ProxyError};
@@ -25,6 +37,12 @@ struct Args {
 pub struct AppState {
     config: Arc<Config>,
     client: Client,
+    rate_limiter: Option<Arc<RateLimiter>>,
+}
+
+pub struct RateLimiter {
+    requests_per_minute: u32,
+    window: Mutex<VecDeque<Instant>>,
 }
 
 #[tokio::main]
@@ -66,6 +84,10 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
         .build()?;
 
     let state = AppState {
+        rate_limiter: config
+            .rate_limit
+            .enabled
+            .then(|| Arc::new(RateLimiter::new(config.rate_limit.requests_per_minute))),
         config: Arc::new(config),
         client,
     };
@@ -116,9 +138,58 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/v2/", get(oci::root).head(oci::root))
         .route("/v2/{*path}", get(oci::proxy).head(oci::proxy))
         .fallback(fallback)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_middleware,
+        ))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state))
+}
+
+impl RateLimiter {
+    fn new(requests_per_minute: u32) -> Self {
+        Self {
+            requests_per_minute,
+            window: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    fn check(&self, now: Instant) -> bool {
+        let cutoff = now - Duration::from_secs(60);
+        let mut window = self.window.lock().expect("rate limit mutex poisoned");
+        while window.front().is_some_and(|timestamp| *timestamp <= cutoff) {
+            window.pop_front();
+        }
+
+        if window.len() >= self.requests_per_minute as usize {
+            return false;
+        }
+
+        window.push_back(now);
+        true
+    }
+}
+
+async fn rate_limit_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Some(rate_limiter) = &state.rate_limiter {
+        if !rate_limiter.check(Instant::now()) {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, HeaderValue::from_static("60"))],
+                Json(serde_json::json!({
+                    "error": "rate limit exceeded"
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    next.run(request).await
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -225,6 +296,48 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("\"status\":\"ok\""));
+    }
+
+    #[tokio::test]
+    async fn rate_limit_returns_too_many_requests() {
+        let app = build_router(Config {
+            rate_limit: crate::config::RateLimitConfig {
+                enabled: true,
+                requests_per_minute: 1,
+            },
+            ..Config::default()
+        })
+        .unwrap();
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            second
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .unwrap(),
+            "60"
+        );
     }
 
     #[tokio::test]

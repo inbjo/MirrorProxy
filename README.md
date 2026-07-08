@@ -181,9 +181,21 @@ MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
 MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,crates,pypi
 MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
+MIRRORPROXY_RATE_LIMIT_ENABLED=true
+MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
 ```
 
 MirrorProxy validates `public_base_url`, all upstream URLs, enabled proxy names, and timeout values during startup. Invalid configuration fails fast with a field-specific error.
+
+Optional global rate limiting can be enabled with:
+
+```toml
+[rate_limit]
+enabled = true
+requests_per_minute = 600
+```
+
+When the limit is exceeded, MirrorProxy returns `429 Too Many Requests` with a `Retry-After` header.
 
 ## Development
 

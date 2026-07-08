@@ -19,3 +19,7 @@ pypi_files = "https://files.pythonhosted.org"
 
 [timeout]
 request_secs = 60
+
+[rate_limit]
+enabled = false
+requests_per_minute = 600
