@@ -40,6 +40,10 @@ pub struct Upstreams {
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
     pub crates_api: String,
+    #[serde(default = "default_pypi_simple")]
+    pub pypi_simple: String,
+    #[serde(default = "default_pypi_files")]
+    pub pypi_files: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,7 +79,7 @@ impl Config {
             .collect();
         for proxy in enabled.keys() {
             match *proxy {
-                "github" | "composer" | "oci" | "npm" | "go" | "crates" => {}
+                "github" | "composer" | "oci" | "npm" | "go" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -114,6 +118,8 @@ impl Default for Upstreams {
             go_proxy: default_go_proxy(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
+            pypi_simple: default_pypi_simple(),
+            pypi_files: default_pypi_files(),
         }
     }
 }
@@ -142,6 +148,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "npm".to_string(),
         "go".to_string(),
         "crates".to_string(),
+        "pypi".to_string(),
     ]
 }
 
@@ -187,6 +194,14 @@ fn default_crates_index() -> String {
 
 fn default_crates_api() -> String {
     "https://crates.io".to_string()
+}
+
+fn default_pypi_simple() -> String {
+    "https://pypi.org/simple".to_string()
+}
+
+fn default_pypi_files() -> String {
+    "https://files.pythonhosted.org".to_string()
 }
 
 fn default_request_timeout_secs() -> u64 {

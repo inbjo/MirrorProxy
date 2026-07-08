@@ -8,7 +8,7 @@ use anyhow::Context;
 use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
 use clap::Parser;
 use config::Config;
-use proxy::{composer, cratesio, github, go, npm, oci, ProxyError};
+use proxy::{composer, cratesio, github, go, npm, oci, pypi, ProxyError};
 use reqwest::Client;
 use serde::Serialize;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -84,6 +84,16 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/goproxy", get(go::root).head(go::root))
         .route("/goproxy/", get(go::root).head(go::root))
         .route("/goproxy/{*path}", get(go::proxy).head(go::proxy))
+        .route(
+            "/pypi/simple",
+            get(pypi::simple_root).head(pypi::simple_root),
+        )
+        .route(
+            "/pypi/simple/",
+            get(pypi::simple_root).head(pypi::simple_root),
+        )
+        .route("/pypi/simple/{*path}", get(pypi::simple).head(pypi::simple))
+        .route("/pypi/files/{*path}", get(pypi::file).head(pypi::file))
         .route(
             "/crates/api/v1/crates/{crate}/{version}/download",
             get(cratesio::download).head(cratesio::download),
@@ -253,6 +263,11 @@ mod tests {
             .unwrap()
             .iter()
             .any(|proxy| proxy == "crates"));
+        assert!(value["enabled_proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|proxy| proxy == "pypi"));
     }
 
     #[tokio::test]
@@ -303,6 +318,22 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["dl"], "http://127.0.0.1:3000/crates/api/v1/crates");
+    }
+
+    #[tokio::test]
+    async fn pypi_file_path_validation_rejects_traversal() {
+        let app = build_router(Config::default()).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pypi/files/../pkg.whl")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

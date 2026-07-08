@@ -4,6 +4,7 @@ pub mod github;
 pub mod go;
 pub mod npm;
 pub mod oci;
+pub mod pypi;
 
 use axum::{
     body::Body,

@@ -1,6 +1,6 @@
 # MirrorProxy
 
-MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, public Docker/OCI registry pull-through routing, npm registry proxying, Go module proxying, and Cargo sparse registry proxying, with a React + Vite + Tailwind web console embedded into the Rust binary.
+MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, public Docker/OCI registry pull-through routing, npm registry proxying, Go module proxying, Cargo sparse registry proxying, and PyPI Simple API proxying, with a React + Vite + Tailwind web console embedded into the Rust binary.
 
 The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go modules, operating system mirrors, and other ecosystems can be added behind the same proxy core.
 
@@ -15,6 +15,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - npm/yarn/pnpm proxy at `/npm`
 - Go module proxy at `/goproxy`
 - Cargo sparse registry proxy at `/crates-index`
+- pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
 - Safe defaults that reject unsupported absolute proxy targets
 
@@ -134,6 +135,17 @@ cargo fetch
 
 MirrorProxy serves a local sparse `config.json` and proxies crate downloads through `/crates/api/v1/crates/{crate}/{version}/download`.
 
+## pip / PyPI Proxy
+
+Configure pip to use MirrorProxy:
+
+```bash
+pip config set global.index-url http://127.0.0.1:3000/pypi/simple/
+pip install requests
+```
+
+MirrorProxy proxies PyPI Simple API HTML and rewrites files.pythonhosted.org links back through `/pypi/files`.
+
 ## Configuration
 
 Copy `config.example.toml` and adjust the public URL for your deployment:
@@ -141,7 +153,7 @@ Copy `config.example.toml` and adjust the public URL for your deployment:
 ```toml
 listen_addr = "127.0.0.1:3000"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -155,6 +167,8 @@ npm = "https://registry.npmjs.org"
 go_proxy = "https://proxy.golang.org"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
+pypi_simple = "https://pypi.org/simple"
+pypi_files = "https://files.pythonhosted.org"
 ```
 
 `public_base_url` is used by the web console and metadata rewriters. Set it to the externally reachable URL, especially when MirrorProxy is behind Nginx, Caddy, Traefik, or another reverse proxy.
@@ -202,6 +216,5 @@ The script builds the web console first, then builds a `x86_64-unknown-linux-mus
 
 ## Roadmap
 
-- PyPI simple repository proxying
 - OS mirror source adapters
 - Optional caching, rate limiting, and richer observability

@@ -41,6 +41,7 @@ const messages = {
     npm: 'npm / yarn / pnpm proxy',
     go: 'Go module proxy',
     crates: 'Rust crates proxy',
+    pypi: 'pip / PyPI proxy',
     enabled: 'Enabled',
     disabled: 'Disabled',
     copy: 'Copy',
@@ -51,9 +52,10 @@ const messages = {
     npmDesc: 'Use MirrorProxy as an npm-compatible registry for npm, yarn, and pnpm public packages.',
     goDesc: 'Point GOPROXY at MirrorProxy and fetch public Go modules through proxy.golang.org.',
     cratesDesc: 'Use MirrorProxy as a Cargo sparse registry mirror for crates.io public packages.',
+    pypiDesc: 'Use MirrorProxy as a PyPI Simple API mirror for public wheel and sdist downloads.',
     configExample: 'Configuration example',
     future: 'Planned adapters',
-    futureText: 'PyPI and operating system mirrors will use the same adapter boundary.',
+    futureText: 'Operating system mirrors will use the same adapter boundary.',
     apiHint: 'Runtime config is loaded from /api/config and reflected here.',
     faq: 'Notes',
     faqText: 'Only configured upstreams are proxied. Arbitrary open proxy targets are rejected by default.',
@@ -71,6 +73,7 @@ const messages = {
     npm: 'npm / yarn / pnpm 代理',
     go: 'Go 模块代理',
     crates: 'Rust crates 代理',
+    pypi: 'pip / PyPI 代理',
     enabled: '已启用',
     disabled: '未启用',
     copy: '复制',
@@ -81,9 +84,10 @@ const messages = {
     npmDesc: '将 MirrorProxy 作为兼容 npm registry 的公开包代理，npm、yarn、pnpm 可共用。',
     goDesc: '将 GOPROXY 指向 MirrorProxy，通过 proxy.golang.org 拉取公开 Go modules。',
     cratesDesc: '将 MirrorProxy 配置为 Cargo sparse registry 镜像，代理 crates.io 公开包。',
+    pypiDesc: '将 MirrorProxy 作为 PyPI Simple API 镜像，代理公开 wheel 和 sdist 下载。',
     configExample: '配置示例',
     future: '后续适配器',
-    futureText: 'PyPI、操作系统镜像源都会沿用同一套 adapter 边界。',
+    futureText: '操作系统镜像源会沿用同一套 adapter 边界。',
     apiHint: '页面会读取 /api/config 并按运行时配置展示命令。',
     faq: '说明',
     faqText: '默认只代理配置好的上游，任意开放代理目标会被拒绝。',
@@ -138,6 +142,8 @@ function App() {
   const goEnv = `go env -w GOPROXY=${baseUrl}/goproxy,direct`
   const cargoConfig = `[source.crates-io]\nreplace-with = "mirrorproxy"\n\n[source.mirrorproxy]\nregistry = "sparse+${baseUrl}/crates-index/"`
   const cargoFetch = 'cargo fetch'
+  const pipConfig = `pip config set global.index-url ${baseUrl}/pypi/simple/`
+  const pipInstall = 'pip install requests'
   const enabled = (proxy: string) => config.enabled_proxies.includes(proxy)
 
   const copyCommand = async (id: string, value: string) => {
@@ -178,6 +184,7 @@ function App() {
           <a href="#npm"><PackageOpen size={17} /> {t.npm}</a>
           <a href="#go"><Code2 size={17} /> {t.go}</a>
           <a href="#crates"><PackageOpen size={17} /> {t.crates}</a>
+          <a href="#pypi"><PackageOpen size={17} /> {t.pypi}</a>
           <a href="#future"><ServerCog size={17} /> {t.future}</a>
         </aside>
 
@@ -258,8 +265,20 @@ function App() {
             <Command value={cargoFetch} copied={copied === 'cargo-fetch'} labels={t} onCopy={() => copyCommand('cargo-fetch', cargoFetch)} />
           </ProxyPanel>
 
+          <ProxyPanel
+            id="pypi"
+            title={t.pypi}
+            description={t.pypiDesc}
+            enabled={enabled('pypi')}
+            enabledLabel={t.enabled}
+            disabledLabel={t.disabled}
+          >
+            <Command value={pipConfig} copied={copied === 'pip-config'} labels={t} onCopy={() => copyCommand('pip-config', pipConfig)} />
+            <Command value={pipInstall} copied={copied === 'pip-install'} labels={t} onCopy={() => copyCommand('pip-install', pipInstall)} />
+          </ProxyPanel>
+
           <section className="note-grid">
-            <InfoBlock title={t.configExample} body={`public_base_url = "${baseUrl}"\nenabled_proxies = ["github", "composer", "oci", "npm", "go", "crates"]`} mono />
+            <InfoBlock title={t.configExample} body={`public_base_url = "${baseUrl}"\nenabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi"]`} mono />
             <InfoBlock title={t.future} body={t.futureText} />
             <InfoBlock title={t.faq} body={t.faqText} />
             <InfoBlock title="Runtime" body={t.apiHint} />
