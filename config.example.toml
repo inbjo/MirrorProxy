@@ -1,12 +1,15 @@
 listen_addr = "127.0.0.1:3000"
 public_base_url = "http://127.0.0.1:3000"
-enabled_proxies = ["github", "composer"]
+enabled_proxies = ["github", "composer", "oci"]
 
 [upstreams]
 github = "https://github.com"
 github_raw = "https://raw.githubusercontent.com"
 packagist = "https://repo.packagist.org"
+docker_hub = "https://registry-1.docker.io"
+ghcr = "https://ghcr.io"
+quay = "https://quay.io"
+kubernetes = "https://registry.k8s.io"
 
 [timeout]
 request_secs = 60
-

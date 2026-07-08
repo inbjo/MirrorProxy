@@ -24,6 +24,14 @@ pub struct Upstreams {
     pub github_raw: String,
     #[serde(default = "default_packagist_base")]
     pub packagist: String,
+    #[serde(default = "default_docker_hub_registry")]
+    pub docker_hub: String,
+    #[serde(default = "default_ghcr_registry")]
+    pub ghcr: String,
+    #[serde(default = "default_quay_registry")]
+    pub quay: String,
+    #[serde(default = "default_kubernetes_registry")]
+    pub kubernetes: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +67,7 @@ impl Config {
             .collect();
         for proxy in enabled.keys() {
             match *proxy {
-                "github" | "composer" => {}
+                "github" | "composer" | "oci" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -90,6 +98,10 @@ impl Default for Upstreams {
             github: default_github_base(),
             github_raw: default_github_raw_base(),
             packagist: default_packagist_base(),
+            docker_hub: default_docker_hub_registry(),
+            ghcr: default_ghcr_registry(),
+            quay: default_quay_registry(),
+            kubernetes: default_kubernetes_registry(),
         }
     }
 }
@@ -111,7 +123,11 @@ fn default_public_base_url() -> String {
 }
 
 fn default_enabled_proxies() -> Vec<String> {
-    vec!["github".to_string(), "composer".to_string()]
+    vec![
+        "github".to_string(),
+        "composer".to_string(),
+        "oci".to_string(),
+    ]
 }
 
 fn default_github_base() -> String {
@@ -124,6 +140,22 @@ fn default_github_raw_base() -> String {
 
 fn default_packagist_base() -> String {
     "https://repo.packagist.org".to_string()
+}
+
+fn default_docker_hub_registry() -> String {
+    "https://registry-1.docker.io".to_string()
+}
+
+fn default_ghcr_registry() -> String {
+    "https://ghcr.io".to_string()
+}
+
+fn default_quay_registry() -> String {
+    "https://quay.io".to_string()
+}
+
+fn default_kubernetes_registry() -> String {
+    "https://registry.k8s.io".to_string()
 }
 
 fn default_request_timeout_secs() -> u64 {

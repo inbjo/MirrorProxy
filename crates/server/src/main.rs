@@ -8,7 +8,7 @@ use anyhow::Context;
 use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
 use clap::Parser;
 use config::Config;
-use proxy::{composer, github, ProxyError};
+use proxy::{composer, github, oci, ProxyError};
 use reqwest::Client;
 use serde::Serialize;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -78,6 +78,9 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
             "/composer/{*path}",
             get(composer::proxy).head(composer::proxy),
         )
+        .route("/v2", get(oci::root).head(oci::root))
+        .route("/v2/", get(oci::root).head(oci::root))
+        .route("/v2/{*path}", get(oci::proxy).head(oci::proxy))
         .fallback(fallback)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -208,6 +211,24 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["public_base_url"], "http://127.0.0.1:3000");
         assert_eq!(value["enabled_proxies"][0], "github");
+        assert!(value["enabled_proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|proxy| proxy == "oci"));
+    }
+
+    #[tokio::test]
+    async fn oci_root_returns_distribution_ping() {
+        let app = build_router(Config::default()).unwrap();
+        let response = app
+            .oneshot(Request::builder().uri("/v2/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], b"{}");
     }
 
     #[tokio::test]

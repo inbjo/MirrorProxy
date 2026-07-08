@@ -1,5 +1,6 @@
 pub mod composer;
 pub mod github;
+pub mod oci;
 
 use axum::{
     body::Body,

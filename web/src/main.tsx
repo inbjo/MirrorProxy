@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clipboard,
   Code2,
+  Container,
   Github,
   Languages,
   Moon,
@@ -36,15 +37,17 @@ const messages = {
     quickStart: 'Quick start',
     github: 'GitHub proxy',
     composer: 'Composer proxy',
+    oci: 'Docker / OCI proxy',
     enabled: 'Enabled',
     disabled: 'Disabled',
     copy: 'Copy',
     copied: 'Copied',
     githubDesc: 'Proxy repository pages, release assets, raw files, archives, and Composer GitHub dist URLs.',
     composerDesc: 'Use MirrorProxy as a Packagist-compatible Composer repository.',
+    ociDesc: 'Pull Docker Hub, GHCR, Quay, and Kubernetes public images through the same registry endpoint.',
     configExample: 'Configuration example',
     future: 'Planned adapters',
-    futureText: 'Docker/OCI, npm, PyPI, Cargo, Go modules, and operating system mirrors will use the same adapter boundary.',
+    futureText: 'npm, PyPI, Cargo, Go modules, and operating system mirrors will use the same adapter boundary.',
     apiHint: 'Runtime config is loaded from /api/config and reflected here.',
     faq: 'Notes',
     faqText: 'Only configured upstreams are proxied. Arbitrary open proxy targets are rejected by default.',
@@ -58,15 +61,17 @@ const messages = {
     quickStart: '快速使用',
     github: 'GitHub 代理',
     composer: 'Composer 代理',
+    oci: 'Docker / OCI 代理',
     enabled: '已启用',
     disabled: '未启用',
     copy: '复制',
     copied: '已复制',
     githubDesc: '代理仓库页面、release 文件、raw 文件、archive，以及 Composer 中常见的 GitHub dist 地址。',
     composerDesc: '将 MirrorProxy 配置为兼容 Packagist 的 Composer 仓库。',
+    ociDesc: '通过同一个 registry 地址拉取 Docker Hub、GHCR、Quay 和 Kubernetes 公开镜像。',
     configExample: '配置示例',
     future: '后续适配器',
-    futureText: 'Docker/OCI、npm、PyPI、Cargo、Go modules、操作系统镜像源都会沿用同一套 adapter 边界。',
+    futureText: 'npm、PyPI、Cargo、Go modules、操作系统镜像源都会沿用同一套 adapter 边界。',
     apiHint: '页面会读取 /api/config 并按运行时配置展示命令。',
     faq: '说明',
     faqText: '默认只代理配置好的上游，任意开放代理目标会被拒绝。',
@@ -108,6 +113,11 @@ function App() {
   const githubCommand = `${baseUrl}/https://github.com/inbjo/Conductor/releases/download/nightly/conductor-client-linux-amd64.deb`
   const composerCommand = `composer config repo.packagist composer ${baseUrl}/composer`
   const composerRequire = 'composer require monolog/monolog'
+  const dockerOfficial = `docker pull ${new URL(baseUrl).host}/nginx`
+  const dockerHub = `docker pull ${new URL(baseUrl).host}/user/image`
+  const dockerGhcr = `docker pull ${new URL(baseUrl).host}/ghcr.io/user/image`
+  const dockerQuay = `docker pull ${new URL(baseUrl).host}/quay.io/org/image`
+  const dockerK8s = `docker pull ${new URL(baseUrl).host}/registry.k8s.io/pause:3.8`
   const enabled = (proxy: string) => config.enabled_proxies.includes(proxy)
 
   const copyCommand = async (id: string, value: string) => {
@@ -144,6 +154,7 @@ function App() {
         <aside className="rail">
           <a href="#github"><Github size={17} /> {t.github}</a>
           <a href="#composer"><PackageOpen size={17} /> {t.composer}</a>
+          <a href="#oci"><Container size={17} /> {t.oci}</a>
           <a href="#future"><ServerCog size={17} /> {t.future}</a>
         </aside>
 
@@ -171,8 +182,23 @@ function App() {
             <Command value={composerRequire} copied={copied === 'composer-require'} labels={t} onCopy={() => copyCommand('composer-require', composerRequire)} />
           </ProxyPanel>
 
+          <ProxyPanel
+            id="oci"
+            title={t.oci}
+            description={t.ociDesc}
+            enabled={enabled('oci')}
+            enabledLabel={t.enabled}
+            disabledLabel={t.disabled}
+          >
+            <Command value={dockerOfficial} copied={copied === 'docker-official'} labels={t} onCopy={() => copyCommand('docker-official', dockerOfficial)} />
+            <Command value={dockerHub} copied={copied === 'docker-hub'} labels={t} onCopy={() => copyCommand('docker-hub', dockerHub)} />
+            <Command value={dockerGhcr} copied={copied === 'docker-ghcr'} labels={t} onCopy={() => copyCommand('docker-ghcr', dockerGhcr)} />
+            <Command value={dockerQuay} copied={copied === 'docker-quay'} labels={t} onCopy={() => copyCommand('docker-quay', dockerQuay)} />
+            <Command value={dockerK8s} copied={copied === 'docker-k8s'} labels={t} onCopy={() => copyCommand('docker-k8s', dockerK8s)} />
+          </ProxyPanel>
+
           <section className="note-grid">
-            <InfoBlock title={t.configExample} body={`public_base_url = "${baseUrl}"\nenabled_proxies = ["github", "composer"]`} mono />
+            <InfoBlock title={t.configExample} body={`public_base_url = "${baseUrl}"\nenabled_proxies = ["github", "composer", "oci"]`} mono />
             <InfoBlock title={t.future} body={t.futureText} />
             <InfoBlock title={t.faq} body={t.faqText} />
             <InfoBlock title="Runtime" body={t.apiHint} />
