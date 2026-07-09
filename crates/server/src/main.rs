@@ -216,6 +216,7 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/config", get(public_config))
+        .route("/api/public-config", get(public_config))
         .route("/api/sources", get(source_catalog))
         .route("/composer", get(composer::root))
         .route("/composer/", get(composer::root))
@@ -543,7 +544,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/config")
+                    .uri("/api/public-config")
                     .body(Body::empty())
                     .unwrap(),
             )

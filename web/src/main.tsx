@@ -92,7 +92,7 @@ const messages = {
     configExample: 'Configuration example',
     future: 'Planned adapters',
     futureText: 'Operating system mirrors will use the same adapter boundary.',
-    apiHint: 'Runtime config is loaded from /api/config and reflected here.',
+    apiHint: 'Runtime config is loaded from /api/public-config and reflected here.',
     faq: 'Notes',
     faqText: 'Only configured upstreams are proxied. Arbitrary open proxy targets are rejected by default.',
   },
@@ -132,7 +132,7 @@ const messages = {
     configExample: '配置示例',
     future: '后续适配器',
     futureText: '操作系统镜像源会沿用同一套 adapter 边界。',
-    apiHint: '页面会读取 /api/config 并按运行时配置展示命令。',
+    apiHint: '页面会读取 /api/public-config 并按运行时配置展示命令。',
     faq: '说明',
     faqText: '默认只代理配置好的上游，任意开放代理目标会被拒绝。',
   },
@@ -164,7 +164,7 @@ function App() {
   }, [locale])
 
   React.useEffect(() => {
-    fetch('/api/config')
+    fetch('/api/public-config')
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('config unavailable')))
       .then((value: PublicConfig) => setConfig(value))
       .catch(() => undefined)
