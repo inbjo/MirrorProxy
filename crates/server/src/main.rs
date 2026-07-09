@@ -68,6 +68,18 @@ enum SourcesCommand {
         #[arg(long)]
         base_url: Option<String>,
     },
+    /// Preview changing a local source target to a mirror.
+    Set {
+        target: String,
+        #[arg(long, default_value = "mirrorproxy")]
+        mirror: String,
+        #[arg(long)]
+        base_url: Option<String>,
+        #[arg(long, default_value = "user")]
+        scope: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -296,9 +308,71 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                 }
             }
         }
+        SourcesCommand::Set {
+            target,
+            mirror,
+            base_url,
+            scope,
+            dry_run,
+        } => {
+            if !dry_run {
+                anyhow::bail!(
+                    "sources set currently supports preview only; pass --dry-run to print the planned command"
+                );
+            }
+            let command = plan_source_set_command(&target, &mirror, base_url.as_deref())?;
+            println!("target: {}", command.target_code);
+            println!("mirror: {}", command.provider_code);
+            println!("scope: {scope}");
+            println!("repository: {}", command.repo_url);
+            println!("dry_run: true");
+            println!("command:");
+            print_source_command(command.provider_code, &command.command);
+        }
     }
 
     Ok(())
+}
+
+struct PlannedSourceCommand {
+    target_code: &'static str,
+    provider_code: &'static str,
+    repo_url: String,
+    command: String,
+}
+
+fn plan_source_set_command(
+    target: &str,
+    mirror: &str,
+    base_url: Option<&str>,
+) -> anyhow::Result<PlannedSourceCommand> {
+    let target = catalog::find_target(target)
+        .ok_or_else(|| anyhow::anyhow!("unknown source target '{target}'"))?;
+    let source = catalog::sources_for_target(target.code)
+        .into_iter()
+        .find(|source| source.provider_code == mirror)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "mirror '{mirror}' is not available for target '{}'",
+                target.code
+            )
+        })?;
+
+    let repo_url =
+        if source.provider_code == "mirrorproxy" && source.capability == SourceMode::ProxyAdapter {
+            mirrorproxy_source_url(base_url, source.repo_url)
+        } else {
+            source.repo_url.to_string()
+        };
+    let command = source_config_command(target.code, &repo_url)
+        .ok_or_else(|| anyhow::anyhow!("no local configuration template for '{}'", target.code))?;
+
+    Ok(PlannedSourceCommand {
+        target_code: target.code,
+        provider_code: source.provider_code,
+        repo_url,
+        command,
+    })
 }
 
 fn mirrorproxy_source_url(base_url: Option<&str>, source_path: &str) -> String {
@@ -826,6 +900,28 @@ mod tests {
             source_config_command("docker", "https://mirror.example/v2/").unwrap(),
             "docker pull mirror.example/nginx"
         );
+    }
+
+    #[test]
+    fn plan_source_set_command_builds_dry_run_commands() {
+        let npm =
+            plan_source_set_command("npm", "mirrorproxy", Some("https://mirror.example")).unwrap();
+        assert_eq!(npm.target_code, "npm");
+        assert_eq!(npm.provider_code, "mirrorproxy");
+        assert_eq!(npm.repo_url, "https://mirror.example/npm/");
+        assert_eq!(
+            npm.command,
+            "npm config set registry https://mirror.example/npm/"
+        );
+
+        let pip = plan_source_set_command("pip", "tuna", None).unwrap();
+        assert_eq!(pip.provider_code, "tuna");
+        assert_eq!(
+            pip.command,
+            "pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple"
+        );
+
+        assert!(plan_source_set_command("npm", "missing", None).is_err());
     }
 
     #[tokio::test]
