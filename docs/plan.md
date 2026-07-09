@@ -6,6 +6,36 @@
 
 默认技术选型：Rust stable、Tokio、Axum、Reqwest、Rustls、Tower、Tracing、Serde、Clap、config、React + TypeScript + Vite 8、Tailwind CSS、i18next。
 
+## Current Baseline
+
+当前仓库已经不是空目录，已有一个可运行的基础版本：
+
+- Rust workspace 已存在，服务端在 `crates/server`，前端在 `web`。
+- 已实现并注册的代理类型：GitHub、Composer/Packagist、Docker/OCI、npm、Go module、Cargo sparse registry、PyPI Simple API。
+- 已有运行时配置读取：`config.example.toml`、环境变量覆盖、`/api/config` 公开运行时基础配置。
+- 已有 Web 控制台：React + Vite，内嵌到 Rust 二进制，主要展示状态和各类代理配置命令。
+- 已有简单请求限流：全局 `requests_per_minute`，但还不是按流量、用户、月份统计的配额系统。
+
+未完成或需要重做的部分：
+
+- 没有 SQLite 持久化配置、统计、配额、鉴权状态。
+- 没有管理 API 鉴权；`/api/config` 仍是公开只读。
+- 没有服务启动随机管理密码生成、登录、会话或 token 管理。
+- Web 只展示配置和命令，尚不支持可视化编辑配置。
+- 没有 CLI 子命令，也没有像 chsrc 一样修改本机包管理器源配置。
+- 没有按月流量上限，到达 N GB 后停止代理服务的硬限制。
+- 没有把 chsrc 支持的源体系完整建模进 MirrorProxy。
+
+当前完成度估算：
+
+- 代理服务基础能力：约 55%。
+- Web 展示页：约 35%。
+- 配置持久化与管理后台：约 5%。
+- CLI 改源能力：0%。
+- SQLite 统计与月流量限制：0%。
+- 对齐 chsrc 支持源范围：约 20%，仅覆盖 npm、Go、Cargo、PyPI、Composer、Docker 等重叠部分。
+- 整体按本计划口径估算：约 30%。
+
 ## Key Changes
 
 ### 1. 项目初始化与工程骨架
@@ -334,6 +364,192 @@ README 内容：
 - release workflow dry-run 或 tag 测试。
 - `build.sh` 在 Linux 环境成功产物。
 - README 示例命令抽样验证。
+
+### 13. 对齐 chsrc 支持源范围
+
+参考项目：`/home/flex/Code/Rust/chsrc`。
+
+chsrc 的目标分三大类：
+
+- 语言和开发生态：Ruby、Python/pip/Poetry/PDM/Rye/uv、JavaScript/npm/pnpm/Yarn/Bun/nvm、Perl、PHP/Composer、Lua、Go、Rust Cargo/rustup、Java/Maven、Clojure、Dart/Pub/Flutter、NuGet、Haskell、OCaml、R、Julia。
+- 操作系统源：Ubuntu、Linux Mint、Debian、Fedora、openSUSE、Kali、MSYS2、Arch/ArchLinuxCN、Manjaro、Gentoo、RockyLinux、AlmaLinux、Alpine、Void、Solus、Trisquel、Linux Lite、ROS、Raspberry Pi OS、Armbian、OpenWrt、Termux、openKylin、openEuler、Anolis、deepin、FreeBSD、NetBSD、OpenBSD。
+- 软件仓库：WinGet、Homebrew、CocoaPods、Docker、Flatpak、Nix、Guix、Emacs、TeX Live、Anaconda。
+
+chsrc 的镜像站集合包括：
+
+- 通用教育网镜像站：MirrorZ、TUNA、SJTUG、BFSU、USTC、ZJU、JLU、LZUOSS、PKU、BJTU、SUSTech、NJU、XJTU、HUST、ISCAS、HIT、SCAU、NJTech、NYIST、SDU、QLU、CQUPT、CQU、Neusoft。
+- 商业镜像站：Ali、Tencent、Huawei/HuaweiCDN、Volcengine、Netease、Sohu、Api7、Fit2Cloud、DaoCloud。
+- 专用镜像站：RubyChina、EmacsChina、npmmirror、goproxy.io、goproxy.cn、RsProxy.cn、FlutterCN。
+
+MirrorProxy 需要把这些能力拆成三层，而不是直接把每个 chsrc recipe 都当成 HTTP 反向代理：
+
+1. 服务端代理 adapter：
+   - 适合有明确 registry 协议或下载协议的生态。
+   - 当前已有：GitHub、Composer、OCI、npm、Go、Cargo、PyPI。
+   - 优先新增：Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Pub/Flutter、Homebrew bottles、Anaconda、TeX Live、ELPA、Nix channel/cache、Flatpak、OS 静态目录代理。
+2. CLI 本机改源：
+   - 适合需要修改本机配置文件或命令行配置的生态。
+   - 例如 APT、YUM/DNF、pacman、apk、zypper、xbps、pkg、Homebrew、Docker daemon、pip/npm/cargo/go env、Poetry/PDM/uv 等。
+3. 仅文档或配置模板：
+   - 某些源需要用户系统版本、发行版代号、权限或已有配置上下文，服务端只能生成建议配置，不应盲写。
+
+数据建模：
+
+- 新增 `mirror_catalog`：镜像站元数据，字段包括 `code`、`name`、`kind`、`homepage`、`speed_test_url`、`enabled`。
+- 新增 `source_targets`：目标生态元数据，字段包括 `code`、`category`、`aliases`、`supported_modes`、`default_scope`。
+- 新增 `target_sources`：目标生态到镜像 URL 的映射，字段包括 `target_code`、`provider_code`、`repo_url`、`speed_url`、`capability`。
+- 新增 `source_templates`：CLI 写配置或生成配置文本所需模板，字段包括 `target_code`、`os_family`、`scope`、`template`、`requires_sudo`。
+
+验收标准：
+
+- `mirrorproxy sources list` 能列出与 chsrc 分类相近的目标和镜像站。
+- Web 能按语言、系统、软件仓库分类展示可用源。
+- 对当前已实现 adapter 的目标，Web 和 CLI 能直接生成 MirrorProxy 代理地址。
+- 对暂未实现 adapter 的目标，Web 和 CLI 能生成外部镜像站配置或提示未支持代理。
+- chsrc 中的目标至少完成数据登记，不遗漏大类。
+
+### 14. CLI 改源命令
+
+目标：
+- 在现有二进制上增加 CLI 子命令，支持类似 chsrc 的 `list/get/set/reset` 工作流。
+- CLI 既能修改本机源地址，也能把源地址改为当前 MirrorProxy 服务地址。
+
+建议命令：
+
+```bash
+mirrorproxy serve --config config.toml
+mirrorproxy sources list
+mirrorproxy sources list --category lang
+mirrorproxy sources mirrors
+mirrorproxy sources get npm
+mirrorproxy sources set npm --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy sources set pip --mirror tuna --scope user
+mirrorproxy sources reset npm --scope user
+mirrorproxy config get
+mirrorproxy config set public_base_url http://127.0.0.1:3000
+```
+
+实现要求：
+
+- `serve` 保持当前服务启动行为。
+- `sources list` 使用内置 catalog 或 SQLite catalog，不依赖启动 Web 服务。
+- `set/reset` 需要分 target 实现，先覆盖 npm、pip、cargo、go、composer、docker、apt、yum/dnf、pacman。
+- 默认写用户级配置；需要系统级写入时必须显式 `--scope system`，并清楚提示需要权限。
+- 写配置前备份原文件，备份记录写入 SQLite 或本地状态文件，便于 rollback。
+- 对 Windows、macOS、Linux 分平台处理，不支持的平台返回明确错误。
+
+验收标准：
+
+- `mirrorproxy sources set npm --mirror mirrorproxy` 后 `npm config get registry` 指向 MirrorProxy。
+- `mirrorproxy sources set pip --mirror mirrorproxy` 后 `pip config list` 生效。
+- `mirrorproxy sources set cargo --mirror mirrorproxy` 生成正确 sparse registry 配置。
+- `mirrorproxy sources reset <target>` 能恢复 CLI 修改前的配置。
+- CLI 不会静默覆盖用户手写配置；发生冲突时提示并要求 `--force`。
+
+### 15. SQLite 配置、鉴权和管理 API
+
+目标：
+- 将运行时配置、管理鉴权、统计和配额落到 SQLite。
+- Web 设置页通过受保护 API 读写配置，不再只依赖 TOML。
+
+启动规则：
+
+- 服务启动时打开 SQLite，默认路径为 `mirrorproxy.sqlite3`，可通过 `MIRRORPROXY_DB` 或配置文件指定。
+- 首次启动如果没有管理员账号或管理密码，生成一个随机密码。
+- 随机密码只在启动日志和本机启动输出中显示一次；数据库只保存密码哈希。
+- 支持后续在 Web 或 CLI 中重置管理员密码。
+
+鉴权方案：
+
+- 管理 API 使用登录接口换取 session token。
+- session token 存 SQLite，保存 `token_hash`、`created_at`、`expires_at`、`last_used_at`。
+- Web 设置页、统计页、配置写入接口都必须鉴权。
+- 公开接口保留：`/healthz`、`/version`、静态资源、必要的代理下载路径。
+- `/api/config` 拆分为公开只读摘要和管理完整配置：`/api/public-config`、`/api/admin/config`。
+
+建议表：
+
+- `settings`：配置键值和版本号。
+- `admin_users`：管理员账号、密码哈希、创建时间、更新时间。
+- `admin_sessions`：登录会话。
+- `proxy_targets`：启用的代理、上游地址、路由前缀。
+- `traffic_daily`：按日统计请求数、响应字节、上游字节、错误数。
+- `traffic_monthly`：按月统计总流量和配额状态。
+- `request_events`：可选的短期请求明细，用于排障，默认设置保留天数。
+- `config_audit_log`：配置变更审计。
+
+验收标准：
+
+- 首次启动会生成随机管理密码，并能用该密码登录 Web 设置页。
+- 未登录访问管理 API 返回 401。
+- 已登录可查看和修改 `public_base_url`、启用代理、上游地址、超时、限流、月流量上限。
+- 配置更新后立即影响新请求；需要重启才生效的配置必须明确标记。
+- SQLite migration 可重复执行，旧数据库可平滑升级。
+
+### 16. Web 设置页和可视化配置
+
+目标：
+- Web 从说明页升级为完整控制台：概览、代理配置、镜像源目录、CLI 命令生成、流量统计、配额设置、登录状态。
+
+页面结构：
+
+- 登录页：输入启动时随机密码或管理员密码。
+- 概览页：服务状态、启用代理、当月流量、月配额剩余、错误率。
+- 代理设置页：每个 adapter 的启用开关、上游地址、路由前缀、超时、是否计入流量配额。
+- 镜像源目录页：参考 chsrc 分类展示语言、系统、软件仓库源。
+- CLI 改源页：选择目标、镜像站、作用域，生成或复制 CLI 命令。
+- 统计页：按天/月展示请求数、流量、错误、Top target。
+- 安全页：修改管理员密码、退出登录、查看最近配置变更。
+
+交互要求：
+
+- 编辑配置使用表单校验，URL 字段即时校验 scheme/host。
+- 危险操作如关闭服务、重置配置、清空统计需要二次确认。
+- 配额达到后，页面明确显示“代理已因月流量上限停止”。
+- 公开说明页仍可免登录访问，但设置和统计必须登录。
+
+验收标准：
+
+- 用户无需编辑 TOML 即可完成常用配置。
+- Web 配置保存后后端 SQLite 可见，并影响运行行为。
+- 页面不会展示未实现的“可代理”能力；未实现项标为“仅支持生成配置”或“计划中”。
+
+### 17. 流量统计和月流量限制
+
+目标：
+- 统计代理服务的真实流量，并支持“每月达到多少 GB 就停止服务”。
+
+计量规则：
+
+- 以代理响应给客户端的 body 字节数作为默认计费流量。
+- HEAD、304、认证失败等无 body 响应按实际字节计 0 或小值，不估算文件大小。
+- 流式响应需要在 body wrapper 中累计字节，不能为了统计把大文件读入内存。
+- 统计维度至少包括：月份、日期、代理类型、HTTP 状态、是否命中配额拒绝。
+- 月份边界使用配置时区，默认使用服务器本地时区或明确配置的 `quota.timezone`。
+
+配置示例：
+
+```toml
+[quota]
+enabled = true
+monthly_gb = 500
+timezone = "Asia/Taipei"
+on_exceeded = "stop_proxy"
+```
+
+行为：
+
+- 未达到配额：正常代理并累计流量。
+- 达到配额：代理路径返回 `503 Service Unavailable` 或 `429 Too Many Requests`，错误 JSON 和 HTML 都明确说明月流量已用尽。
+- 管理 API、健康检查、登录、静态控制台不受月流量封停影响。
+- 管理员可以调整本月上限或手动解除封停；所有操作写审计日志。
+
+验收标准：
+
+- 配置月上限为很小值时，下载超过阈值后后续代理请求被拒绝。
+- 新月份自动重新开启服务。
+- 并发下载不会明显超卖配额；允许最后一个流式请求略微超过阈值，但后续请求必须停止。
+- 统计数据重启后不丢失。
 
 ## Test Plan
 
