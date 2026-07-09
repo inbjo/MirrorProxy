@@ -216,6 +216,7 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/config", get(public_config))
+        .route("/api/sources", get(source_catalog))
         .route("/composer", get(composer::root))
         .route("/composer/", get(composer::root))
         .route(
@@ -337,6 +338,82 @@ async fn public_config(State(state): State<AppState>) -> impl IntoResponse {
     Json(PublicConfig {
         public_base_url: state.config.public_base_url.clone(),
         enabled_proxies: state.config.enabled_proxies.clone(),
+    })
+}
+
+#[derive(Serialize)]
+struct SourceCatalogResponse {
+    providers: Vec<MirrorProviderSummary>,
+    targets: Vec<SourceTargetSummary>,
+    sources: Vec<TargetSourceSummary>,
+}
+
+#[derive(Serialize)]
+struct MirrorProviderSummary {
+    code: &'static str,
+    name: &'static str,
+    kind: &'static str,
+    homepage: &'static str,
+    speed_test_url: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct SourceTargetSummary {
+    code: &'static str,
+    name: &'static str,
+    category: &'static str,
+    aliases: &'static [&'static str],
+    supported_modes: Vec<&'static str>,
+    default_scope: &'static str,
+}
+
+#[derive(Serialize)]
+struct TargetSourceSummary {
+    target_code: &'static str,
+    provider_code: &'static str,
+    repo_url: &'static str,
+    speed_url: Option<&'static str>,
+    capability: &'static str,
+}
+
+async fn source_catalog() -> impl IntoResponse {
+    Json(SourceCatalogResponse {
+        providers: catalog::MIRROR_PROVIDERS
+            .iter()
+            .filter(|provider| provider.enabled)
+            .map(|provider| MirrorProviderSummary {
+                code: provider.code,
+                name: provider.name,
+                kind: provider.kind.as_str(),
+                homepage: provider.homepage,
+                speed_test_url: provider.speed_test_url,
+            })
+            .collect(),
+        targets: catalog::SOURCE_TARGETS
+            .iter()
+            .map(|target| SourceTargetSummary {
+                code: target.code,
+                name: target.name,
+                category: target.category.as_str(),
+                aliases: target.aliases,
+                supported_modes: target
+                    .supported_modes
+                    .iter()
+                    .map(|mode| mode.as_str())
+                    .collect(),
+                default_scope: target.default_scope.as_str(),
+            })
+            .collect(),
+        sources: catalog::TARGET_SOURCES
+            .iter()
+            .map(|source| TargetSourceSummary {
+                target_code: source.target_code,
+                provider_code: source.provider_code,
+                repo_url: source.repo_url,
+                speed_url: source.speed_url,
+                capability: source.capability.as_str(),
+            })
+            .collect(),
     })
 }
 
@@ -503,6 +580,42 @@ mod tests {
             .unwrap()
             .iter()
             .any(|proxy| proxy == "pypi"));
+    }
+
+    #[tokio::test]
+    async fn exposes_source_catalog() {
+        let app = build_router(Config::default()).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sources")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert!(value["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider["code"] == "mirrorproxy"));
+        assert!(value["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|target| target["code"] == "npm" && target["category"] == "lang"));
+        assert!(value["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |source| source["target_code"] == "npm" && source["provider_code"] == "mirrorproxy"
+            ));
     }
 
     #[tokio::test]

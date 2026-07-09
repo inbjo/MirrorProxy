@@ -6,6 +6,7 @@ import {
   Clipboard,
   Code2,
   Container,
+  Database,
   Github,
   Languages,
   Moon,
@@ -21,6 +22,33 @@ type Theme = 'light' | 'dark'
 type PublicConfig = {
   public_base_url: string
   enabled_proxies: string[]
+}
+type SourceCatalog = {
+  providers: MirrorProvider[]
+  targets: SourceTarget[]
+  sources: TargetSource[]
+}
+type MirrorProvider = {
+  code: string
+  name: string
+  kind: string
+  homepage: string
+  speed_test_url: string | null
+}
+type SourceTarget = {
+  code: string
+  name: string
+  category: 'lang' | 'os' | 'repo'
+  aliases: string[]
+  supported_modes: string[]
+  default_scope: string
+}
+type TargetSource = {
+  target_code: string
+  provider_code: string
+  repo_url: string
+  speed_url: string | null
+  capability: string
 }
 
 const copy = async (value: string) => {
@@ -42,6 +70,14 @@ const messages = {
     go: 'Go module proxy',
     crates: 'Rust crates proxy',
     pypi: 'pip / PyPI proxy',
+    sourceCatalog: 'Source catalog',
+    sourceCatalogDesc: 'Targets imported from the built-in catalog for CLI commands, Web views, and future SQLite-backed source management.',
+    langSources: 'Languages',
+    osSources: 'Operating systems',
+    repoSources: 'Software repositories',
+    providers: 'Providers',
+    proxyReady: 'Proxy ready',
+    configOnly: 'Config only',
     enabled: 'Enabled',
     disabled: 'Disabled',
     copy: 'Copy',
@@ -74,6 +110,14 @@ const messages = {
     go: 'Go 模块代理',
     crates: 'Rust crates 代理',
     pypi: 'pip / PyPI 代理',
+    sourceCatalog: '镜像源目录',
+    sourceCatalogDesc: '内置 catalog 会同时服务 CLI、Web 展示和后续 SQLite 源管理。',
+    langSources: '语言生态',
+    osSources: '操作系统',
+    repoSources: '软件仓库',
+    providers: '镜像站',
+    proxyReady: '可代理',
+    configOnly: '仅配置',
     enabled: '已启用',
     disabled: '未启用',
     copy: '复制',
@@ -106,6 +150,7 @@ function App() {
     public_base_url: window.location.origin,
     enabled_proxies: ['github', 'composer'],
   })
+  const [catalog, setCatalog] = React.useState<SourceCatalog | null>(null)
   const [copied, setCopied] = React.useState<string | null>(null)
   const t = messages[locale]
 
@@ -122,6 +167,13 @@ function App() {
     fetch('/api/config')
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('config unavailable')))
       .then((value: PublicConfig) => setConfig(value))
+      .catch(() => undefined)
+  }, [])
+
+  React.useEffect(() => {
+    fetch('/api/sources')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('source catalog unavailable')))
+      .then((value: SourceCatalog) => setCatalog(value))
       .catch(() => undefined)
   }, [])
 
@@ -185,6 +237,7 @@ function App() {
           <a href="#go"><Code2 size={17} /> {t.go}</a>
           <a href="#crates"><PackageOpen size={17} /> {t.crates}</a>
           <a href="#pypi"><PackageOpen size={17} /> {t.pypi}</a>
+          <a href="#sources"><Database size={17} /> {t.sourceCatalog}</a>
           <a href="#future"><ServerCog size={17} /> {t.future}</a>
         </aside>
 
@@ -283,9 +336,61 @@ function App() {
             <InfoBlock title={t.faq} body={t.faqText} />
             <InfoBlock title="Runtime" body={t.apiHint} />
           </section>
+
+          {catalog && <SourceCatalogPanel catalog={catalog} labels={t} />}
         </div>
       </section>
     </main>
+  )
+}
+
+function SourceCatalogPanel({ catalog, labels }: { catalog: SourceCatalog; labels: Record<string, string> }) {
+  const groups = [
+    { code: 'lang', title: labels.langSources },
+    { code: 'os', title: labels.osSources },
+    { code: 'repo', title: labels.repoSources },
+  ] as const
+
+  const providerCount = (targetCode: string) => (
+    catalog.sources.filter((source) => source.target_code === targetCode).length
+  )
+  const hasProxyAdapter = (targetCode: string) => (
+    catalog.sources.some((source) => source.target_code === targetCode && source.capability === 'proxy')
+  )
+
+  return (
+    <section id="sources" className="proxy-panel catalog-panel">
+      <div className="panel-head">
+        <div>
+          <h2>{labels.sourceCatalog}</h2>
+          <p>{labels.sourceCatalogDesc}</p>
+        </div>
+        <span className="badge enabled">{catalog.providers.length} {labels.providers}</span>
+      </div>
+      <div className="catalog-grid">
+        {groups.map((group) => (
+          <div className="catalog-group" key={group.code}>
+            <h3>{group.title}</h3>
+            <div className="source-list">
+              {catalog.targets
+                .filter((target) => target.category === group.code)
+                .map((target) => (
+                  <div className="source-row" key={target.code}>
+                    <div>
+                      <strong>{target.name}</strong>
+                      <small>{target.code} · {target.supported_modes.join(', ')}</small>
+                    </div>
+                    <span className={hasProxyAdapter(target.code) ? 'mini-status ready' : 'mini-status'}>
+                      {hasProxyAdapter(target.code) ? labels.proxyReady : labels.configOnly}
+                    </span>
+                    <span className="provider-count">{providerCount(target.code)}</span>
+                  </div>
+                ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 
