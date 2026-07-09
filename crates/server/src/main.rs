@@ -1,3 +1,4 @@
+mod catalog;
 mod config;
 mod proxy;
 mod static_assets;
@@ -18,7 +19,8 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use clap::Parser;
+use catalog::{SourceCategory, SourceMode};
+use clap::{Parser, Subcommand};
 use config::Config;
 use proxy::{composer, cratesio, github, go, npm, oci, pypi, ProxyError};
 use reqwest::Client;
@@ -28,9 +30,35 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "MirrorProxy multi-source mirror proxy")]
-struct Args {
-    #[arg(short, long, env = "MIRRORPROXY_CONFIG")]
+struct Cli {
+    #[arg(short, long, env = "MIRRORPROXY_CONFIG", global = true)]
     config: Option<std::path::PathBuf>,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Start the HTTP mirror proxy service.
+    Serve,
+    /// Inspect built-in mirror source metadata.
+    Sources {
+        #[command(subcommand)]
+        command: SourcesCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SourcesCommand {
+    /// List source targets known to MirrorProxy.
+    List {
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// List mirror providers known to MirrorProxy.
+    Mirrors,
+    /// Show mirror mappings for one source target.
+    Get { target: String },
 }
 
 #[derive(Clone)]
@@ -48,8 +76,12 @@ pub struct RateLimiter {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
-    let args = Args::parse();
-    let config = Config::load(args.config.as_deref()).context("failed to load config")?;
+    let cli = Cli::parse();
+    if let Some(Command::Sources { command }) = cli.command {
+        return run_sources_command(command);
+    }
+
+    let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
     let addr: SocketAddr = config
         .listen_addr
         .parse()
@@ -62,6 +94,94 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    Ok(())
+}
+
+fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
+    match command {
+        SourcesCommand::List { category } => {
+            let category = category
+                .as_deref()
+                .map(|value| {
+                    SourceCategory::parse(value).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "unknown source category '{value}', expected lang, os, or repo"
+                        )
+                    })
+                })
+                .transpose()?;
+
+            println!(
+                "{:<14} {:<8} {:<26} {:<20} {:<10}",
+                "code", "category", "name", "modes", "scope"
+            );
+            for target in catalog::list_targets(category) {
+                println!(
+                    "{:<14} {:<8} {:<26} {:<20} {:<10}",
+                    target.code,
+                    target.category.as_str(),
+                    target.name,
+                    catalog::join_modes(target.supported_modes),
+                    target.default_scope.as_str()
+                );
+            }
+        }
+        SourcesCommand::Mirrors => {
+            println!("{:<14} {:<12} {:<18} homepage", "code", "kind", "name");
+            for provider in catalog::MIRROR_PROVIDERS
+                .iter()
+                .filter(|provider| provider.enabled)
+            {
+                println!(
+                    "{:<14} {:<12} {:<18} {}",
+                    provider.code,
+                    provider.kind.as_str(),
+                    provider.name,
+                    provider.homepage
+                );
+            }
+        }
+        SourcesCommand::Get { target } => {
+            let Some(target) = catalog::find_target(&target) else {
+                anyhow::bail!("unknown source target '{target}'");
+            };
+
+            println!("code: {}", target.code);
+            println!("name: {}", target.name);
+            println!("category: {}", target.category.as_str());
+            println!("aliases: {}", target.aliases.join(","));
+            println!("modes: {}", catalog::join_modes(target.supported_modes));
+            println!("default_scope: {}", target.default_scope.as_str());
+            println!();
+            println!(
+                "{:<14} {:<14} {:<12} repository",
+                "provider", "kind", "capability"
+            );
+
+            for source in catalog::sources_for_target(target.code) {
+                let provider = catalog::find_provider(source.provider_code);
+                let provider_kind = provider
+                    .map(|provider| provider.kind.as_str())
+                    .unwrap_or("unknown");
+                let repo_url = if source.provider_code == "mirrorproxy"
+                    && source.capability == SourceMode::ProxyAdapter
+                {
+                    format!("${{MIRRORPROXY_BASE_URL}}{}", source.repo_url)
+                } else {
+                    source.repo_url.to_string()
+                };
+
+                println!(
+                    "{:<14} {:<14} {:<12} {}",
+                    source.provider_code,
+                    provider_kind,
+                    source.capability.as_str(),
+                    repo_url
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
