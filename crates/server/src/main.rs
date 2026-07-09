@@ -311,7 +311,45 @@ async fn rate_limit_middleware(
         }
     }
 
+    if quota_exceeded_for_request(&state, request.uri().path()) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, HeaderValue::from_static("3600"))],
+            Json(serde_json::json!({
+                "error": "monthly traffic quota exceeded",
+                "quota": {
+                    "monthly_gb": state.config.quota.monthly_gb,
+                    "timezone": state.config.quota.timezone,
+                    "on_exceeded": state.config.quota.on_exceeded
+                }
+            })),
+        )
+            .into_response();
+    }
+
     next.run(request).await
+}
+
+fn quota_exceeded_for_request(state: &AppState, path: &str) -> bool {
+    state.config.quota.enabled && state.config.quota.monthly_gb == 0 && is_proxy_path(path)
+}
+
+fn is_proxy_path(path: &str) -> bool {
+    path == "/composer"
+        || path.starts_with("/composer/")
+        || path == "/npm"
+        || path.starts_with("/npm/")
+        || path == "/goproxy"
+        || path.starts_with("/goproxy/")
+        || path == "/pypi/simple"
+        || path.starts_with("/pypi/simple/")
+        || path.starts_with("/pypi/files/")
+        || path.starts_with("/crates/api/")
+        || path == "/crates-index"
+        || path.starts_with("/crates-index/")
+        || path == "/v2"
+        || path.starts_with("/v2/")
+        || github::is_github_proxy_path(path)
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -333,12 +371,27 @@ async fn version() -> impl IntoResponse {
 struct PublicConfig {
     public_base_url: String,
     enabled_proxies: Vec<String>,
+    quota: PublicQuotaConfig,
+}
+
+#[derive(Serialize)]
+struct PublicQuotaConfig {
+    enabled: bool,
+    monthly_gb: u64,
+    timezone: String,
+    on_exceeded: String,
 }
 
 async fn public_config(State(state): State<AppState>) -> impl IntoResponse {
     Json(PublicConfig {
         public_base_url: state.config.public_base_url.clone(),
         enabled_proxies: state.config.enabled_proxies.clone(),
+        quota: PublicQuotaConfig {
+            enabled: state.config.quota.enabled,
+            monthly_gb: state.config.quota.monthly_gb,
+            timezone: state.config.quota.timezone.clone(),
+            on_exceeded: state.config.quota.on_exceeded.clone(),
+        },
     })
 }
 
@@ -581,6 +634,48 @@ mod tests {
             .unwrap()
             .iter()
             .any(|proxy| proxy == "pypi"));
+        assert_eq!(value["quota"]["enabled"], false);
+        assert_eq!(value["quota"]["monthly_gb"], 500);
+    }
+
+    #[tokio::test]
+    async fn quota_guard_blocks_proxy_paths_only() {
+        let app = build_router(Config {
+            quota: crate::config::QuotaConfig {
+                enabled: true,
+                monthly_gb: 0,
+                ..crate::config::QuotaConfig::default()
+            },
+            ..Config::default()
+        })
+        .unwrap();
+
+        let health = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+
+        let proxy = app
+            .oneshot(Request::builder().uri("/npm/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(proxy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            proxy
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .unwrap(),
+            "3600"
+        );
+        let body = to_bytes(proxy.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("monthly traffic quota exceeded"));
     }
 
     #[tokio::test]

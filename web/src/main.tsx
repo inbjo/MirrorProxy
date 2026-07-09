@@ -22,6 +22,12 @@ type Theme = 'light' | 'dark'
 type PublicConfig = {
   public_base_url: string
   enabled_proxies: string[]
+  quota: {
+    enabled: boolean
+    monthly_gb: number
+    timezone: string
+    on_exceeded: string
+  }
 }
 type SourceCatalog = {
   providers: MirrorProvider[]
@@ -78,6 +84,8 @@ const messages = {
     providers: 'Providers',
     proxyReady: 'Proxy ready',
     configOnly: 'Config only',
+    quota: 'Monthly quota',
+    quotaOff: 'Disabled',
     enabled: 'Enabled',
     disabled: 'Disabled',
     copy: 'Copy',
@@ -118,6 +126,8 @@ const messages = {
     providers: '镜像站',
     proxyReady: '可代理',
     configOnly: '仅配置',
+    quota: '月流量配额',
+    quotaOff: '未启用',
     enabled: '已启用',
     disabled: '未启用',
     copy: '复制',
@@ -149,6 +159,12 @@ function App() {
   const [config, setConfig] = React.useState<PublicConfig>({
     public_base_url: window.location.origin,
     enabled_proxies: ['github', 'composer'],
+    quota: {
+      enabled: false,
+      monthly_gb: 500,
+      timezone: 'local',
+      on_exceeded: 'stop_proxy',
+    },
   })
   const [catalog, setCatalog] = React.useState<SourceCatalog | null>(null)
   const [copied, setCopied] = React.useState<string | null>(null)
@@ -197,6 +213,7 @@ function App() {
   const pipConfig = `pip config set global.index-url ${baseUrl}/pypi/simple/`
   const pipInstall = 'pip install requests'
   const enabled = (proxy: string) => config.enabled_proxies.includes(proxy)
+  const quotaValue = config.quota.enabled ? `${config.quota.monthly_gb} GB · ${config.quota.timezone}` : t.quotaOff
 
   const copyCommand = async (id: string, value: string) => {
     await copy(value)
@@ -225,6 +242,7 @@ function App() {
       <section className="status-strip">
         <Metric icon={<CheckCircle2 size={18} />} label={t.status} value={t.online} tone="ok" />
         <Metric icon={<Code2 size={18} />} label={t.baseUrl} value={baseUrl} />
+        <Metric icon={<Database size={18} />} label={t.quota} value={quotaValue} />
         <Metric icon={<PackageOpen size={18} />} label="Adapters" value={config.enabled_proxies.join(', ')} />
       </section>
 

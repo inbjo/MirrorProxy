@@ -23,3 +23,9 @@ request_secs = 60
 [rate_limit]
 enabled = false
 requests_per_minute = 600
+
+[quota]
+enabled = false
+monthly_gb = 500
+timezone = "local"
+on_exceeded = "stop_proxy"

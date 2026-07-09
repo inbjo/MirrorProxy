@@ -17,6 +17,8 @@ pub struct Config {
     pub timeout: TimeoutConfig,
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
+    #[serde(default)]
+    pub quota: QuotaConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +63,18 @@ pub struct RateLimitConfig {
     pub enabled: bool,
     #[serde(default = "default_rate_limit_requests_per_minute")]
     pub requests_per_minute: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotaConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_quota_monthly_gb")]
+    pub monthly_gb: u64,
+    #[serde(default = "default_quota_timezone")]
+    pub timezone: String,
+    #[serde(default = "default_quota_on_exceeded")]
+    pub on_exceeded: String,
 }
 
 impl Config {
@@ -111,6 +125,24 @@ impl Config {
                 self.rate_limit.enabled = true;
             }
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_QUOTA_ENABLED") {
+            self.quota.enabled = matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_QUOTA_MONTHLY_GB") {
+            if let Ok(monthly_gb) = value.parse() {
+                self.quota.monthly_gb = monthly_gb;
+                self.quota.enabled = true;
+            }
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_QUOTA_TIMEZONE") {
+            self.quota.timezone = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_QUOTA_ON_EXCEEDED") {
+            self.quota.on_exceeded = value;
+        }
     }
 
     fn validate(&self) -> anyhow::Result<()> {
@@ -123,6 +155,13 @@ impl Config {
         }
         if self.rate_limit.enabled && self.rate_limit.requests_per_minute == 0 {
             anyhow::bail!("rate_limit.requests_per_minute must be greater than 0 when enabled");
+        }
+        if self.quota.enabled && self.quota.timezone.trim().is_empty() {
+            anyhow::bail!("quota.timezone cannot be empty when quota is enabled");
+        }
+        match self.quota.on_exceeded.as_str() {
+            "stop_proxy" | "throttle" => {}
+            other => anyhow::bail!("quota.on_exceeded must be stop_proxy or throttle, got {other}"),
         }
 
         let enabled: BTreeMap<_, _> = self
@@ -168,6 +207,7 @@ impl Default for Config {
             upstreams: Upstreams::default(),
             timeout: TimeoutConfig::default(),
             rate_limit: RateLimitConfig::default(),
+            quota: QuotaConfig::default(),
         }
     }
 }
@@ -205,6 +245,17 @@ impl Default for RateLimitConfig {
         Self {
             enabled: false,
             requests_per_minute: default_rate_limit_requests_per_minute(),
+        }
+    }
+}
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            monthly_gb: default_quota_monthly_gb(),
+            timezone: default_quota_timezone(),
+            on_exceeded: default_quota_on_exceeded(),
         }
     }
 }
@@ -289,6 +340,18 @@ fn default_rate_limit_requests_per_minute() -> u32 {
     600
 }
 
+fn default_quota_monthly_gb() -> u64 {
+    500
+}
+
+fn default_quota_timezone() -> String {
+    "local".to_string()
+}
+
+fn default_quota_on_exceeded() -> String {
+    "stop_proxy".to_string()
+}
+
 fn validate_http_url(field: &str, value: &str) -> anyhow::Result<()> {
     let url = Url::parse(value).map_err(|error| anyhow::anyhow!("{field} is invalid: {error}"))?;
     match url.scheme() {
@@ -341,6 +404,33 @@ mod tests {
             rate_limit: RateLimitConfig {
                 enabled: true,
                 requests_per_minute: 0,
+            },
+            ..Config::default()
+        };
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_enabled_zero_quota_as_immediate_stop_threshold() {
+        let config = Config {
+            quota: QuotaConfig {
+                enabled: true,
+                monthly_gb: 0,
+                ..QuotaConfig::default()
+            },
+            ..Config::default()
+        };
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_unknown_quota_action() {
+        let config = Config {
+            quota: QuotaConfig {
+                on_exceeded: "drop_everything".to_string(),
+                ..QuotaConfig::default()
             },
             ..Config::default()
         };

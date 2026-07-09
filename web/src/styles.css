@@ -123,7 +123,7 @@ p {
 
 .status-strip {
   display: grid;
-  grid-template-columns: 0.8fr 1.4fr 1fr;
+  grid-template-columns: 0.8fr 1.4fr 0.9fr 1fr;
   gap: 12px;
   margin: 24px 0;
 }
