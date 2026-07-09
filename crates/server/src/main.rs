@@ -261,6 +261,7 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                 "provider", "kind", "capability"
             );
 
+            let mut commands = Vec::new();
             for source in catalog::sources_for_target(target.code) {
                 let provider = catalog::find_provider(source.provider_code);
                 let provider_kind = provider
@@ -281,6 +282,18 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                     source.capability.as_str(),
                     repo_url
                 );
+
+                if let Some(command) = source_config_command(target.code, &repo_url) {
+                    commands.push((source.provider_code, command));
+                }
+            }
+
+            if !commands.is_empty() {
+                println!();
+                println!("commands:");
+                for (provider_code, command) in commands {
+                    print_source_command(provider_code, &command);
+                }
             }
         }
     }
@@ -294,6 +307,52 @@ fn mirrorproxy_source_url(base_url: Option<&str>, source_path: &str) -> String {
         "{}/{}",
         base_url.trim_end_matches('/'),
         source_path.trim_start_matches('/')
+    )
+}
+
+fn source_config_command(target_code: &str, repo_url: &str) -> Option<String> {
+    match target_code {
+        "npm" => Some(format!("npm config set registry {repo_url}")),
+        "pip" => Some(format!("pip config set global.index-url {repo_url}")),
+        "cargo" => Some(format!(
+            "[source.crates-io]\nreplace-with = \"mirrorproxy\"\n\n[source.mirrorproxy]\nregistry = \"{}\"",
+            cargo_registry_url(repo_url)
+        )),
+        "go" => Some(format!("go env -w GOPROXY={repo_url},direct")),
+        "composer" => Some(format!("composer config repo.packagist composer {repo_url}")),
+        "docker" => Some(format!("docker pull {}/nginx", docker_registry_host(repo_url)?)),
+        _ => None,
+    }
+}
+
+fn print_source_command(provider_code: &str, command: &str) {
+    if command.contains('\n') {
+        println!("{provider_code}:");
+        for line in command.lines() {
+            println!("  {line}");
+        }
+    } else {
+        println!("{provider_code}: {command}");
+    }
+}
+
+fn cargo_registry_url(repo_url: &str) -> String {
+    if repo_url.starts_with("sparse+") {
+        repo_url.to_string()
+    } else {
+        format!("sparse+{repo_url}")
+    }
+}
+
+fn docker_registry_host(repo_url: &str) -> Option<String> {
+    let without_scheme = repo_url
+        .strip_prefix("https://")
+        .or_else(|| repo_url.strip_prefix("http://"))?;
+    Some(
+        without_scheme
+            .trim_end_matches('/')
+            .trim_end_matches("/v2")
+            .to_string(),
     )
 }
 
@@ -689,6 +748,54 @@ mod tests {
         assert_eq!(
             mirrorproxy_source_url(Some("http://127.0.0.1:3000"), "goproxy/"),
             "http://127.0.0.1:3000/goproxy/"
+        );
+    }
+
+    #[test]
+    fn source_config_command_generates_copyable_commands() {
+        assert_eq!(
+            source_config_command("npm", "https://mirror.example/npm/").unwrap(),
+            "npm config set registry https://mirror.example/npm/"
+        );
+        assert_eq!(
+            source_config_command("pip", "https://mirror.example/pypi/simple/").unwrap(),
+            "pip config set global.index-url https://mirror.example/pypi/simple/"
+        );
+        assert_eq!(
+            source_config_command("go", "https://mirror.example/goproxy/").unwrap(),
+            "go env -w GOPROXY=https://mirror.example/goproxy/,direct"
+        );
+        assert_eq!(
+            source_config_command("composer", "https://mirror.example/composer/").unwrap(),
+            "composer config repo.packagist composer https://mirror.example/composer/"
+        );
+        assert!(
+            source_config_command("github", "https://mirror.example/https://github.com/").is_none()
+        );
+    }
+
+    #[test]
+    fn source_config_command_formats_cargo_and_docker() {
+        assert_eq!(
+            cargo_registry_url("https://mirror.example/crates-index/"),
+            "sparse+https://mirror.example/crates-index/"
+        );
+        assert_eq!(
+            cargo_registry_url("sparse+https://mirrors.ustc.edu.cn/crates.io-index/"),
+            "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+        );
+        assert!(
+            source_config_command("cargo", "https://mirror.example/crates-index/")
+                .unwrap()
+                .contains("\nregistry = \"sparse+https://mirror.example/crates-index/\"")
+        );
+        assert_eq!(
+            docker_registry_host("https://mirror.example/v2/").unwrap(),
+            "mirror.example"
+        );
+        assert_eq!(
+            source_config_command("docker", "https://mirror.example/v2/").unwrap(),
+            "docker pull mirror.example/nginx"
         );
     }
 
