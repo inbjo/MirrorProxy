@@ -41,6 +41,11 @@ struct Cli {
 enum Command {
     /// Start the HTTP mirror proxy service.
     Serve,
+    /// Inspect the effective runtime configuration.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Inspect built-in mirror source metadata.
     Sources {
         #[command(subcommand)]
@@ -61,6 +66,12 @@ enum SourcesCommand {
     Get { target: String },
 }
 
+#[derive(Subcommand, Debug)]
+enum ConfigCommand {
+    /// Print the full effective config or one config key.
+    Get { key: Option<String> },
+}
+
 #[derive(Clone)]
 pub struct AppState {
     config: Arc<Config>,
@@ -77,8 +88,13 @@ pub struct RateLimiter {
 async fn main() -> anyhow::Result<()> {
     init_tracing();
     let cli = Cli::parse();
-    if let Some(Command::Sources { command }) = cli.command {
-        return run_sources_command(command);
+    match cli.command {
+        Some(Command::Sources { command }) => return run_sources_command(command),
+        Some(Command::Config { command }) => {
+            let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
+            return run_config_command(command, &config);
+        }
+        Some(Command::Serve) | None => {}
     }
 
     let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
@@ -95,6 +111,89 @@ async fn main() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+fn run_config_command(command: ConfigCommand, config: &Config) -> anyhow::Result<()> {
+    match command {
+        ConfigCommand::Get { key } => {
+            if let Some(key) = key {
+                let value = config_value(config, &key)
+                    .ok_or_else(|| anyhow::anyhow!("unknown config key '{key}'"))?;
+                println!("{value}");
+            } else {
+                for (key, value) in config_entries(config) {
+                    println!("{key} = {value}");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn config_value(config: &Config, key: &str) -> Option<String> {
+    match key {
+        "listen_addr" => Some(config.listen_addr.clone()),
+        "public_base_url" => Some(config.public_base_url.clone()),
+        "enabled_proxies" => Some(config.enabled_proxies.join(",")),
+        "timeout.request_secs" => Some(config.timeout.request_secs.to_string()),
+        "rate_limit.enabled" => Some(config.rate_limit.enabled.to_string()),
+        "rate_limit.requests_per_minute" => Some(config.rate_limit.requests_per_minute.to_string()),
+        "quota.enabled" => Some(config.quota.enabled.to_string()),
+        "quota.monthly_gb" => Some(config.quota.monthly_gb.to_string()),
+        "quota.timezone" => Some(config.quota.timezone.clone()),
+        "quota.on_exceeded" => Some(config.quota.on_exceeded.clone()),
+        "upstreams.github" => Some(config.upstreams.github.clone()),
+        "upstreams.github_raw" => Some(config.upstreams.github_raw.clone()),
+        "upstreams.packagist" => Some(config.upstreams.packagist.clone()),
+        "upstreams.docker_hub" => Some(config.upstreams.docker_hub.clone()),
+        "upstreams.ghcr" => Some(config.upstreams.ghcr.clone()),
+        "upstreams.quay" => Some(config.upstreams.quay.clone()),
+        "upstreams.kubernetes" => Some(config.upstreams.kubernetes.clone()),
+        "upstreams.npm" => Some(config.upstreams.npm.clone()),
+        "upstreams.go_proxy" => Some(config.upstreams.go_proxy.clone()),
+        "upstreams.crates_index" => Some(config.upstreams.crates_index.clone()),
+        "upstreams.crates_api" => Some(config.upstreams.crates_api.clone()),
+        "upstreams.pypi_simple" => Some(config.upstreams.pypi_simple.clone()),
+        "upstreams.pypi_files" => Some(config.upstreams.pypi_files.clone()),
+        _ => None,
+    }
+}
+
+fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
+    [
+        "listen_addr",
+        "public_base_url",
+        "enabled_proxies",
+        "timeout.request_secs",
+        "rate_limit.enabled",
+        "rate_limit.requests_per_minute",
+        "quota.enabled",
+        "quota.monthly_gb",
+        "quota.timezone",
+        "quota.on_exceeded",
+        "upstreams.github",
+        "upstreams.github_raw",
+        "upstreams.packagist",
+        "upstreams.docker_hub",
+        "upstreams.ghcr",
+        "upstreams.quay",
+        "upstreams.kubernetes",
+        "upstreams.npm",
+        "upstreams.go_proxy",
+        "upstreams.crates_index",
+        "upstreams.crates_api",
+        "upstreams.pypi_simple",
+        "upstreams.pypi_files",
+    ]
+    .into_iter()
+    .map(|key| {
+        (
+            key,
+            config_value(config, key).expect("listed config key should resolve"),
+        )
+    })
+    .collect()
 }
 
 fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
@@ -530,6 +629,39 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[test]
+    fn config_value_reads_effective_config_keys() {
+        let config = Config::default();
+
+        assert_eq!(
+            config_value(&config, "public_base_url").unwrap(),
+            "http://127.0.0.1:3000"
+        );
+        assert_eq!(config_value(&config, "quota.monthly_gb").unwrap(), "500");
+        assert_eq!(
+            config_value(&config, "upstreams.npm").unwrap(),
+            "https://registry.npmjs.org"
+        );
+        assert!(config_value(&config, "missing.key").is_none());
+    }
+
+    #[test]
+    fn config_entries_include_public_and_quota_settings() {
+        let config = Config::default();
+        let entries = config_entries(&config);
+
+        assert!(entries
+            .iter()
+            .any(|(key, value)| *key == "enabled_proxies" && value.contains("github")));
+        assert!(entries
+            .iter()
+            .any(|(key, value)| *key == "quota.on_exceeded" && value == "stop_proxy"));
+        assert!(entries
+            .iter()
+            .any(|(key, value)| *key == "upstreams.pypi_files"
+                && value == "https://files.pythonhosted.org"));
+    }
 
     #[tokio::test]
     async fn healthz_returns_ok() {
