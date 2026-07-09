@@ -488,10 +488,10 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
     },
     SourceTemplate {
         target_code: "docker",
-        os_family: "linux",
-        scope: SourceScope::System,
-        template: "Configure registry mirror in /etc/docker/daemon.json, then restart Docker. Mirror URL: {repo_url}",
-        requires_sudo: true,
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "docker pull {repo_url}/nginx",
+        requires_sudo: false,
     },
     SourceTemplate {
         target_code: "apt",

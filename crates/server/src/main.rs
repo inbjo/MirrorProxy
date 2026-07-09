@@ -311,18 +311,23 @@ fn mirrorproxy_source_url(base_url: Option<&str>, source_path: &str) -> String {
 }
 
 fn source_config_command(target_code: &str, repo_url: &str) -> Option<String> {
+    let template = catalog::templates_for_target(target_code)
+        .into_iter()
+        .next()?;
+    let repo_url = template_repo_url(target_code, repo_url)?;
+    Some(render_source_template(template.template, &repo_url))
+}
+
+fn template_repo_url(target_code: &str, repo_url: &str) -> Option<String> {
     match target_code {
-        "npm" => Some(format!("npm config set registry {repo_url}")),
-        "pip" => Some(format!("pip config set global.index-url {repo_url}")),
-        "cargo" => Some(format!(
-            "[source.crates-io]\nreplace-with = \"mirrorproxy\"\n\n[source.mirrorproxy]\nregistry = \"{}\"",
-            cargo_registry_url(repo_url)
-        )),
-        "go" => Some(format!("go env -w GOPROXY={repo_url},direct")),
-        "composer" => Some(format!("composer config repo.packagist composer {repo_url}")),
-        "docker" => Some(format!("docker pull {}/nginx", docker_registry_host(repo_url)?)),
-        _ => None,
+        "cargo" => Some(cargo_registry_url(repo_url)),
+        "docker" => Some(docker_registry_host(repo_url)?),
+        _ => Some(repo_url.to_string()),
     }
+}
+
+fn render_source_template(template: &str, repo_url: &str) -> String {
+    template.replace("{repo_url}", repo_url)
 }
 
 fn print_source_command(provider_code: &str, command: &str) {
@@ -796,6 +801,10 @@ mod tests {
 
     #[test]
     fn source_config_command_formats_cargo_and_docker() {
+        assert_eq!(
+            render_source_template("tool set {repo_url}", "https://mirror.example"),
+            "tool set https://mirror.example"
+        );
         assert_eq!(
             cargo_registry_url("https://mirror.example/crates-index/"),
             "sparse+https://mirror.example/crates-index/"
