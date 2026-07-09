@@ -80,6 +80,14 @@ enum SourcesCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Preview resetting a local source target to its default source.
+    Reset {
+        target: String,
+        #[arg(long, default_value = "user")]
+        scope: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -329,6 +337,23 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
             println!("command:");
             print_source_command(command.provider_code, &command.command);
         }
+        SourcesCommand::Reset {
+            target,
+            scope,
+            dry_run,
+        } => {
+            if !dry_run {
+                anyhow::bail!(
+                    "sources reset currently supports preview only; pass --dry-run to print the planned reset"
+                );
+            }
+            let command = plan_source_reset_command(&target)?;
+            println!("target: {}", command.target_code);
+            println!("scope: {scope}");
+            println!("dry_run: true");
+            println!("command:");
+            print_source_command("default", &command.command);
+        }
     }
 
     Ok(())
@@ -338,6 +363,11 @@ struct PlannedSourceCommand {
     target_code: &'static str,
     provider_code: &'static str,
     repo_url: String,
+    command: String,
+}
+
+struct PlannedResetCommand {
+    target_code: &'static str,
     command: String,
 }
 
@@ -375,6 +405,18 @@ fn plan_source_set_command(
     })
 }
 
+fn plan_source_reset_command(target: &str) -> anyhow::Result<PlannedResetCommand> {
+    let target = catalog::find_target(target)
+        .ok_or_else(|| anyhow::anyhow!("unknown source target '{target}'"))?;
+    let command = source_reset_command(target.code)
+        .ok_or_else(|| anyhow::anyhow!("no reset preview for '{}'", target.code))?;
+
+    Ok(PlannedResetCommand {
+        target_code: target.code,
+        command,
+    })
+}
+
 fn mirrorproxy_source_url(base_url: Option<&str>, source_path: &str) -> String {
     let base_url = base_url.unwrap_or("${MIRRORPROXY_BASE_URL}");
     format!(
@@ -390,6 +432,24 @@ fn source_config_command(target_code: &str, repo_url: &str) -> Option<String> {
         .next()?;
     let repo_url = template_repo_url(target_code, repo_url)?;
     Some(render_source_template(template.template, &repo_url))
+}
+
+fn source_reset_command(target_code: &str) -> Option<String> {
+    match target_code {
+        "npm" => Some("npm config delete registry".to_string()),
+        "pip" => Some("pip config unset global.index-url".to_string()),
+        "cargo" => Some(
+            "Remove the [source.crates-io] replacement and [source.mirrorproxy] entries from Cargo config"
+                .to_string(),
+        ),
+        "go" => Some("go env -u GOPROXY".to_string()),
+        "composer" => Some("composer config --unset repos.packagist".to_string()),
+        "docker" => Some(
+            "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
+                .to_string(),
+        ),
+        _ => None,
+    }
 }
 
 fn template_repo_url(target_code: &str, repo_url: &str) -> Option<String> {
@@ -922,6 +982,20 @@ mod tests {
         );
 
         assert!(plan_source_set_command("npm", "missing", None).is_err());
+    }
+
+    #[test]
+    fn plan_source_reset_command_builds_dry_run_commands() {
+        let npm = plan_source_reset_command("npm").unwrap();
+        assert_eq!(npm.target_code, "npm");
+        assert_eq!(npm.command, "npm config delete registry");
+
+        let docker = plan_source_reset_command("oci").unwrap();
+        assert_eq!(docker.target_code, "docker");
+        assert!(docker.command.contains("registry-mirrors"));
+
+        assert!(plan_source_reset_command("github").is_err());
+        assert!(plan_source_reset_command("missing").is_err());
     }
 
     #[tokio::test]
