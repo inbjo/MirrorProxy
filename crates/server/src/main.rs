@@ -94,6 +94,13 @@ enum SourcesCommand {
 enum ConfigCommand {
     /// Print the full effective config or one config key.
     Get { key: Option<String> },
+    /// Preview changing one config key.
+    Set {
+        key: String,
+        value: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -148,6 +155,155 @@ fn run_config_command(command: ConfigCommand, config: &Config) -> anyhow::Result
                 for (key, value) in config_entries(config) {
                     println!("{key} = {value}");
                 }
+            }
+        }
+        ConfigCommand::Set {
+            key,
+            value,
+            dry_run,
+        } => {
+            if !dry_run {
+                anyhow::bail!(
+                    "config set currently supports preview only; pass --dry-run to print the planned change"
+                );
+            }
+            let change = plan_config_set(config, &key, &value)?;
+            println!("key: {}", change.key);
+            println!("current: {}", change.current_value);
+            println!("next: {}", change.next_value);
+            println!("toml_path: {}", change.toml_path);
+            println!("dry_run: true");
+        }
+    }
+
+    Ok(())
+}
+
+struct PlannedConfigChange {
+    key: &'static str,
+    toml_path: &'static str,
+    current_value: String,
+    next_value: String,
+}
+
+fn plan_config_set(config: &Config, key: &str, value: &str) -> anyhow::Result<PlannedConfigChange> {
+    let spec = config_set_spec(key)
+        .ok_or_else(|| anyhow::anyhow!("config key '{key}' is not settable"))?;
+    validate_config_set_value(spec.key, value)?;
+    let current_value = config_value(config, spec.key)
+        .ok_or_else(|| anyhow::anyhow!("config key '{}' cannot be read", spec.key))?;
+
+    Ok(PlannedConfigChange {
+        key: spec.key,
+        toml_path: spec.toml_path,
+        current_value,
+        next_value: value.to_string(),
+    })
+}
+
+struct ConfigSetSpec {
+    key: &'static str,
+    toml_path: &'static str,
+    value_kind: ConfigValueKind,
+}
+
+#[derive(Clone, Copy)]
+enum ConfigValueKind {
+    Bool,
+    HttpUrl,
+    NonEmpty,
+    U64,
+    PositiveU32,
+    PositiveU64,
+    QuotaAction,
+}
+
+fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
+    let (key, toml_path, value_kind) = match key {
+        "listen_addr" => ("listen_addr", "listen_addr", ConfigValueKind::NonEmpty),
+        "public_base_url" => (
+            "public_base_url",
+            "public_base_url",
+            ConfigValueKind::HttpUrl,
+        ),
+        "timeout.request_secs" => (
+            "timeout.request_secs",
+            "timeout.request_secs",
+            ConfigValueKind::PositiveU64,
+        ),
+        "rate_limit.enabled" => (
+            "rate_limit.enabled",
+            "rate_limit.enabled",
+            ConfigValueKind::Bool,
+        ),
+        "rate_limit.requests_per_minute" => (
+            "rate_limit.requests_per_minute",
+            "rate_limit.requests_per_minute",
+            ConfigValueKind::PositiveU32,
+        ),
+        "quota.enabled" => ("quota.enabled", "quota.enabled", ConfigValueKind::Bool),
+        "quota.monthly_gb" => ("quota.monthly_gb", "quota.monthly_gb", ConfigValueKind::U64),
+        "quota.timezone" => (
+            "quota.timezone",
+            "quota.timezone",
+            ConfigValueKind::NonEmpty,
+        ),
+        "quota.on_exceeded" => (
+            "quota.on_exceeded",
+            "quota.on_exceeded",
+            ConfigValueKind::QuotaAction,
+        ),
+        _ => return None,
+    };
+
+    Some(ConfigSetSpec {
+        key,
+        toml_path,
+        value_kind,
+    })
+}
+
+fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
+    let spec = config_set_spec(key)
+        .ok_or_else(|| anyhow::anyhow!("config key '{key}' is not settable"))?;
+    match spec.value_kind {
+        ConfigValueKind::Bool => {
+            if !matches!(value, "true" | "false") {
+                anyhow::bail!("{key} expects true or false");
+            }
+        }
+        ConfigValueKind::HttpUrl => {
+            reqwest::Url::parse(value)
+                .map_err(|error| anyhow::anyhow!("{key} is invalid: {error}"))
+                .and_then(|url| match url.scheme() {
+                    "http" | "https" if url.host_str().is_some() => Ok(()),
+                    "http" | "https" => anyhow::bail!("{key} must include a host"),
+                    scheme => anyhow::bail!("{key} must use http or https, got {scheme}"),
+                })?;
+        }
+        ConfigValueKind::NonEmpty => {
+            if value.trim().is_empty() {
+                anyhow::bail!("{key} cannot be empty");
+            }
+        }
+        ConfigValueKind::PositiveU32 => {
+            let parsed = value.parse::<u32>()?;
+            if parsed == 0 {
+                anyhow::bail!("{key} must be greater than 0");
+            }
+        }
+        ConfigValueKind::U64 => {
+            value.parse::<u64>()?;
+        }
+        ConfigValueKind::PositiveU64 => {
+            let parsed = value.parse::<u64>()?;
+            if parsed == 0 {
+                anyhow::bail!("{key} must be greater than 0");
+            }
+        }
+        ConfigValueKind::QuotaAction => {
+            if !matches!(value, "stop_proxy" | "throttle") {
+                anyhow::bail!("{key} expects stop_proxy or throttle");
             }
         }
     }
@@ -892,6 +1048,29 @@ mod tests {
             .iter()
             .any(|(key, value)| *key == "upstreams.pypi_files"
                 && value == "https://files.pythonhosted.org"));
+    }
+
+    #[test]
+    fn plan_config_set_builds_dry_run_changes() {
+        let config = Config::default();
+        let change = plan_config_set(&config, "public_base_url", "https://mirror.example").unwrap();
+
+        assert_eq!(change.key, "public_base_url");
+        assert_eq!(change.toml_path, "public_base_url");
+        assert_eq!(change.current_value, "http://127.0.0.1:3000");
+        assert_eq!(change.next_value, "https://mirror.example");
+    }
+
+    #[test]
+    fn plan_config_set_validates_values() {
+        let config = Config::default();
+
+        assert!(plan_config_set(&config, "missing.key", "value").is_err());
+        assert!(plan_config_set(&config, "public_base_url", "file:///tmp").is_err());
+        assert!(plan_config_set(&config, "quota.enabled", "yes").is_err());
+        assert!(plan_config_set(&config, "quota.on_exceeded", "drop").is_err());
+        assert!(plan_config_set(&config, "timeout.request_secs", "0").is_err());
+        assert!(plan_config_set(&config, "quota.monthly_gb", "0").is_ok());
     }
 
     #[test]
