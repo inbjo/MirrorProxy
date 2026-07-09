@@ -104,6 +104,15 @@ pub struct TargetSource {
     pub capability: SourceMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceTemplate {
+    pub target_code: &'static str,
+    pub os_family: &'static str,
+    pub scope: SourceScope,
+    pub template: &'static str,
+    pub requires_sudo: bool,
+}
+
 pub const MIRROR_PROVIDERS: &[MirrorProvider] = &[
     MirrorProvider {
         code: "mirrorproxy",
@@ -441,6 +450,72 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
     },
 ];
 
+pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
+    SourceTemplate {
+        target_code: "npm",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "npm config set registry {repo_url}",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "pip",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "pip config set global.index-url {repo_url}",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "cargo",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "[source.crates-io]\nreplace-with = \"mirrorproxy\"\n\n[source.mirrorproxy]\nregistry = \"{repo_url}\"",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "go",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "go env -w GOPROXY={repo_url},direct",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "composer",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "composer config repo.packagist composer {repo_url}",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "docker",
+        os_family: "linux",
+        scope: SourceScope::System,
+        template: "Configure registry mirror in /etc/docker/daemon.json, then restart Docker. Mirror URL: {repo_url}",
+        requires_sudo: true,
+    },
+    SourceTemplate {
+        target_code: "apt",
+        os_family: "debian",
+        scope: SourceScope::System,
+        template: "Use {repo_url} as the base URL in /etc/apt/sources.list for the current distribution codename.",
+        requires_sudo: true,
+    },
+    SourceTemplate {
+        target_code: "dnf",
+        os_family: "fedora",
+        scope: SourceScope::System,
+        template: "Use {repo_url} as the baseurl or metalink replacement in /etc/yum.repos.d/*.repo.",
+        requires_sudo: true,
+    },
+    SourceTemplate {
+        target_code: "pacman",
+        os_family: "arch",
+        scope: SourceScope::System,
+        template: "Use Server = {repo_url}/archlinux/$repo/os/$arch in /etc/pacman.d/mirrorlist.",
+        requires_sudo: true,
+    },
+];
+
 pub fn list_targets(
     category: Option<SourceCategory>,
 ) -> impl Iterator<Item = &'static SourceTarget> {
@@ -459,6 +534,13 @@ pub fn sources_for_target(target_code: &str) -> Vec<&'static TargetSource> {
     TARGET_SOURCES
         .iter()
         .filter(move |source| source.target_code == target_code)
+        .collect()
+}
+
+pub fn templates_for_target(target_code: &str) -> Vec<&'static SourceTemplate> {
+    SOURCE_TEMPLATES
+        .iter()
+        .filter(move |template| template.target_code == target_code)
         .collect()
 }
 
@@ -503,5 +585,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(target_codes.contains(&("mirrorproxy", SourceMode::ProxyAdapter)));
+    }
+
+    #[test]
+    fn includes_source_templates_for_cli_generation() {
+        let npm_templates = templates_for_target("npm");
+        let cargo_templates = templates_for_target("cargo");
+
+        assert_eq!(
+            npm_templates[0].template,
+            "npm config set registry {repo_url}"
+        );
+        assert!(cargo_templates[0].template.contains("[source.crates-io]"));
     }
 }

@@ -571,6 +571,7 @@ struct SourceCatalogResponse {
     providers: Vec<MirrorProviderSummary>,
     targets: Vec<SourceTargetSummary>,
     sources: Vec<TargetSourceSummary>,
+    templates: Vec<SourceTemplateSummary>,
 }
 
 #[derive(Serialize)]
@@ -599,6 +600,15 @@ struct TargetSourceSummary {
     repo_url: &'static str,
     speed_url: Option<&'static str>,
     capability: &'static str,
+}
+
+#[derive(Serialize)]
+struct SourceTemplateSummary {
+    target_code: &'static str,
+    os_family: &'static str,
+    scope: &'static str,
+    template: &'static str,
+    requires_sudo: bool,
 }
 
 async fn source_catalog() -> impl IntoResponse {
@@ -637,6 +647,16 @@ async fn source_catalog() -> impl IntoResponse {
                 repo_url: source.repo_url,
                 speed_url: source.speed_url,
                 capability: source.capability.as_str(),
+            })
+            .collect(),
+        templates: catalog::SOURCE_TEMPLATES
+            .iter()
+            .map(|template| SourceTemplateSummary {
+                target_code: template.target_code,
+                os_family: template.os_family,
+                scope: template.scope.as_str(),
+                template: template.template,
+                requires_sudo: template.requires_sudo,
             })
             .collect(),
     })
@@ -980,6 +1000,15 @@ mod tests {
             .any(
                 |source| source["target_code"] == "npm" && source["provider_code"] == "mirrorproxy"
             ));
+        assert!(value["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|template| template["target_code"] == "cargo"
+                && template["template"]
+                    .as_str()
+                    .unwrap()
+                    .contains("[source.crates-io]")));
     }
 
     #[tokio::test]

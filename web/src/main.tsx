@@ -33,6 +33,7 @@ type SourceCatalog = {
   providers: MirrorProvider[]
   targets: SourceTarget[]
   sources: TargetSource[]
+  templates: SourceTemplate[]
 }
 type MirrorProvider = {
   code: string
@@ -55,6 +56,13 @@ type TargetSource = {
   repo_url: string
   speed_url: string | null
   capability: string
+}
+type SourceTemplate = {
+  target_code: string
+  os_family: string
+  scope: string
+  template: string
+  requires_sudo: boolean
 }
 
 const copy = async (value: string) => {
