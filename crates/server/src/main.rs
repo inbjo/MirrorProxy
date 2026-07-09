@@ -63,7 +63,11 @@ enum SourcesCommand {
     /// List mirror providers known to MirrorProxy.
     Mirrors,
     /// Show mirror mappings for one source target.
-    Get { target: String },
+    Get {
+        target: String,
+        #[arg(long)]
+        base_url: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -240,7 +244,7 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                 );
             }
         }
-        SourcesCommand::Get { target } => {
+        SourcesCommand::Get { target, base_url } => {
             let Some(target) = catalog::find_target(&target) else {
                 anyhow::bail!("unknown source target '{target}'");
             };
@@ -265,7 +269,7 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                 let repo_url = if source.provider_code == "mirrorproxy"
                     && source.capability == SourceMode::ProxyAdapter
                 {
-                    format!("${{MIRRORPROXY_BASE_URL}}{}", source.repo_url)
+                    mirrorproxy_source_url(base_url.as_deref(), source.repo_url)
                 } else {
                     source.repo_url.to_string()
                 };
@@ -282,6 +286,15 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn mirrorproxy_source_url(base_url: Option<&str>, source_path: &str) -> String {
+    let base_url = base_url.unwrap_or("${MIRRORPROXY_BASE_URL}");
+    format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        source_path.trim_start_matches('/')
+    )
 }
 
 fn init_tracing() {
@@ -661,6 +674,22 @@ mod tests {
             .iter()
             .any(|(key, value)| *key == "upstreams.pypi_files"
                 && value == "https://files.pythonhosted.org"));
+    }
+
+    #[test]
+    fn mirrorproxy_source_url_uses_placeholder_or_base_url() {
+        assert_eq!(
+            mirrorproxy_source_url(None, "/npm/"),
+            "${MIRRORPROXY_BASE_URL}/npm/"
+        );
+        assert_eq!(
+            mirrorproxy_source_url(Some("https://mirror.example/"), "/pypi/simple/"),
+            "https://mirror.example/pypi/simple/"
+        );
+        assert_eq!(
+            mirrorproxy_source_url(Some("http://127.0.0.1:3000"), "goproxy/"),
+            "http://127.0.0.1:3000/goproxy/"
+        );
     }
 
     #[tokio::test]
