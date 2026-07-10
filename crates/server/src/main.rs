@@ -5,7 +5,9 @@ mod static_assets;
 
 use std::{
     collections::VecDeque,
+    fs,
     net::SocketAddr,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -94,7 +96,7 @@ enum SourcesCommand {
 enum ConfigCommand {
     /// Print the full effective config or one config key.
     Get { key: Option<String> },
-    /// Preview changing one config key.
+    /// Change one config key in an explicit TOML config file.
     Set {
         key: String,
         value: String,
@@ -123,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Sources { command }) => return run_sources_command(command),
         Some(Command::Config { command }) => {
             let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
-            return run_config_command(command, &config);
+            return run_config_command(command, &config, cli.config.as_deref());
         }
         Some(Command::Serve) | None => {}
     }
@@ -144,7 +146,11 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_config_command(command: ConfigCommand, config: &Config) -> anyhow::Result<()> {
+fn run_config_command(
+    command: ConfigCommand,
+    config: &Config,
+    config_path: Option<&Path>,
+) -> anyhow::Result<()> {
     match command {
         ConfigCommand::Get { key } => {
             if let Some(key) = key {
@@ -162,20 +168,108 @@ fn run_config_command(command: ConfigCommand, config: &Config) -> anyhow::Result
             value,
             dry_run,
         } => {
-            if !dry_run {
-                anyhow::bail!(
-                    "config set currently supports preview only; pass --dry-run to print the planned change"
-                );
-            }
             let change = plan_config_set(config, &key, &value)?;
             println!("key: {}", change.key);
             println!("current: {}", change.current_value);
             println!("next: {}", change.next_value);
             println!("toml_path: {}", change.toml_path);
-            println!("dry_run: true");
+            if dry_run {
+                println!("dry_run: true");
+                return Ok(());
+            }
+
+            let config_path = config_path.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "config set requires --config <PATH>; refusing to create or overwrite an implicit config file"
+                )
+            })?;
+            let backup_path = persist_config_set(config_path, &change)?;
+            println!("config: {}", config_path.display());
+            println!("backup: {}", backup_path.display());
         }
     }
 
+    Ok(())
+}
+
+fn persist_config_set(path: &Path, change: &PlannedConfigChange) -> anyhow::Result<PathBuf> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("failed to read config file {}", path.display()))?;
+    let mut document: toml::Value = toml::from_str(&raw)
+        .with_context(|| format!("failed to parse config file {}", path.display()))?;
+    set_toml_value(&mut document, change.toml_path, &change.next_value)?;
+
+    let rendered =
+        toml::to_string_pretty(&document).context("failed to serialize updated config")?;
+    let updated: Config = toml::from_str(&rendered).context("updated config is invalid TOML")?;
+    updated.validate().context("updated config is invalid")?;
+
+    let backup_path = backup_path_for(path);
+    fs::copy(path, &backup_path)
+        .with_context(|| format!("failed to create config backup {}", backup_path.display()))?;
+
+    let temporary_path = path.with_extension(format!(
+        "{}.tmp",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("toml")
+    ));
+    fs::write(&temporary_path, rendered).with_context(|| {
+        format!(
+            "failed to write temporary config file {}",
+            temporary_path.display()
+        )
+    })?;
+    fs::rename(&temporary_path, path).with_context(|| {
+        format!(
+            "failed to replace config file {}; backup remains at {}",
+            path.display(),
+            backup_path.display()
+        )
+    })?;
+    Ok(backup_path)
+}
+
+fn backup_path_for(path: &Path) -> PathBuf {
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    match extension {
+        Some(extension) => path.with_extension(format!("{extension}.bak")),
+        None => path.with_extension("bak"),
+    }
+}
+
+fn set_toml_value(document: &mut toml::Value, key: &str, value: &str) -> anyhow::Result<()> {
+    let spec = config_set_spec(key)
+        .ok_or_else(|| anyhow::anyhow!("config key '{key}' is not settable"))?;
+    let parsed = match spec.value_kind {
+        ConfigValueKind::Bool => toml::Value::Boolean(value.parse()?),
+        ConfigValueKind::U64 | ConfigValueKind::PositiveU64 => toml::Value::Integer(value.parse()?),
+        ConfigValueKind::PositiveU32 => toml::Value::Integer(i64::from(value.parse::<u32>()?)),
+        ConfigValueKind::HttpUrl | ConfigValueKind::NonEmpty | ConfigValueKind::QuotaAction => {
+            toml::Value::String(value.to_string())
+        }
+    };
+
+    let segments: Vec<_> = spec.toml_path.split('.').collect();
+    let (last, parents) = segments
+        .split_last()
+        .expect("config keys always contain at least one segment");
+    let mut table = document
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("config root must be a TOML table"))?;
+    for parent in parents {
+        if !table.contains_key(*parent) {
+            table.insert(
+                (*parent).to_string(),
+                toml::Value::Table(toml::map::Map::new()),
+            );
+        }
+        table = table
+            .get_mut(*parent)
+            .and_then(toml::Value::as_table_mut)
+            .ok_or_else(|| anyhow::anyhow!("{} must be a TOML table", parent))?;
+    }
+    table.insert((*last).to_string(), parsed);
     Ok(())
 }
 
@@ -1071,6 +1165,38 @@ mod tests {
         assert!(plan_config_set(&config, "quota.on_exceeded", "drop").is_err());
         assert!(plan_config_set(&config, "timeout.request_secs", "0").is_err());
         assert!(plan_config_set(&config, "quota.monthly_gb", "0").is_ok());
+    }
+
+    #[test]
+    fn persist_config_set_updates_toml_and_keeps_backup() {
+        let directory =
+            std::env::temp_dir().join(format!("mirrorproxy-config-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let config_path = directory.join("config.toml");
+        let original = r#"public_base_url = "http://127.0.0.1:3000"
+
+[quota]
+enabled = false
+monthly_gb = 500
+timezone = "local"
+on_exceeded = "stop_proxy"
+"#;
+        fs::write(&config_path, original).unwrap();
+
+        let change = plan_config_set(
+            &Config::load(Some(&config_path)).unwrap(),
+            "public_base_url",
+            "https://mirror.example",
+        )
+        .unwrap();
+        let backup_path = persist_config_set(&config_path, &change).unwrap();
+
+        assert_eq!(fs::read_to_string(&backup_path).unwrap(), original);
+        let updated = Config::load(Some(&config_path)).unwrap();
+        assert_eq!(updated.public_base_url, "https://mirror.example");
+
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

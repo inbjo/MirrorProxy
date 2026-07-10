@@ -525,9 +525,9 @@ pub fn list_targets(
 }
 
 pub fn find_target(code_or_alias: &str) -> Option<&'static SourceTarget> {
-    SOURCE_TARGETS.iter().find(|target| {
-        target.code == code_or_alias || target.aliases.iter().any(|alias| *alias == code_or_alias)
-    })
+    SOURCE_TARGETS
+        .iter()
+        .find(|target| target.code == code_or_alias || target.aliases.contains(&code_or_alias))
 }
 
 pub fn sources_for_target(target_code: &str) -> Vec<&'static TargetSource> {

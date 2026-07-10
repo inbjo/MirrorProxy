@@ -145,7 +145,7 @@ impl Config {
         }
     }
 
-    fn validate(&self) -> anyhow::Result<()> {
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
         if self.public_base_url.is_empty() {
             anyhow::bail!("public_base_url cannot be empty");
         }

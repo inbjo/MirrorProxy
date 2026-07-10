@@ -148,6 +148,16 @@ MirrorProxy proxies PyPI Simple API HTML and rewrites files.pythonhosted.org lin
 
 ## Configuration
 
+Inspect or safely update an explicit TOML configuration file from the CLI. `set`
+creates a sibling `.bak` backup before atomically replacing the file; use
+`--dry-run` to inspect the change first.
+
+```bash
+mirrorproxy --config ./config.toml config get public_base_url
+mirrorproxy --config ./config.toml config set public_base_url https://mirror.example
+mirrorproxy --config ./config.toml config set quota.monthly_gb 100 --dry-run
+```
+
 Copy `config.example.toml` and adjust the public URL for your deployment:
 
 ```toml
