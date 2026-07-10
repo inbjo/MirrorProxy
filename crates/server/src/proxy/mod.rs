@@ -4,6 +4,7 @@ pub mod github;
 pub mod go;
 pub mod maven;
 pub mod npm;
+pub mod nuget;
 pub mod oci;
 pub mod pypi;
 pub mod rubygems;

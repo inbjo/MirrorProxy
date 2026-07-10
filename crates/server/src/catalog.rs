@@ -322,7 +322,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "NuGet",
         category: SourceCategory::Language,
         aliases: &["dotnet"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -382,6 +382,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "rubygems",
         provider_code: "mirrorproxy",
         repo_url: "/rubygems/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "nuget",
+        provider_code: "mirrorproxy",
+        repo_url: "/nuget/v3/index.json",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -512,6 +519,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         os_family: "any",
         scope: SourceScope::User,
         template: "---\n:sources:\n- {repo_url}",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "nuget",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<configuration>\n  <packageSources>\n    <clear />\n    <add key=\"mirrorproxy\" value=\"{repo_url}\" protocolVersion=\"3\" />\n  </packageSources>\n</configuration>",
         requires_sudo: false,
     },
     SourceTemplate {
