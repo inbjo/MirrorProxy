@@ -264,6 +264,24 @@ p {
 .adapter-toggles label { display: inline-flex; gap: 7px; align-items: center; padding: 7px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; font-size: 12px; }
 .upstream-fields { display: grid; gap: 9px; }.upstream-fields label { grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr); align-items: center; }.upstream-fields input { font-size: 12px; }
 
+.security-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 24px;
+  padding: 16px;
+  border: 1px dashed color-mix(in srgb, #d86654 46%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, #d86654 5%, var(--panel-strong));
+}
+
+.security-form > div { grid-column: 1 / -1; }
+.security-form h4 { display: inline-flex; gap: 7px; align-items: center; color: #ba493b; }.security-form p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.security-form label { display: grid; gap: 7px; color: var(--muted); font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; font-size: 11px; }
+.security-form input { width: 100%; min-height: 39px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; outline: none; color: var(--text); background: var(--panel-strong); font: inherit; }
+.security-form input:focus { border-color: #d86654; box-shadow: 0 0 0 3px color-mix(in srgb, #d86654 16%, transparent); }
+.danger-button { display: inline-flex; grid-column: 1 / -1; gap: 8px; align-items: center; justify-content: center; min-height: 39px; border: 1px solid #c05043; border-radius: 7px; color: #fff7f5; background: #bd4e40; cursor: pointer; font-weight: 700; }.danger-button:disabled { cursor: wait; opacity: 0.65; }
+
 @keyframes console-in { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
 
 .icon-button {
@@ -617,6 +635,7 @@ p {
   .console-head, .console-section-head { align-items: stretch; flex-direction: column; }
   .console-actions { flex-wrap: wrap; }
   .config-fields, .stats-columns { grid-template-columns: 1fr; }
+  .security-form { grid-template-columns: 1fr; }
   .login-card { align-items: stretch; }
 
   .command button {

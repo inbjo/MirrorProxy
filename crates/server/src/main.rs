@@ -1033,6 +1033,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/api/public-config", get(public_config))
         .route("/api/admin/login", post(admin_login))
         .route("/api/admin/logout", post(admin_logout))
+        .route("/api/admin/password", post(change_admin_password))
         .route(
             "/api/admin/config",
             get(admin_config).put(update_admin_config),
@@ -1470,6 +1471,62 @@ async fn admin_logout(headers: HeaderMap, State(state): State<AppState>) -> Resp
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => {
             tracing::error!(%error, "administrator logout query failed");
+            internal_error_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct AdminPasswordChangeRequest {
+    current_password: String,
+    new_password: String,
+}
+
+async fn change_admin_password(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<AdminPasswordChangeRequest>,
+) -> Response {
+    let Some(token) = bearer_token(&headers) else {
+        return unauthorized_response();
+    };
+    if request.new_password.len() < 12 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({ "error": "new password must contain at least 12 characters" }),
+            ),
+        )
+            .into_response();
+    }
+    if request.current_password == request.new_password {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "new password must be different from the current password" })),
+        )
+            .into_response();
+    }
+    match state.database.authorize(token).await {
+        Ok(true) => {}
+        Ok(false) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator authorization query failed");
+            return internal_error_response();
+        }
+    }
+    match state
+        .database
+        .change_admin_password("admin", &request.current_password, &request.new_password)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "current password is incorrect" })),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator password update failed");
             internal_error_response()
         }
     }
@@ -2298,6 +2355,45 @@ on_exceeded = "stop_proxy"
         assert_eq!(value["month"], month);
         assert_eq!(value["response_bytes"], 256);
         assert_eq!(value["targets"][0]["target_code"], "npm");
+    }
+
+    #[tokio::test]
+    async fn admin_password_change_revokes_current_session() {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let credentials = credentials.unwrap();
+        let state = AppState {
+            config: Arc::new(RwLock::new(Config::default())),
+            database: Arc::new(database.clone()),
+            client: Client::new(),
+            rate_limiter: Arc::new(RateLimiter::new()),
+        };
+        let session = database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {}", session.token).parse().unwrap(),
+        );
+
+        let response = change_admin_password(
+            headers,
+            State(state),
+            Json(AdminPasswordChangeRequest {
+                current_password: credentials.password,
+                new_password: "new-password-for-admin".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(!database.authorize(&session.token).await.unwrap());
+        assert!(database
+            .login("admin", "new-password-for-admin")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]

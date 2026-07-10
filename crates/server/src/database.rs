@@ -190,6 +190,48 @@ impl Database {
         Ok(())
     }
 
+    pub async fn change_admin_password(
+        &self,
+        username: &str,
+        current_password: &str,
+        next_password: &str,
+    ) -> anyhow::Result<bool> {
+        let row = sqlx::query("SELECT password_hash FROM admin_users WHERE username = ?")
+            .bind(username)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let password_hash: String = row.try_get("password_hash")?;
+        if !verify_password(current_password, &password_hash) {
+            return Ok(false);
+        }
+
+        let now = unix_timestamp();
+        let next_hash = hash_password(next_password)?;
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE username = ?")
+            .bind(next_hash)
+            .bind(now)
+            .bind(username)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("DELETE FROM admin_sessions WHERE username = ?")
+            .bind(username)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'change_admin_password', 'all sessions revoked')",
+        )
+        .bind(now)
+        .bind(username)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
     pub async fn load_or_seed_runtime_config(&self, fallback: Config) -> anyhow::Result<Config> {
         let row = sqlx::query("SELECT value FROM settings WHERE key = 'runtime_config'")
             .fetch_optional(&self.pool)
@@ -453,6 +495,31 @@ mod tests {
         assert!(database.authorize(&session.token).await.unwrap());
         database.logout(&session.token).await.unwrap();
         assert!(!database.authorize(&session.token).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn changing_password_revokes_existing_sessions() {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let credentials = credentials.unwrap();
+        let session = database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!database
+            .change_admin_password("admin", "wrong", "next-password-123")
+            .await
+            .unwrap());
+        assert!(database
+            .change_admin_password("admin", &credentials.password, "next-password-123")
+            .await
+            .unwrap());
+        assert!(!database.authorize(&session.token).await.unwrap());
+        assert!(database
+            .login("admin", "next-password-123")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]

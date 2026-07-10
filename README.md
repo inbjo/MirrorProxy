@@ -235,6 +235,10 @@ and cannot be changed through this API.
 remaining bytes, per-day/per-target traffic points, and the ten busiest proxy
 targets. It requires the same administrator Bearer token.
 
+`POST /api/admin/password` accepts `current_password` and a new password of at
+least 12 characters. A successful change revokes every administrator session,
+including the one that made the request.
+
 Optional global rate limiting can be enabled with:
 
 ```toml
