@@ -1,5 +1,6 @@
 mod catalog;
 mod config;
+mod database;
 mod proxy;
 mod static_assets;
 
@@ -15,15 +16,16 @@ use std::{
 use anyhow::Context;
 use axum::{
     extract::{Request, State},
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use catalog::{SourceCategory, SourceMode};
 use clap::{Parser, Subcommand};
 use config::Config;
+use database::Database;
 use proxy::{composer, cratesio, github, go, npm, oci, pypi, ProxyError};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -120,6 +122,7 @@ enum ConfigCommand {
 #[derive(Clone)]
 pub struct AppState {
     config: Arc<Config>,
+    database: Arc<Database>,
     client: Client,
     rate_limiter: Option<Arc<RateLimiter>>,
 }
@@ -148,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .with_context(|| format!("invalid listen_addr: {}", config.listen_addr))?;
 
-    let app = build_router(config)?;
+    let app = build_router(config).await?;
     tracing::info!(%addr, "starting MirrorProxy");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -326,6 +329,7 @@ enum ConfigValueKind {
 
 fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
     let (key, toml_path, value_kind) = match key {
+        "database_path" => ("database_path", "database_path", ConfigValueKind::NonEmpty),
         "listen_addr" => ("listen_addr", "listen_addr", ConfigValueKind::NonEmpty),
         "public_base_url" => (
             "public_base_url",
@@ -419,6 +423,7 @@ fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
 
 fn config_value(config: &Config, key: &str) -> Option<String> {
     match key {
+        "database_path" => Some(config.database_path.clone()),
         "listen_addr" => Some(config.listen_addr.clone()),
         "public_base_url" => Some(config.public_base_url.clone()),
         "enabled_proxies" => Some(config.enabled_proxies.join(",")),
@@ -448,6 +453,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
 
 fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
     [
+        "database_path",
         "listen_addr",
         "public_base_url",
         "enabled_proxies",
@@ -979,7 +985,7 @@ fn init_tracing() {
         .init();
 }
 
-fn build_router(config: Config) -> anyhow::Result<Router> {
+async fn build_router(config: Config) -> anyhow::Result<Router> {
     let request_timeout = Duration::from_secs(config.timeout.request_secs);
     let client = Client::builder()
         .user_agent(format!("MirrorProxy/{}", env!("CARGO_PKG_VERSION")))
@@ -987,12 +993,27 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
         .timeout(request_timeout)
         .build()?;
 
+    let database_path = if cfg!(test) {
+        ":memory:"
+    } else {
+        &config.database_path
+    };
+    let (database, initial_admin) = Database::open(database_path).await?;
+    if let Some(credentials) = initial_admin {
+        tracing::warn!(
+            username = credentials.username,
+            password = credentials.password,
+            "created initial MirrorProxy administrator; save this password now because it is not shown again"
+        );
+    }
+
     let state = AppState {
         rate_limiter: config
             .rate_limit
             .enabled
             .then(|| Arc::new(RateLimiter::new(config.rate_limit.requests_per_minute))),
         config: Arc::new(config),
+        database: Arc::new(database),
         client,
     };
 
@@ -1001,6 +1022,9 @@ fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/version", get(version))
         .route("/api/config", get(public_config))
         .route("/api/public-config", get(public_config))
+        .route("/api/admin/login", post(admin_login))
+        .route("/api/admin/logout", post(admin_logout))
+        .route("/api/admin/config", get(admin_config))
         .route("/api/sources", get(source_catalog))
         .route("/composer", get(composer::root))
         .route("/composer/", get(composer::root))
@@ -1179,6 +1203,104 @@ async fn public_config(State(state): State<AppState>) -> impl IntoResponse {
     })
 }
 
+#[derive(Deserialize)]
+struct AdminLoginRequest {
+    #[serde(default = "default_admin_username")]
+    username: String,
+    password: String,
+}
+
+fn default_admin_username() -> String {
+    "admin".to_string()
+}
+
+#[derive(Serialize)]
+struct AdminLoginResponse {
+    token: String,
+    expires_at: i64,
+}
+
+async fn admin_login(
+    State(state): State<AppState>,
+    Json(request): Json<AdminLoginRequest>,
+) -> Response {
+    if request.password.is_empty() {
+        return unauthorized_response();
+    }
+    match state
+        .database
+        .login(&request.username, &request.password)
+        .await
+    {
+        Ok(Some(session)) => Json(AdminLoginResponse {
+            token: session.token,
+            expires_at: session.expires_at,
+        })
+        .into_response(),
+        Ok(None) => unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator login query failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn admin_logout(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let Some(token) = bearer_token(&headers) else {
+        return unauthorized_response();
+    };
+    match state.database.logout(token).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator logout query failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn admin_config(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => Json(state.config.as_ref()).into_response(),
+        Ok(false) => unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator authorization query failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn is_admin_authorized(headers: &HeaderMap, state: &AppState) -> anyhow::Result<bool> {
+    let Some(token) = bearer_token(headers) else {
+        return Ok(false);
+    };
+    state.database.authorize(token).await
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+        .filter(|token| !token.is_empty())
+}
+
+fn unauthorized_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "administrator authentication required" })),
+    )
+        .into_response()
+}
+
+fn internal_error_response() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": "internal server error" })),
+    )
+        .into_response()
+}
+
 #[derive(Serialize)]
 struct SourceCatalogResponse {
     providers: Vec<MirrorProviderSummary>,
@@ -1339,6 +1461,10 @@ mod tests {
     fn config_value_reads_effective_config_keys() {
         let config = Config::default();
 
+        assert_eq!(
+            config_value(&config, "database_path").unwrap(),
+            "mirrorproxy.sqlite3"
+        );
         assert_eq!(
             config_value(&config, "public_base_url").unwrap(),
             "http://127.0.0.1:3000"
@@ -1615,7 +1741,7 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn healthz_returns_ok() {
-        let app = build_router(Config::default()).unwrap();
+        let app = build_router(Config::default()).await.unwrap();
         let response = app
             .oneshot(
                 Request::builder()
@@ -1640,6 +1766,7 @@ on_exceeded = "stop_proxy"
             },
             ..Config::default()
         })
+        .await
         .unwrap();
 
         let first = app
@@ -1675,7 +1802,7 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn exposes_public_config() {
-        let app = build_router(Config::default()).unwrap();
+        let app = build_router(Config::default()).await.unwrap();
         let response = app
             .oneshot(
                 Request::builder()
@@ -1721,6 +1848,22 @@ on_exceeded = "stop_proxy"
     }
 
     #[tokio::test]
+    async fn admin_config_requires_authentication() {
+        let app = build_router(Config::default()).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn quota_guard_blocks_proxy_paths_only() {
         let app = build_router(Config {
             quota: crate::config::QuotaConfig {
@@ -1730,6 +1873,7 @@ on_exceeded = "stop_proxy"
             },
             ..Config::default()
         })
+        .await
         .unwrap();
 
         let health = app
@@ -1762,7 +1906,7 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn exposes_source_catalog() {
-        let app = build_router(Config::default()).unwrap();
+        let app = build_router(Config::default()).await.unwrap();
         let response = app
             .oneshot(
                 Request::builder()
@@ -1807,7 +1951,7 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn oci_root_returns_distribution_ping() {
-        let app = build_router(Config::default()).unwrap();
+        let app = build_router(Config::default()).await.unwrap();
         let response = app
             .oneshot(Request::builder().uri("/v2/").body(Body::empty()).unwrap())
             .await
@@ -1820,7 +1964,7 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn go_root_returns_proxy_info() {
-        let app = build_router(Config::default()).unwrap();
+        let app = build_router(Config::default()).await.unwrap();
         let response = app
             .oneshot(
                 Request::builder()
@@ -1838,7 +1982,7 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn crates_index_config_points_to_local_downloads() {
-        let app = build_router(Config::default()).unwrap();
+        let app = build_router(Config::default()).await.unwrap();
         let response = app
             .oneshot(
                 Request::builder()
@@ -1864,7 +2008,7 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn pypi_file_path_validation_rejects_traversal() {
-        let app = build_router(Config::default()).unwrap();
+        let app = build_router(Config::default()).await.unwrap();
         let response = app
             .oneshot(
                 Request::builder()
@@ -1880,7 +2024,7 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn serves_embedded_index() {
-        let app = build_router(Config::default()).unwrap();
+        let app = build_router(Config::default()).await.unwrap();
         let response = app
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await

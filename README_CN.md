@@ -204,6 +204,7 @@ pypi_files = "https://files.pythonhosted.org"
 
 ```bash
 MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
+MIRRORPROXY_DB=/var/lib/mirrorproxy/mirrorproxy.sqlite3
 MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
 MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,crates,pypi
@@ -213,6 +214,11 @@ MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
 ```
 
 MirrorProxy 会在启动时校验 `public_base_url`、所有上游 URL、启用的代理名称和超时配置。配置非法会快速失败，并提示具体字段。
+
+首次启动时，MirrorProxy 会创建 SQLite 数据库，并在本机启动日志中仅输出一次
+`admin` 账号的随机密码。使用它调用 `POST /api/admin/login`，再将返回 token 作为
+`Authorization: Bearer <token>` 访问 `GET /api/admin/config` 等受保护接口。数据库仅
+保存 Argon2 密码哈希，请妥善保护启动日志。
 
 可选全局限流配置：
 

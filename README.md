@@ -207,6 +207,7 @@ Common environment overrides:
 
 ```bash
 MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
+MIRRORPROXY_DB=/var/lib/mirrorproxy/mirrorproxy.sqlite3
 MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
 MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,crates,pypi
@@ -216,6 +217,12 @@ MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
 ```
 
 MirrorProxy validates `public_base_url`, all upstream URLs, enabled proxy names, and timeout values during startup. Invalid configuration fails fast with a field-specific error.
+
+On the first startup, MirrorProxy creates its SQLite database and prints a one-time
+random password for the `admin` account in the local startup log. Use it with
+`POST /api/admin/login`, then send the returned token as `Authorization: Bearer
+<token>` to protected endpoints such as `GET /api/admin/config`. The password is
+stored only as an Argon2 hash; keep the startup output private.
 
 Optional global rate limiting can be enabled with:
 

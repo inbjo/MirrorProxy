@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_database_path")]
+    pub database_path: String,
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
     #[serde(default = "default_public_base_url")]
@@ -94,6 +96,9 @@ impl Config {
     }
 
     fn apply_env_overrides(&mut self) {
+        if let Ok(value) = std::env::var("MIRRORPROXY_DB") {
+            self.database_path = value;
+        }
         if let Ok(value) = std::env::var("MIRRORPROXY_LISTEN_ADDR") {
             self.listen_addr = value;
         }
@@ -149,6 +154,9 @@ impl Config {
         if self.public_base_url.is_empty() {
             anyhow::bail!("public_base_url cannot be empty");
         }
+        if self.database_path.trim().is_empty() {
+            anyhow::bail!("database_path cannot be empty");
+        }
         validate_http_url("public_base_url", &self.public_base_url)?;
         if self.timeout.request_secs == 0 {
             anyhow::bail!("timeout.request_secs must be greater than 0");
@@ -201,6 +209,7 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            database_path: default_database_path(),
             listen_addr: default_listen_addr(),
             public_base_url: default_public_base_url(),
             enabled_proxies: default_enabled_proxies(),
@@ -262,6 +271,10 @@ impl Default for QuotaConfig {
 
 fn default_listen_addr() -> String {
     "127.0.0.1:3000".to_string()
+}
+
+fn default_database_path() -> String {
+    "mirrorproxy.sqlite3".to_string()
 }
 
 fn default_public_base_url() -> String {
