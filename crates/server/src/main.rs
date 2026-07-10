@@ -84,9 +84,12 @@ enum SourcesCommand {
         base_url: Option<String>,
         #[arg(long, default_value = "user")]
         scope: String,
-        /// Override the home directory used to locate user-level configuration files.
+        /// Override the root used to locate scoped configuration files.
         #[arg(long)]
         config_root: Option<PathBuf>,
+        /// Distribution codename required for APT source generation, for example jammy or bookworm.
+        #[arg(long)]
+        distribution: Option<String>,
         /// Replace a non-empty target configuration file after creating a rollback record.
         #[arg(long)]
         force: bool,
@@ -98,7 +101,7 @@ enum SourcesCommand {
         target: String,
         #[arg(long, default_value = "user")]
         scope: String,
-        /// Override the home directory used to locate user-level configuration files.
+        /// Override the root used to locate scoped configuration files.
         #[arg(long)]
         config_root: Option<PathBuf>,
         /// Restore even when the managed file was changed after `sources set`.
@@ -601,22 +604,35 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
             base_url,
             scope,
             config_root,
+            distribution,
             force,
             dry_run,
         } => {
             let command = plan_source_set_command(&target, &mirror, base_url.as_deref())?;
-            validate_user_scope(&scope)?;
+            let scope = parse_source_scope(&scope)?;
             println!("target: {}", command.target_code);
             println!("mirror: {}", command.provider_code);
-            println!("scope: {scope}");
+            println!(
+                "scope: {}",
+                match scope {
+                    CliSourceScope::User => "user",
+                    CliSourceScope::System => "system",
+                }
+            );
             println!("repository: {}", command.repo_url);
             if dry_run {
                 println!("dry_run: true");
                 println!("command:");
                 print_source_command(command.provider_code, &command.command);
             } else {
-                let config_root = source_config_root(config_root)?;
-                let applied = apply_source_set(&command, &config_root, force)?;
+                let config_root = source_config_root(scope, config_root)?;
+                let applied = apply_source_set(
+                    &command,
+                    scope,
+                    &config_root,
+                    distribution.as_deref(),
+                    force,
+                )?;
                 println!("config: {}", applied.config_path.display());
                 println!("rollback: {}", applied.rollback_path.display());
             }
@@ -629,16 +645,22 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
             dry_run,
         } => {
             let command = plan_source_reset_command(&target)?;
-            validate_user_scope(&scope)?;
+            let scope = parse_source_scope(&scope)?;
             println!("target: {}", command.target_code);
-            println!("scope: {scope}");
+            println!(
+                "scope: {}",
+                match scope {
+                    CliSourceScope::User => "user",
+                    CliSourceScope::System => "system",
+                }
+            );
             if dry_run {
                 println!("dry_run: true");
                 println!("command:");
                 print_source_command("default", &command.command);
             } else {
-                let config_root = source_config_root(config_root)?;
-                let restored = apply_source_reset(command.target_code, &config_root, force)?;
+                let config_root = source_config_root(scope, config_root)?;
+                let restored = apply_source_reset(command.target_code, scope, &config_root, force)?;
                 println!("config: {}", restored.display());
                 println!("restored: true");
             }
@@ -673,34 +695,46 @@ struct AppliedSource {
     rollback_path: PathBuf,
 }
 
-fn validate_user_scope(scope: &str) -> anyhow::Result<()> {
+#[derive(Clone, Copy)]
+enum CliSourceScope {
+    User,
+    System,
+}
+
+fn parse_source_scope(scope: &str) -> anyhow::Result<CliSourceScope> {
     match scope {
-        "user" => Ok(()),
-        "system" => anyhow::bail!(
-            "system scope is not implemented yet; use --scope user or configure the system package manager manually"
-        ),
+        "user" => Ok(CliSourceScope::User),
+        "system" => Ok(CliSourceScope::System),
         other => anyhow::bail!("unknown scope '{other}', expected user or system"),
     }
 }
 
-fn source_config_root(config_root: Option<PathBuf>) -> anyhow::Result<PathBuf> {
-    config_root
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .ok_or_else(|| {
-            anyhow::anyhow!("cannot determine home directory; pass --config-root <PATH>")
-        })
+fn source_config_root(
+    scope: CliSourceScope,
+    config_root: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    match scope {
+        CliSourceScope::User => config_root
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+            .ok_or_else(|| {
+                anyhow::anyhow!("cannot determine home directory; pass --config-root <PATH>")
+            }),
+        CliSourceScope::System => Ok(config_root.unwrap_or_else(|| PathBuf::from("/"))),
+    }
 }
 
 fn apply_source_set(
     command: &PlannedSourceCommand,
+    scope: CliSourceScope,
     config_root: &Path,
+    distribution: Option<&str>,
     force: bool,
 ) -> anyhow::Result<AppliedSource> {
     if command.repo_url.contains("${MIRRORPROXY_BASE_URL}") {
         anyhow::bail!("setting the MirrorProxy provider requires --base-url <http://host[:port]>");
     }
-    let config_path = source_config_path(command.target_code, config_root)?;
-    let rollback_path = source_rollback_path(command.target_code, config_root);
+    let config_path = source_config_path(command.target_code, scope, config_root)?;
+    let rollback_path = source_rollback_path(command.target_code, scope, config_root);
     if rollback_path.exists() {
         anyhow::bail!(
             "a managed {} source already exists; run `mirrorproxy sources reset {}` before setting it again",
@@ -721,7 +755,8 @@ fn apply_source_set(
         );
     }
 
-    let expected_content = source_config_content(command.target_code, &command.repo_url)?;
+    let expected_content =
+        source_config_content(command.target_code, scope, &command.repo_url, distribution)?;
     write_atomic(&config_path, &expected_content)?;
     let rollback = SourceRollback {
         target_code: command.target_code.to_string(),
@@ -744,10 +779,11 @@ fn apply_source_set(
 
 fn apply_source_reset(
     target_code: &str,
+    scope: CliSourceScope,
     config_root: &Path,
     force: bool,
 ) -> anyhow::Result<PathBuf> {
-    let rollback_path = source_rollback_path(target_code, config_root);
+    let rollback_path = source_rollback_path(target_code, scope, config_root);
     let raw = fs::read_to_string(&rollback_path).with_context(|| {
         format!(
             "no rollback record for {target_code}; {} has not been changed by MirrorProxy",
@@ -777,41 +813,74 @@ fn apply_source_reset(
     Ok(rollback.config_path)
 }
 
-fn source_config_path(target_code: &str, config_root: &Path) -> anyhow::Result<PathBuf> {
-    let relative_path = match target_code {
-        "npm" => ".npmrc",
-        "pip" => ".config/pip/pip.conf",
-        "cargo" => ".cargo/config.toml",
-        "go" => ".config/go/env",
-        "composer" => ".config/composer/config.json",
-        other => anyhow::bail!(
-            "{} does not yet support safe user-scope configuration writes",
-            other
-        ),
+fn source_config_path(
+    target_code: &str,
+    scope: CliSourceScope,
+    config_root: &Path,
+) -> anyhow::Result<PathBuf> {
+    let relative_path = match scope {
+        CliSourceScope::User => match target_code {
+            "npm" => ".npmrc",
+            "pip" => ".config/pip/pip.conf",
+            "cargo" => ".cargo/config.toml",
+            "go" => ".config/go/env",
+            "composer" => ".config/composer/config.json",
+            other => anyhow::bail!("{other} does not support safe user-scope configuration writes"),
+        },
+        CliSourceScope::System => match target_code {
+            "apt" => "etc/apt/sources.list.d/mirrorproxy.list",
+            "dnf" => "etc/yum.repos.d/mirrorproxy.repo",
+            "pacman" => "etc/pacman.d/mirrorproxy",
+            other => {
+                anyhow::bail!("{other} does not support safe system-scope configuration writes")
+            }
+        },
     };
     Ok(config_root.join(relative_path))
 }
 
-fn source_rollback_path(target_code: &str, config_root: &Path) -> PathBuf {
+fn source_rollback_path(target_code: &str, scope: CliSourceScope, config_root: &Path) -> PathBuf {
+    let state_dir = match scope {
+        CliSourceScope::User => ".local/state/mirrorproxy/sources",
+        CliSourceScope::System => "var/lib/mirrorproxy/sources",
+    };
     config_root
-        .join(".local/state/mirrorproxy/sources")
+        .join(state_dir)
         .join(format!("{target_code}.json"))
 }
 
-fn source_config_content(target_code: &str, repo_url: &str) -> anyhow::Result<String> {
-    match target_code {
-        "npm" => Ok(format!("registry={repo_url}\n")),
-        "pip" => Ok(format!("[global]\nindex-url = {repo_url}\n")),
-        "cargo" => source_config_command("cargo", repo_url)
-            .map(|content| format!("{content}\n"))
-            .ok_or_else(|| anyhow::anyhow!("missing Cargo configuration template")),
-        "go" => Ok(format!("GOPROXY={repo_url},direct\n")),
-        "composer" => Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "repositories": {
-                "packagist": { "type": "composer", "url": repo_url }
+fn source_config_content(
+    target_code: &str,
+    scope: CliSourceScope,
+    repo_url: &str,
+    distribution: Option<&str>,
+) -> anyhow::Result<String> {
+    match scope {
+        CliSourceScope::User => match target_code {
+            "npm" => Ok(format!("registry={repo_url}\n")),
+            "pip" => Ok(format!("[global]\nindex-url = {repo_url}\n")),
+            "cargo" => source_config_command("cargo", repo_url)
+                .map(|content| format!("{content}\n"))
+                .ok_or_else(|| anyhow::anyhow!("missing Cargo configuration template")),
+            "go" => Ok(format!("GOPROXY={repo_url},direct\n")),
+            "composer" => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                "repositories": {
+                    "packagist": { "type": "composer", "url": repo_url }
+                }
+            }))? + "\n"),
+            other => anyhow::bail!("no user-scope configuration writer for {other}"),
+        },
+        CliSourceScope::System => match target_code {
+            "apt" => {
+                let distribution = distribution.filter(|value| !value.trim().is_empty()).ok_or_else(|| {
+                    anyhow::anyhow!("APT system scope requires --distribution <codename>, for example jammy or bookworm")
+                })?;
+                Ok(format!("# Managed by MirrorProxy\ndeb {}/ubuntu/ {} main restricted universe multiverse\n", repo_url.trim_end_matches('/'), distribution))
             }
-        }))? + "\n"),
-        other => anyhow::bail!("no user-scope configuration writer for {other}"),
+            "dnf" => Ok(format!("# Managed by MirrorProxy\n[mirrorproxy]\nname=MirrorProxy configured mirror\nbaseurl={}/fedora/releases/$releasever/Everything/$basearch/os/\nenabled=1\ngpgcheck=1\n", repo_url.trim_end_matches('/'))),
+            "pacman" => Ok(format!("# Managed by MirrorProxy\nServer = {}/archlinux/$repo/os/$arch\n", repo_url.trim_end_matches('/'))),
+            other => anyhow::bail!("no system-scope configuration writer for {other}"),
+        },
     }
 }
 
@@ -937,6 +1006,10 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         "composer" => Some("composer config --unset repos.packagist".to_string()),
         "docker" => Some(
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
+                .to_string(),
+        ),
+        "apt" | "dnf" | "pacman" => Some(
+            "Remove the MirrorProxy-managed system source file and restore the rollback record"
                 .to_string(),
         ),
         _ => None,
@@ -2070,14 +2143,16 @@ on_exceeded = "stop_proxy"
                 repo_url: format!("https://mirror.example/{target_code}/"),
                 command: String::new(),
             };
-            let applied = apply_source_set(&command, &directory, false).unwrap();
+            let applied =
+                apply_source_set(&command, CliSourceScope::User, &directory, None, false).unwrap();
             assert!(applied.config_path.is_file());
             assert!(applied.rollback_path.is_file());
             assert!(fs::read_to_string(&applied.config_path)
                 .unwrap()
                 .contains("mirror.example"));
 
-            let restored = apply_source_reset(target_code, &directory, false).unwrap();
+            let restored =
+                apply_source_reset(target_code, CliSourceScope::User, &directory, false).unwrap();
             assert_eq!(restored, applied.config_path);
             assert!(!restored.exists());
             assert!(!applied.rollback_path.exists());
@@ -2090,9 +2165,9 @@ on_exceeded = "stop_proxy"
             repo_url: "https://mirror.example/npm/".to_string(),
             command: String::new(),
         };
-        assert!(apply_source_set(&npm, &directory, false).is_err());
-        let applied = apply_source_set(&npm, &directory, true).unwrap();
-        apply_source_reset("npm", &directory, false).unwrap();
+        assert!(apply_source_set(&npm, CliSourceScope::User, &directory, None, false).is_err());
+        let applied = apply_source_set(&npm, CliSourceScope::User, &directory, None, true).unwrap();
+        apply_source_reset("npm", CliSourceScope::User, &directory, false).unwrap();
         assert_eq!(
             fs::read_to_string(applied.config_path).unwrap(),
             "registry=https://user.example/\n"
@@ -2115,8 +2190,47 @@ on_exceeded = "stop_proxy"
             command: String::new(),
         };
 
-        assert!(apply_source_set(&command, &directory, false).is_err());
+        assert!(apply_source_set(&command, CliSourceScope::User, &directory, None, false).is_err());
         assert!(!directory.exists());
+    }
+
+    #[test]
+    fn system_source_set_and_reset_use_dedicated_managed_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrorproxy-system-sources-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+
+        let apt = PlannedSourceCommand {
+            target_code: "apt",
+            provider_code: "tuna",
+            repo_url: "https://mirrors.tuna.tsinghua.edu.cn".to_string(),
+            command: String::new(),
+        };
+        assert!(apply_source_set(&apt, CliSourceScope::System, &directory, None, false).is_err());
+        let applied = apply_source_set(
+            &apt,
+            CliSourceScope::System,
+            &directory,
+            Some("jammy"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            applied.config_path,
+            directory.join("etc/apt/sources.list.d/mirrorproxy.list")
+        );
+        assert!(fs::read_to_string(&applied.config_path)
+            .unwrap()
+            .contains("jammy"));
+        assert!(applied
+            .rollback_path
+            .starts_with(directory.join("var/lib/mirrorproxy/sources")));
+        apply_source_reset("apt", CliSourceScope::System, &directory, false).unwrap();
+        assert!(!applied.config_path.exists());
+
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -2132,11 +2246,12 @@ on_exceeded = "stop_proxy"
             repo_url: "https://mirror.example/npm/".to_string(),
             command: String::new(),
         };
-        let applied = apply_source_set(&command, &directory, false).unwrap();
+        let applied =
+            apply_source_set(&command, CliSourceScope::User, &directory, None, false).unwrap();
         fs::write(&applied.config_path, "registry=https://changed.example/\n").unwrap();
 
-        assert!(apply_source_reset("npm", &directory, false).is_err());
-        apply_source_reset("npm", &directory, true).unwrap();
+        assert!(apply_source_reset("npm", CliSourceScope::User, &directory, false).is_err());
+        apply_source_reset("npm", CliSourceScope::User, &directory, true).unwrap();
         assert!(!applied.config_path.exists());
 
         fs::remove_dir_all(directory).unwrap();

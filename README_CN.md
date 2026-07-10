@@ -171,9 +171,17 @@ mirrorproxy sources set cargo --mirror mirrorproxy --base-url http://127.0.0.1:3
 mirrorproxy sources reset npm
 ```
 
-自动化或测试可使用 `--config-root /tmp/mirrorproxy-home` 指定隔离的主目录。
-本轮暂不直接写入系统级包管理器文件和 Docker daemon 配置；目录中仍会展示对应的
-配置指引。
+自动化或测试可使用 `--config-root /tmp/mirrorproxy-home` 指定隔离的主目录。APT、
+DNF/YUM、pacman 额外支持显式的 `--scope system`：MirrorProxy 只会创建自身专用的
+托管文件，并在 `/var/lib/mirrorproxy/sources/`（或指定 root）保存 rollback 记录。APT
+必须提供发行版代号；系统级写入通常需要 root 权限。
+
+```bash
+mirrorproxy sources set apt --mirror tuna --scope system --distribution jammy
+mirrorproxy sources reset apt --scope system
+```
+
+Docker daemon 配置仍只生成指引，待实现可安全合并 JSON 的写入器后再支持实际写入。
 
 复制 `config.example.toml` 并修改公开访问地址：
 

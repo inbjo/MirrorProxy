@@ -431,7 +431,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         close: '关闭控制台', badLogin: '登录失败，请检查管理员密码。', saveError: '配置保存失败。', restart: '以下字段将在重启后生效：',
         quotaStopped: '代理已因月流量上限停止', noData: '本月尚无代理流量。', passwordHint: '首次启动时密码只会出现在本机日志中。',
         security: '安全', currentPassword: '当前密码', newPassword: '新密码（至少 12 位）', changePassword: '修改密码并退出所有会话', passwordChanged: '密码已修改，请使用新密码重新登录。', passwordError: '密码修改失败，请确认当前密码。', passwordConfirm: '修改密码将使所有管理员会话失效，确定继续吗？',
-        generator: 'CLI 改源命令', target: '目标', mirror: '镜像站', scope: '作用域', ready: '可直接执行', guidance: '当前仅生成配置指引', copyCommand: '复制命令', copiedCommand: '已复制',
+        generator: 'CLI 改源命令', target: '目标', mirror: '镜像站', scope: '作用域', distribution: '发行版代号', ready: '可直接执行', guidance: '当前仅生成配置指引', copyCommand: '复制命令', copiedCommand: '已复制',
       }
     : {
         title: 'Operations console', login: 'Administrator sign in', password: 'Administrator password', signIn: 'Sign in', signOut: 'Sign out',
@@ -442,7 +442,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         close: 'Close console', badLogin: 'Sign in failed. Check the administrator password.', saveError: 'Configuration save failed.', restart: 'These fields apply after restart:',
         quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is printed only in the local startup log.',
         security: 'Security', currentPassword: 'Current password', newPassword: 'New password (12 characters minimum)', changePassword: 'Change password and revoke all sessions', passwordChanged: 'Password changed. Sign in again with the new password.', passwordError: 'Password update failed. Check the current password.', passwordConfirm: 'This revokes every administrator session. Continue?',
-        generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied',
+        generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', distribution: 'Distribution codename', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied',
       }
   const [token, setToken] = React.useState<string | null>(() => sessionStorage.getItem('mirrorproxy.admin-token'))
   const [password, setPassword] = React.useState('')
@@ -563,13 +563,14 @@ function SourceCommandGenerator({ catalog, baseUrl, text }: { catalog: SourceCat
   const [targetCode, setTargetCode] = React.useState('npm')
   const [mirrorCode, setMirrorCode] = React.useState('mirrorproxy')
   const [scope, setScope] = React.useState('user')
+  const [distribution, setDistribution] = React.useState('jammy')
   const [copied, setCopied] = React.useState(false)
   const target = catalog.targets.find((item) => item.code === targetCode) ?? catalog.targets[0]
   const sources = catalog.sources.filter((source) => source.target_code === target?.code)
   const selected = sources.find((source) => source.provider_code === mirrorCode) ?? sources[0]
   const activeMirror = selected?.provider_code ?? mirrorCode
   const command = selected
-    ? `mirrorproxy sources set ${target.code} --mirror ${activeMirror}${activeMirror === 'mirrorproxy' ? ` --base-url ${baseUrl.replace(/\/$/, '')}` : ''} --scope ${scope}`
+    ? `mirrorproxy sources set ${target.code} --mirror ${activeMirror}${activeMirror === 'mirrorproxy' ? ` --base-url ${baseUrl.replace(/\/$/, '')}` : ''} --scope ${scope}${target?.code === 'apt' && scope === 'system' ? ` --distribution ${distribution}` : ''}`
     : `mirrorproxy sources get ${target?.code ?? targetCode}`
   const executable = ['npm', 'pip', 'cargo', 'go', 'composer'].includes(target?.code ?? '') && scope === 'user'
 
@@ -579,7 +580,7 @@ function SourceCommandGenerator({ catalog, baseUrl, text }: { catalog: SourceCat
     window.setTimeout(() => setCopied(false), 1400)
   }
 
-  return <section className="source-generator"><div className="generator-head"><h4><Terminal size={14} /> {text.generator}</h4><span className={executable ? 'generator-status ready' : 'generator-status'}>{executable ? text.ready : text.guidance}</span></div><div className="generator-fields"><label>{text.target}<select value={target?.code ?? targetCode} onChange={(event) => { setTargetCode(event.target.value); setMirrorCode('mirrorproxy') }}>{catalog.targets.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label><label>{text.mirror}<select value={activeMirror} onChange={(event) => setMirrorCode(event.target.value)}>{sources.map((source) => <option key={source.provider_code} value={source.provider_code}>{source.provider_code}</option>)}</select></label><label>{text.scope}<select value={scope} onChange={(event) => setScope(event.target.value)}><option value="user">user</option><option value="system">system</option></select></label></div><div className="generator-command"><code>{command}</code><button onClick={copyGenerated}><Clipboard size={15} /> {copied ? text.copiedCommand : text.copyCommand}</button></div></section>
+  return <section className="source-generator"><div className="generator-head"><h4><Terminal size={14} /> {text.generator}</h4><span className={executable ? 'generator-status ready' : 'generator-status'}>{executable ? text.ready : text.guidance}</span></div><div className="generator-fields"><label>{text.target}<select value={target?.code ?? targetCode} onChange={(event) => { setTargetCode(event.target.value); setMirrorCode('mirrorproxy') }}>{catalog.targets.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label><label>{text.mirror}<select value={activeMirror} onChange={(event) => setMirrorCode(event.target.value)}>{sources.map((source) => <option key={source.provider_code} value={source.provider_code}>{source.provider_code}</option>)}</select></label><label>{text.scope}<select value={scope} onChange={(event) => setScope(event.target.value)}><option value="user">user</option><option value="system">system</option></select></label>{target?.code === 'apt' && scope === 'system' ? <label>{text.distribution}<input value={distribution} onChange={(event) => setDistribution(event.target.value)} /></label> : null}</div><div className="generator-command"><code>{command}</code><button onClick={copyGenerated}><Clipboard size={15} /> {copied ? text.copiedCommand : text.copyCommand}</button></div></section>
 }
 
 function SourceCatalogPanel({ catalog, labels }: { catalog: SourceCatalog; labels: Record<string, string> }) {
