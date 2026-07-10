@@ -108,6 +108,164 @@ p {
   gap: 10px;
 }
 
+.admin-trigger,
+.console-actions button,
+.console-close {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.admin-trigger {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--line));
+  color: var(--accent-strong);
+  font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.admin-console {
+  position: relative;
+  margin: 4px 0 24px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line));
+  border-radius: 12px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--panel-strong) 92%, var(--accent) 8%), var(--panel));
+  box-shadow: 0 28px 80px rgba(14, 116, 144, 0.16);
+  animation: console-in 260ms ease-out both;
+}
+
+.admin-console::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: repeating-linear-gradient(90deg, var(--accent) 0 24px, transparent 24px 32px);
+  content: "";
+}
+
+.console-head,
+.console-section-head {
+  display: flex;
+  gap: 16px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.console-head {
+  padding: 24px 26px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.console-kicker {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  color: var(--accent-strong);
+  font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.console-head h2 { margin-top: 8px; color: var(--text); font-size: 28px; }
+.console-close { min-height: 34px; font-size: 12px; }
+
+.login-card {
+  display: grid;
+  grid-template-columns: 1fr minmax(240px, 360px) auto;
+  gap: 18px;
+  align-items: end;
+  padding: 26px;
+}
+
+.login-card h3,
+.console-overview h3,
+.console-config h3 { color: var(--text); font-size: 20px; }
+.login-card p,
+.console-section-head p { margin-top: 5px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+.login-card label,
+.config-fields label,
+.upstream-fields label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+  font-size: 11px;
+}
+
+.login-card input,
+.config-fields input,
+.config-fields select,
+.upstream-fields input {
+  width: 100%;
+  min-height: 39px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+  color: var(--text);
+  background: var(--panel-strong);
+  font: inherit;
+}
+
+.login-card input:focus,
+.config-fields input:focus,
+.config-fields select:focus,
+.upstream-fields input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
+
+.primary-button {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 39px;
+  padding: 0 14px;
+  border: 1px solid var(--accent-strong);
+  border-radius: 7px;
+  color: #f4feff;
+  background: var(--accent-strong);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.primary-button:disabled { cursor: wait; opacity: 0.65; }
+.form-error { margin: 0; color: #d34e4e; font-size: 13px; }
+
+.console-grid { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); }
+.console-overview, .console-config { min-width: 0; padding: 26px; }
+.console-overview { border-right: 1px solid var(--line); }
+.console-actions { display: flex; gap: 8px; }
+.console-actions button { min-height: 34px; font-size: 12px; }
+.quota-alert, .restart-note { display: flex; gap: 8px; align-items: center; margin: 18px 0 0; padding: 10px 12px; border-radius: 7px; color: #a53b32; background: color-mix(in srgb, #e76f51 14%, transparent); font-size: 13px; }
+.restart-note { color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+.console-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+.console-metric { padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: color-mix(in srgb, var(--panel-strong) 80%, transparent); }
+.console-metric small { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.console-metric strong { display: block; margin-top: 6px; color: var(--text); font-size: 20px; }
+.stats-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 24px; }
+.stats-columns h4, .console-config h4 { margin: 0 0 10px; color: var(--text); font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; font-size: 12px; text-transform: uppercase; }
+.stat-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 9px 0; border-bottom: 1px dashed var(--line); color: var(--muted); font-size: 12px; }
+.stat-row strong { color: var(--text); font-weight: 700; }.stat-row small { grid-column: 1 / -1; color: var(--muted); }.empty-stat { color: var(--muted); font-size: 13px; }
+
+.config-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin: 20px 0; }
+.config-fields label:first-child { grid-column: 1 / -1; }
+.config-fields .toggle-field { display: flex; gap: 9px; align-items: center; min-height: 39px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); font-family: inherit; font-size: 13px; }
+.config-fields .toggle-field input, .adapter-toggles input { width: auto; min-height: auto; accent-color: var(--accent-strong); }
+.adapter-toggles { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 22px; }
+.adapter-toggles label { display: inline-flex; gap: 7px; align-items: center; padding: 7px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; font-size: 12px; }
+.upstream-fields { display: grid; gap: 9px; }.upstream-fields label { grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr); align-items: center; }.upstream-fields input { font-size: 12px; }
+
+@keyframes console-in { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
 .icon-button {
   display: grid;
   width: 42px;
@@ -420,9 +578,13 @@ p {
   .status-strip,
   .workspace,
   .note-grid,
-  .catalog-grid {
+  .catalog-grid,
+  .console-grid,
+  .login-card {
     grid-template-columns: 1fr;
   }
+
+  .console-overview { border-right: 0; border-bottom: 1px solid var(--line); }
 
   .rail {
     position: static;
@@ -442,9 +604,20 @@ p {
 
   .panel-head,
   .command,
-  .source-row {
+  .source-row,
+  .console-head,
+  .console-section-head,
+  .upstream-fields label {
     grid-template-columns: 1fr;
   }
+
+  .toolbar { flex-wrap: wrap; justify-content: end; }
+  .admin-trigger { min-width: 42px; font-size: 0; }
+  .admin-trigger svg { margin: 0; }
+  .console-head, .console-section-head { align-items: stretch; flex-direction: column; }
+  .console-actions { flex-wrap: wrap; }
+  .config-fields, .stats-columns { grid-template-columns: 1fr; }
+  .login-card { align-items: stretch; }
 
   .command button {
     min-height: 42px;

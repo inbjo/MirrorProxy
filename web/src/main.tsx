@@ -3,6 +3,7 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   CheckCircle2,
+  ChartNoAxesCombined,
   Clipboard,
   Code2,
   Container,
@@ -11,7 +12,11 @@ import {
   Languages,
   Moon,
   PackageOpen,
+  LogIn,
+  LogOut,
+  Save,
   ServerCog,
+  ShieldCheck,
   Sun,
 } from 'lucide-react'
 import './styles.css'
@@ -28,6 +33,29 @@ type PublicConfig = {
     timezone: string
     on_exceeded: string
   }
+}
+type AdminConfig = PublicConfig & {
+  database_path: string
+  listen_addr: string
+  upstreams: Record<string, string>
+  timeout: { request_secs: number }
+  rate_limit: { enabled: boolean; requests_per_minute: number }
+}
+type AdminStats = {
+  month: string
+  request_count: number
+  response_bytes: number
+  error_count: number
+  quota: {
+    enabled: boolean
+    monthly_limit_bytes: number | null
+    remaining_bytes: number | null
+    exceeded: boolean
+    timezone: string
+    on_exceeded: string
+  }
+  daily: Array<{ day: string; target_code: string; request_count: number; response_bytes: number; error_count: number }>
+  targets: Array<{ target_code: string; request_count: number; response_bytes: number; error_count: number }>
 }
 type SourceCatalog = {
   providers: MirrorProvider[]
@@ -111,6 +139,7 @@ const messages = {
     apiHint: 'Runtime config is loaded from /api/public-config and reflected here.',
     faq: 'Notes',
     faqText: 'Only configured upstreams are proxied. Arbitrary open proxy targets are rejected by default.',
+    console: 'Admin console',
   },
   zh: {
     title: 'MirrorProxy',
@@ -153,6 +182,7 @@ const messages = {
     apiHint: '页面会读取 /api/public-config 并按运行时配置展示命令。',
     faq: '说明',
     faqText: '默认只代理配置好的上游，任意开放代理目标会被拒绝。',
+    console: '管理控制台',
   },
 } satisfies Record<Locale, Record<string, string>>
 
@@ -175,6 +205,7 @@ function App() {
     },
   })
   const [catalog, setCatalog] = React.useState<SourceCatalog | null>(null)
+  const [adminVisible, setAdminVisible] = React.useState(false)
   const [copied, setCopied] = React.useState<string | null>(null)
   const t = messages[locale]
 
@@ -244,8 +275,13 @@ function App() {
           <button className="icon-button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Theme">
             {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
           </button>
+          <button className="admin-trigger" onClick={() => setAdminVisible((visible) => !visible)}>
+            <ShieldCheck size={17} /> {t.console}
+          </button>
         </div>
       </header>
+
+      {adminVisible ? <AdminConsole locale={locale} onClose={() => setAdminVisible(false)} /> : null}
 
       <section className="status-strip">
         <Metric icon={<CheckCircle2 size={18} />} label={t.status} value={t.online} tone="ok" />
@@ -369,6 +405,133 @@ function App() {
     </main>
   )
 }
+
+const byteLabel = (bytes: number | null) => {
+  if (bytes === null) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
+}
+
+function AdminConsole({ locale, onClose }: { locale: Locale; onClose: () => void }) {
+  const text = locale === 'zh'
+    ? {
+        title: '运行控制台', login: '管理员登录', password: '管理员密码', signIn: '登录', signOut: '退出登录',
+        overview: '本月概览', sent: '已发送', remaining: '配额剩余', requests: '请求', errors: '错误',
+        configuration: '运行时配置', publicUrl: '公开地址', quota: '启用月度配额', quotaGb: '月度 GB', timezone: '时区',
+        action: '超限动作', rate: '启用请求限流', rpm: '每分钟请求数', adapters: '启用代理', upstreams: '上游地址',
+        save: '保存配置', saving: '保存中…', refresh: '刷新统计', top: 'Top targets', daily: '当月日明细',
+        close: '关闭控制台', badLogin: '登录失败，请检查管理员密码。', saveError: '配置保存失败。', restart: '以下字段将在重启后生效：',
+        quotaStopped: '代理已因月流量上限停止', noData: '本月尚无代理流量。', passwordHint: '首次启动时密码只会出现在本机日志中。',
+      }
+    : {
+        title: 'Operations console', login: 'Administrator sign in', password: 'Administrator password', signIn: 'Sign in', signOut: 'Sign out',
+        overview: 'Month at a glance', sent: 'Sent', remaining: 'Quota remaining', requests: 'Requests', errors: 'Errors',
+        configuration: 'Runtime configuration', publicUrl: 'Public URL', quota: 'Enable monthly quota', quotaGb: 'Monthly GB', timezone: 'Timezone',
+        action: 'Exceeded action', rate: 'Enable request rate limit', rpm: 'Requests / minute', adapters: 'Enabled adapters', upstreams: 'Upstream endpoints',
+        save: 'Save configuration', saving: 'Saving…', refresh: 'Refresh stats', top: 'Top targets', daily: 'Daily detail',
+        close: 'Close console', badLogin: 'Sign in failed. Check the administrator password.', saveError: 'Configuration save failed.', restart: 'These fields apply after restart:',
+        quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is printed only in the local startup log.',
+      }
+  const [token, setToken] = React.useState<string | null>(() => sessionStorage.getItem('mirrorproxy.admin-token'))
+  const [password, setPassword] = React.useState('')
+  const [draft, setDraft] = React.useState<AdminConfig | null>(null)
+  const [stats, setStats] = React.useState<AdminStats | null>(null)
+  const [error, setError] = React.useState<string | null>(null)
+  const [saving, setSaving] = React.useState(false)
+  const [restartRequired, setRestartRequired] = React.useState<string[]>([])
+
+  const load = React.useCallback(async (activeToken: string) => {
+    const headers = { Authorization: `Bearer ${activeToken}` }
+    const [configResponse, statsResponse] = await Promise.all([
+      fetch('/api/admin/config', { headers }),
+      fetch('/api/admin/stats', { headers }),
+    ])
+    if (configResponse.status === 401 || statsResponse.status === 401) throw new Error('unauthorized')
+    if (!configResponse.ok || !statsResponse.ok) throw new Error('load failed')
+    const [config, nextStats] = await Promise.all([configResponse.json() as Promise<AdminConfig>, statsResponse.json() as Promise<AdminStats>])
+    setDraft(config)
+    setStats(nextStats)
+  }, [])
+
+  React.useEffect(() => {
+    if (!token) return
+    load(token).catch(() => {
+      sessionStorage.removeItem('mirrorproxy.admin-token')
+      setToken(null)
+      setError(text.badLogin)
+    })
+  }, [load, text.badLogin, token])
+
+  const signIn = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError(null)
+    const response = await fetch('/api/admin/login', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }),
+    })
+    if (!response.ok) { setError(text.badLogin); return }
+    const value = await response.json() as { token: string }
+    sessionStorage.setItem('mirrorproxy.admin-token', value.token)
+    setToken(value.token)
+    setPassword('')
+  }
+
+  const signOut = async () => {
+    if (token) await fetch('/api/admin/logout', { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => undefined)
+    sessionStorage.removeItem('mirrorproxy.admin-token')
+    setToken(null); setDraft(null); setStats(null); setRestartRequired([])
+  }
+
+  const save = async () => {
+    if (!token || !draft) return
+    setSaving(true); setError(null)
+    const response = await fetch('/api/admin/config', {
+      method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(draft),
+    })
+    setSaving(false)
+    if (!response.ok) { setError(text.saveError); return }
+    const result = await response.json() as { config: AdminConfig; restart_required: string[] }
+    setDraft(result.config); setRestartRequired(result.restart_required)
+    load(token).catch(() => undefined)
+  }
+
+  const update = <K extends keyof AdminConfig>(key: K, value: AdminConfig[K]) => setDraft((current) => current ? { ...current, [key]: value } : current)
+  const updateQuota = (key: keyof AdminConfig['quota'], value: string | boolean | number) => setDraft((current) => current ? { ...current, quota: { ...current.quota, [key]: value } } : current)
+  const updateRate = (key: keyof AdminConfig['rate_limit'], value: string | boolean | number) => setDraft((current) => current ? { ...current, rate_limit: { ...current.rate_limit, [key]: value } } : current)
+  const toggleAdapter = (adapter: string) => setDraft((current) => {
+    if (!current) return current
+    const enabled = current.enabled_proxies.includes(adapter)
+    return { ...current, enabled_proxies: enabled ? current.enabled_proxies.filter((item) => item !== adapter) : [...current.enabled_proxies, adapter] }
+  })
+  const updateUpstream = (key: string, value: string) => setDraft((current) => current ? { ...current, upstreams: { ...current.upstreams, [key]: value } } : current)
+
+  return (
+    <section className="admin-console" aria-label={text.title}>
+      <div className="console-head"><div><span className="console-kicker"><ShieldCheck size={15} /> ADMIN / SQLITE</span><h2>{text.title}</h2></div><button className="console-close" onClick={onClose}>{text.close} ×</button></div>
+      {!token ? <form className="login-card" onSubmit={signIn}><div><h3>{text.login}</h3><p>{text.passwordHint}</p></div><label>{text.password}<input autoFocus required type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error ? <p className="form-error">{error}</p> : null}<button className="primary-button" type="submit"><LogIn size={16} /> {text.signIn}</button></form> : null}
+      {token && draft && stats ? <div className="console-grid">
+        <section className="console-overview"><div className="console-section-head"><div><h3>{text.overview}</h3><p>{stats.month} · {stats.quota.timezone}</p></div><div className="console-actions"><button onClick={() => load(token).catch(() => setError(text.saveError))}>{text.refresh}</button><button onClick={signOut}><LogOut size={15} /> {text.signOut}</button></div></div>
+          {stats.quota.exceeded ? <div className="quota-alert"><ChartNoAxesCombined size={18} /> {text.quotaStopped}</div> : null}
+          <div className="console-metrics"><ConsoleMetric label={text.sent} value={byteLabel(stats.response_bytes)} /><ConsoleMetric label={text.remaining} value={stats.quota.enabled ? byteLabel(stats.quota.remaining_bytes) : '∞'} /><ConsoleMetric label={text.requests} value={stats.request_count.toLocaleString()} /><ConsoleMetric label={text.errors} value={stats.error_count.toLocaleString()} /></div>
+          <div className="stats-columns"><div><h4>{text.top}</h4>{stats.targets.length ? stats.targets.map((target) => <div className="stat-row" key={target.target_code}><span>{target.target_code}</span><strong>{byteLabel(target.response_bytes)}</strong><small>{target.request_count} req</small></div>) : <p className="empty-stat">{text.noData}</p>}</div><div><h4>{text.daily}</h4>{stats.daily.slice(-8).map((day) => <div className="stat-row" key={`${day.day}-${day.target_code}`}><span>{day.day.slice(5)} · {day.target_code}</span><strong>{byteLabel(day.response_bytes)}</strong><small>{day.error_count} err</small></div>)}</div></div>
+        </section>
+        <section className="console-config"><div className="console-section-head"><div><h3>{text.configuration}</h3><p>{draft.listen_addr} · SQLite-backed runtime state</p></div><button className="primary-button" disabled={saving} onClick={save}><Save size={16} /> {saving ? text.saving : text.save}</button></div>
+          {error ? <p className="form-error">{error}</p> : null}{restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
+          <div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label>{text.quotaGb}<input min="0" type="number" value={draft.quota.monthly_gb} onChange={(event) => updateQuota('monthly_gb', Number(event.target.value))} /></label><label>{text.timezone}<input value={draft.quota.timezone} onChange={(event) => updateQuota('timezone', event.target.value)} /></label><label>{text.action}<select value={draft.quota.on_exceeded} onChange={(event) => updateQuota('on_exceeded', event.target.value)}><option value="stop_proxy">stop_proxy · 503</option><option value="throttle">throttle · 429</option></select></label><label className="toggle-field"><input type="checkbox" checked={draft.quota.enabled} onChange={(event) => updateQuota('enabled', event.target.checked)} />{text.quota}</label><label className="toggle-field"><input type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<input min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label></div>
+          <h4>{text.adapters}</h4><div className="adapter-toggles">{['github', 'composer', 'oci', 'npm', 'go', 'crates', 'pypi'].map((adapter) => <label key={adapter}><input type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div>
+          <h4>{text.upstreams}</h4><div className="upstream-fields">{Object.entries(draft.upstreams).map(([key, value]) => <label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>)}</div>
+        </section>
+      </div> : null}
+    </section>
+  )
+}
+
+function ConsoleMetric({ label, value }: { label: string; value: string }) { return <div className="console-metric"><small>{label}</small><strong>{value}</strong></div> }
 
 function SourceCatalogPanel({ catalog, labels }: { catalog: SourceCatalog; labels: Record<string, string> }) {
   const groups = [
