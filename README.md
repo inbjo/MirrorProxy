@@ -387,6 +387,8 @@ Run the local smoke test on Windows PowerShell:
 
 The smoke test builds the debug binary, starts MirrorProxy on a temporary local port, checks the embedded web UI and key proxy endpoints, then stops the process.
 
+GitHub Actions runs formatting, clippy, Rust tests, the frontend production build, and the Windows smoke test on pushes and pull requests. Tagging `v*` builds Linux musl/ARM64, macOS ARM64, and Windows artifacts, then publishes a GitHub release with per-artifact checksums and `SHA256SUMS`.
+
 ## Static Linux Build
 
 On Linux:
@@ -396,6 +398,7 @@ On Linux:
 ```
 
 The script builds the web console first, then builds a `x86_64-unknown-linux-musl` release binary.
+Install `musl-tools` first so `musl-gcc` is available.
 
 ## Reverse Proxy Deployment
 

@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -30,3 +30,21 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace
 
+  smoke-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build web console
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Run local smoke test
+        shell: pwsh
+        run: .\scripts\smoke-local.ps1
