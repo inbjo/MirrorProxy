@@ -241,6 +241,26 @@ requests_per_minute = 600
 
 When the limit is exceeded, MirrorProxy returns `429 Too Many Requests` with a `Retry-After` header.
 
+## Traffic Accounting and Monthly Quota
+
+Every proxied response is counted after its body has been streamed to the client;
+downloads are never buffered merely for accounting. SQLite keeps daily per-target
+request/byte/error totals and an aggregate monthly byte total. Health checks,
+the web console, and management APIs are not counted or blocked.
+
+```toml
+[quota]
+enabled = true
+monthly_gb = 500
+timezone = "Asia/Taipei" # or "local"
+on_exceeded = "stop_proxy" # use "throttle" for HTTP 429 instead
+```
+
+Once the sent-body total reaches the monthly limit, new proxy requests receive
+`503` (`stop_proxy`) or `429` (`throttle`) while the public and management
+surfaces stay available. A new calendar month in the configured timezone starts
+with a fresh quota automatically.
+
 ## Development
 
 Build the web console:

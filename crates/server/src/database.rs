@@ -34,6 +34,17 @@ pub struct AdminSession {
     pub expires_at: i64,
 }
 
+pub struct ProxyTrafficRecord<'a> {
+    pub day: &'a str,
+    pub month: &'a str,
+    pub target_code: &'a str,
+    pub method: &'a str,
+    pub path: &'a str,
+    pub status_code: u16,
+    pub response_bytes: u64,
+    pub stream_error: bool,
+}
+
 impl Database {
     pub async fn open(
         database_path: &str,
@@ -197,6 +208,58 @@ impl Database {
         transaction.commit().await?;
         Ok(())
     }
+
+    pub async fn monthly_response_bytes(&self, month: &str) -> anyhow::Result<u64> {
+        let row = sqlx::query("SELECT response_bytes FROM traffic_monthly WHERE month = ?")
+            .bind(month)
+            .fetch_optional(&self.pool)
+            .await?;
+        let bytes = row
+            .map(|row| row.try_get::<i64, _>("response_bytes"))
+            .transpose()?
+            .unwrap_or(0);
+        Ok(bytes.max(0) as u64)
+    }
+
+    pub async fn record_proxy_response(
+        &self,
+        record: ProxyTrafficRecord<'_>,
+    ) -> anyhow::Result<()> {
+        let bytes = i64::try_from(record.response_bytes).unwrap_or(i64::MAX);
+        let errors = i64::from(record.stream_error || record.status_code >= 400);
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO traffic_daily (day, target_code, request_count, response_bytes, upstream_bytes, error_count) VALUES (?, ?, 1, ?, 0, ?) ON CONFLICT(day, target_code) DO UPDATE SET request_count = request_count + 1, response_bytes = response_bytes + excluded.response_bytes, error_count = error_count + excluded.error_count",
+        )
+        .bind(record.day)
+        .bind(record.target_code)
+        .bind(bytes)
+        .bind(errors)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "INSERT INTO traffic_monthly (month, request_count, response_bytes, upstream_bytes, error_count, quota_exceeded) VALUES (?, 1, ?, 0, ?, 0) ON CONFLICT(month) DO UPDATE SET request_count = request_count + 1, response_bytes = response_bytes + excluded.response_bytes, error_count = error_count + excluded.error_count",
+        )
+        .bind(record.month)
+        .bind(bytes)
+        .bind(errors)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "INSERT INTO request_events (created_at, target_code, method, path, status_code, response_bytes) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(now)
+        .bind(record.target_code)
+        .bind(record.method)
+        .bind(record.path)
+        .bind(i64::from(record.status_code))
+        .bind(bytes)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
 }
 
 fn ensure_parent_directory(database_path: &str) -> anyhow::Result<()> {
@@ -311,5 +374,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(loaded.quota.monthly_gb, 42);
+    }
+
+    #[tokio::test]
+    async fn records_monthly_and_daily_proxy_traffic() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        database
+            .record_proxy_response(ProxyTrafficRecord {
+                day: "2026-07-10",
+                month: "2026-07",
+                target_code: "npm",
+                method: "GET",
+                path: "/npm/react",
+                status_code: 200,
+                response_bytes: 1024,
+                stream_error: false,
+            })
+            .await
+            .unwrap();
+        database
+            .record_proxy_response(ProxyTrafficRecord {
+                day: "2026-07-10",
+                month: "2026-07",
+                target_code: "npm",
+                method: "GET",
+                path: "/npm/missing",
+                status_code: 404,
+                response_bytes: 12,
+                stream_error: false,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            database.monthly_response_bytes("2026-07").await.unwrap(),
+            1036
+        );
     }
 }

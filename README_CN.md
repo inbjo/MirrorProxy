@@ -235,6 +235,24 @@ requests_per_minute = 600
 
 超过限制时，MirrorProxy 会返回 `429 Too Many Requests`，并带上 `Retry-After` 响应头。
 
+## 流量统计与月度配额
+
+每个代理响应都会在 body 实际流式发送给客户端后计量；不会为了统计而把下载内容读入
+内存。SQLite 会保存按日、按代理类型的请求数/字节数/错误数，以及当月总发送字节数。
+健康检查、Web 控制台和管理 API 不计入流量，也不会被配额封停。
+
+```toml
+[quota]
+enabled = true
+monthly_gb = 500
+timezone = "Asia/Taipei" # 或 "local"
+on_exceeded = "stop_proxy" # 使用 "throttle" 时返回 HTTP 429
+```
+
+当月已发送 body 字节达到限制后，新的代理请求会根据配置返回 `503`
+（`stop_proxy`）或 `429`（`throttle`），而公开页面和管理接口仍可用。配置时区进入新
+日历月后会自动使用新的月度统计与配额。
+
 ## 开发
 
 构建 Web 控制台：

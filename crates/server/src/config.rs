@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, path::Path};
 
+use chrono_tz::Tz;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -166,6 +167,12 @@ impl Config {
         }
         if self.quota.enabled && self.quota.timezone.trim().is_empty() {
             anyhow::bail!("quota.timezone cannot be empty when quota is enabled");
+        }
+        if self.quota.timezone != "local" && self.quota.timezone.parse::<Tz>().is_err() {
+            anyhow::bail!(
+                "quota.timezone must be local or a valid IANA timezone, got {}",
+                self.quota.timezone
+            );
         }
         match self.quota.on_exceeded.as_str() {
             "stop_proxy" | "throttle" => {}
@@ -436,6 +443,27 @@ mod tests {
         };
 
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validates_iana_quota_timezone() {
+        let valid = Config {
+            quota: QuotaConfig {
+                timezone: "Asia/Taipei".to_string(),
+                ..QuotaConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(valid.validate().is_ok());
+
+        let invalid = Config {
+            quota: QuotaConfig {
+                timezone: "not/a-timezone".to_string(),
+                ..QuotaConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(invalid.validate().is_err());
     }
 
     #[test]

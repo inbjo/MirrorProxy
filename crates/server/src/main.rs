@@ -15,6 +15,7 @@ use std::{
 
 use anyhow::Context;
 use axum::{
+    body::Body,
     extract::{Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
@@ -23,9 +24,11 @@ use axum::{
     Json, Router,
 };
 use catalog::{SourceCategory, SourceMode};
+use chrono::{Datelike, Local, Utc};
+use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
 use config::Config;
-use database::Database;
+use database::{Database, ProxyTrafficRecord};
 use proxy::{composer, cratesio, github, go, npm, oci, pypi, ProxyError};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -1130,27 +1133,220 @@ async fn rate_limit_middleware(
             .into_response();
     }
 
-    if quota_exceeded_for_request(&config, request.uri().path()) {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            [(header::RETRY_AFTER, HeaderValue::from_static("3600"))],
-            Json(serde_json::json!({
-                "error": "monthly traffic quota exceeded",
-                "quota": {
-                    "monthly_gb": config.quota.monthly_gb,
-                    "timezone": config.quota.timezone,
-                    "on_exceeded": config.quota.on_exceeded
-                }
-            })),
-        )
-            .into_response();
+    let path = request.uri().path().to_string();
+    let method = request.method().to_string();
+    let target_code = proxy_target_for_path(&path);
+    if let Some(target_code) = target_code {
+        let (day, month) = quota_period(&config.quota.timezone);
+        if config.quota.enabled && quota_exceeded_for_request(&state, &config, &month, &path).await
+        {
+            let (status, retry_after) = if config.quota.on_exceeded == "throttle" {
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    HeaderValue::from_static("60"),
+                )
+            } else {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    HeaderValue::from_static("3600"),
+                )
+            };
+            return (
+                status,
+                [(header::RETRY_AFTER, retry_after)],
+                Json(serde_json::json!({
+                    "error": "monthly traffic quota exceeded",
+                    "quota": {
+                        "monthly_gb": config.quota.monthly_gb,
+                        "timezone": config.quota.timezone,
+                        "on_exceeded": config.quota.on_exceeded
+                    }
+                })),
+            )
+                .into_response();
+        }
+
+        let response = next.run(request).await;
+        return track_proxy_response(
+            response,
+            state.database.clone(),
+            day,
+            month,
+            target_code,
+            method,
+            path,
+        );
     }
 
     next.run(request).await
 }
 
-fn quota_exceeded_for_request(config: &Config, path: &str) -> bool {
-    config.quota.enabled && config.quota.monthly_gb == 0 && is_proxy_path(path)
+async fn quota_exceeded_for_request(
+    state: &AppState,
+    config: &Config,
+    month: &str,
+    path: &str,
+) -> bool {
+    if !config.quota.enabled || !is_proxy_path(path) {
+        return false;
+    }
+    let limit = config.quota.monthly_gb.saturating_mul(1024 * 1024 * 1024);
+    match state.database.monthly_response_bytes(month).await {
+        Ok(used) => used >= limit,
+        Err(error) => {
+            tracing::error!(%error, "failed to read monthly quota usage");
+            true
+        }
+    }
+}
+
+fn quota_period(timezone: &str) -> (String, String) {
+    if timezone == "local" {
+        let now = Local::now();
+        return (
+            now.format("%Y-%m-%d").to_string(),
+            now.format("%Y-%m").to_string(),
+        );
+    }
+    let timezone = timezone
+        .parse::<Tz>()
+        .expect("validated runtime configuration must contain a valid timezone");
+    let now = Utc::now().with_timezone(&timezone);
+    (
+        format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day()),
+        format!("{:04}-{:02}", now.year(), now.month()),
+    )
+}
+
+fn proxy_target_for_path(path: &str) -> Option<&'static str> {
+    if path == "/composer" || path.starts_with("/composer/") {
+        Some("composer")
+    } else if path == "/npm" || path.starts_with("/npm/") {
+        Some("npm")
+    } else if path == "/goproxy" || path.starts_with("/goproxy/") {
+        Some("go")
+    } else if path == "/pypi/simple"
+        || path.starts_with("/pypi/simple/")
+        || path.starts_with("/pypi/files/")
+    {
+        Some("pypi")
+    } else if path.starts_with("/crates/api/")
+        || path == "/crates-index"
+        || path.starts_with("/crates-index/")
+    {
+        Some("crates")
+    } else if path == "/v2" || path.starts_with("/v2/") {
+        Some("oci")
+    } else if github::is_github_proxy_path(path) {
+        Some("github")
+    } else {
+        None
+    }
+}
+
+fn track_proxy_response(
+    response: Response,
+    database: Arc<Database>,
+    day: String,
+    month: String,
+    target_code: &'static str,
+    method: String,
+    path: String,
+) -> Response {
+    let status_code = response.status().as_u16();
+    let (parts, body) = response.into_parts();
+    let stream = body.into_data_stream();
+    let tracked = futures_util::stream::unfold(
+        (
+            stream,
+            0_u64,
+            false,
+            database,
+            day,
+            month,
+            target_code,
+            method,
+            path,
+        ),
+        move |(
+            mut stream,
+            response_bytes,
+            stream_error,
+            database,
+            day,
+            month,
+            target_code,
+            method,
+            path,
+        )| async move {
+            match futures_util::StreamExt::next(&mut stream).await {
+                Some(Ok(chunk)) => Some((
+                    Ok::<_, axum::Error>(chunk.clone()),
+                    (
+                        stream,
+                        response_bytes.saturating_add(chunk.len() as u64),
+                        stream_error,
+                        database,
+                        day,
+                        month,
+                        target_code,
+                        method,
+                        path,
+                    ),
+                )),
+                Some(Err(error)) => {
+                    if let Err(record_error) = database
+                        .record_proxy_response(ProxyTrafficRecord {
+                            day: &day,
+                            month: &month,
+                            target_code,
+                            method: &method,
+                            path: &path,
+                            status_code,
+                            response_bytes,
+                            stream_error: true,
+                        })
+                        .await
+                    {
+                        tracing::error!(%record_error, "failed to record proxy traffic");
+                    }
+                    Some((
+                        Err(error),
+                        (
+                            stream,
+                            response_bytes,
+                            true,
+                            database,
+                            day,
+                            month,
+                            target_code,
+                            method,
+                            path,
+                        ),
+                    ))
+                }
+                None => {
+                    if let Err(record_error) = database
+                        .record_proxy_response(ProxyTrafficRecord {
+                            day: &day,
+                            month: &month,
+                            target_code,
+                            method: &method,
+                            path: &path,
+                            status_code,
+                            response_bytes,
+                            stream_error,
+                        })
+                        .await
+                    {
+                        tracing::error!(%record_error, "failed to record proxy traffic");
+                    }
+                    None
+                }
+            }
+        },
+    );
+    Response::from_parts(parts, Body::from_stream(tracked))
 }
 
 fn is_proxy_path(path: &str) -> bool {
@@ -1979,6 +2175,38 @@ on_exceeded = "stop_proxy"
             .unwrap();
         assert_eq!(reloaded.public_base_url, "https://mirror.example");
         assert_eq!(reloaded.enabled_proxies, ["npm"]);
+    }
+
+    #[tokio::test]
+    async fn streamed_proxy_response_records_actual_body_bytes() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from("hello"))
+            .unwrap();
+        let response = track_proxy_response(
+            response,
+            Arc::new(database.clone()),
+            "2026-07-10".to_string(),
+            "2026-07".to_string(),
+            "npm",
+            "GET".to_string(),
+            "/npm/react".to_string(),
+        );
+
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            "hello"
+        );
+        assert_eq!(database.monthly_response_bytes("2026-07").await.unwrap(), 5);
+    }
+
+    #[test]
+    fn quota_period_uses_requested_iana_timezone() {
+        let (day, month) = quota_period("Asia/Taipei");
+        assert!(day.starts_with(&month));
+        assert_eq!(day.len(), 10);
+        assert_eq!(month.len(), 7);
     }
 
     #[tokio::test]
