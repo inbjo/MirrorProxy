@@ -306,7 +306,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Maven",
         category: SourceCategory::Language,
         aliases: &["java"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -368,6 +368,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "composer",
         provider_code: "mirrorproxy",
         repo_url: "/composer/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "maven",
+        provider_code: "mirrorproxy",
+        repo_url: "/maven/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -484,6 +491,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         os_family: "any",
         scope: SourceScope::User,
         template: "composer config repo.packagist composer {repo_url}",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "maven",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "<settings>\n  <mirrors>\n    <mirror>\n      <id>mirrorproxy</id>\n      <name>MirrorProxy Maven Central</name>\n      <url>{repo_url}</url>\n      <mirrorOf>central</mirrorOf>\n    </mirror>\n  </mirrors>\n</settings>",
         requires_sudo: false,
     },
     SourceTemplate {

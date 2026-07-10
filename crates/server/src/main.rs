@@ -29,7 +29,7 @@ use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
-use proxy::{composer, cratesio, github, go, npm, oci, pypi, ProxyError};
+use proxy::{composer, cratesio, github, go, maven, npm, oci, pypi, ProxyError};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -457,6 +457,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.kubernetes" => Some(config.upstreams.kubernetes.clone()),
         "upstreams.npm" => Some(config.upstreams.npm.clone()),
         "upstreams.go_proxy" => Some(config.upstreams.go_proxy.clone()),
+        "upstreams.maven" => Some(config.upstreams.maven.clone()),
         "upstreams.crates_index" => Some(config.upstreams.crates_index.clone()),
         "upstreams.crates_api" => Some(config.upstreams.crates_api.clone()),
         "upstreams.pypi_simple" => Some(config.upstreams.pypi_simple.clone()),
@@ -487,6 +488,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.kubernetes",
         "upstreams.npm",
         "upstreams.go_proxy",
+        "upstreams.maven",
         "upstreams.crates_index",
         "upstreams.crates_api",
         "upstreams.pypi_simple",
@@ -824,6 +826,7 @@ fn source_config_path(
             "pip" => ".config/pip/pip.conf",
             "cargo" => ".cargo/config.toml",
             "go" => ".config/go/env",
+            "maven" => ".m2/settings.xml",
             "composer" => ".config/composer/config.json",
             other => anyhow::bail!("{other} does not support safe user-scope configuration writes"),
         },
@@ -864,6 +867,9 @@ fn source_config_content(
                 .map(|content| format!("{content}\n"))
                 .ok_or_else(|| anyhow::anyhow!("missing Cargo configuration template")),
             "go" => Ok(format!("GOPROXY={repo_url},direct\n")),
+            "maven" => source_config_command("maven", repo_url)
+                .map(|content| format!("{content}\n"))
+                .ok_or_else(|| anyhow::anyhow!("missing Maven configuration template")),
             "composer" => Ok(serde_json::to_string_pretty(&serde_json::json!({
                 "repositories": {
                     "packagist": { "type": "composer", "url": repo_url }
@@ -1007,6 +1013,9 @@ fn source_reset_command(target_code: &str) -> Option<String> {
                 .to_string(),
         ),
         "go" => Some("go env -u GOPROXY".to_string()),
+        "maven" => Some(
+            "Remove the MirrorProxy mirror entry from Maven ~/.m2/settings.xml".to_string(),
+        ),
         "composer" => Some("composer config --unset repos.packagist".to_string()),
         "docker" => Some(
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
@@ -1142,6 +1151,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/goproxy", get(go::root).head(go::root))
         .route("/goproxy/", get(go::root).head(go::root))
         .route("/goproxy/{*path}", get(go::proxy).head(go::proxy))
+        .route("/maven", get(maven::root).head(maven::root))
+        .route("/maven/", get(maven::root).head(maven::root))
+        .route("/maven/{*path}", get(maven::proxy).head(maven::proxy))
         .route(
             "/pypi/simple",
             get(pypi::simple_root).head(pypi::simple_root),
@@ -1325,6 +1337,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("npm")
     } else if path == "/goproxy" || path.starts_with("/goproxy/") {
         Some("go")
+    } else if path == "/maven" || path.starts_with("/maven/") {
+        Some("maven")
     } else if path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -1456,6 +1470,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/npm/")
         || path == "/goproxy"
         || path.starts_with("/goproxy/")
+        || path == "/maven"
+        || path.starts_with("/maven/")
         || path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -1986,6 +2002,10 @@ mod tests {
             config_value(&config, "upstreams.npm").unwrap(),
             "https://registry.npmjs.org"
         );
+        assert_eq!(
+            config_value(&config, "upstreams.maven").unwrap(),
+            "https://repo.maven.apache.org/maven2"
+        );
         assert!(config_value(&config, "missing.key").is_none());
     }
 
@@ -2004,6 +2024,8 @@ mod tests {
             .iter()
             .any(|(key, value)| *key == "upstreams.pypi_files"
                 && value == "https://files.pythonhosted.org"));
+        assert!(entries.iter().any(|(key, value)| *key == "upstreams.maven"
+            && value == "https://repo.maven.apache.org/maven2"));
     }
 
     #[test]
@@ -2091,6 +2113,11 @@ on_exceeded = "stop_proxy"
             source_config_command("go", "https://mirror.example/goproxy/").unwrap(),
             "go env -w GOPROXY=https://mirror.example/goproxy/,direct"
         );
+        assert!(
+            source_config_command("maven", "https://mirror.example/maven/")
+                .unwrap()
+                .contains("<url>https://mirror.example/maven/</url>")
+        );
         assert_eq!(
             source_config_command("composer", "https://mirror.example/composer/").unwrap(),
             "composer config repo.packagist composer https://mirror.example/composer/"
@@ -2172,7 +2199,7 @@ on_exceeded = "stop_proxy"
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).unwrap();
 
-        for target_code in ["npm", "pip", "cargo", "go", "composer"] {
+        for target_code in ["npm", "pip", "cargo", "go", "maven", "composer"] {
             let command = PlannedSourceCommand {
                 target_code,
                 provider_code: "mirrorproxy",
@@ -2427,6 +2454,11 @@ on_exceeded = "stop_proxy"
             .unwrap()
             .iter()
             .any(|proxy| proxy == "go"));
+        assert!(value["enabled_proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|proxy| proxy == "maven"));
         assert!(value["enabled_proxies"]
             .as_array()
             .unwrap()
@@ -2723,6 +2755,17 @@ on_exceeded = "stop_proxy"
             .unwrap()
             .iter()
             .any(|target| target["code"] == "npm" && target["category"] == "lang"));
+        assert!(value["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|target| target["code"] == "maven"
+                && target["supported_modes"]
+                    .as_array()
+                    .is_some_and(|modes| modes
+                        .iter()
+                        .map(serde_json::Value::as_str)
+                        .eq([Some("proxy"), Some("local-config"),]))));
         assert!(value["sources"]
             .as_array()
             .unwrap()
@@ -2730,6 +2773,13 @@ on_exceeded = "stop_proxy"
             .any(
                 |source| source["target_code"] == "npm" && source["provider_code"] == "mirrorproxy"
             ));
+        assert!(value["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|source| source["target_code"] == "maven"
+                && source["provider_code"] == "mirrorproxy"
+                && source["repo_url"] == "/maven/"));
         assert!(value["templates"]
             .as_array()
             .unwrap()
@@ -2770,6 +2820,24 @@ on_exceeded = "stop_proxy"
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("Go module proxy"));
+    }
+
+    #[tokio::test]
+    async fn maven_root_returns_proxy_info() {
+        let app = build_router(Config::default()).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/maven/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("Maven repository proxy"));
     }
 
     #[tokio::test]

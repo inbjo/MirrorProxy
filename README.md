@@ -1,6 +1,6 @@
 # MirrorProxy
 
-MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, public Docker/OCI registry pull-through routing, npm registry proxying, Go module proxying, Cargo sparse registry proxying, and PyPI Simple API proxying, with a React + Vite + Tailwind web console embedded into the Rust binary.
+MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, public Docker/OCI registry pull-through routing, npm registry proxying, Go module proxying, Maven Central proxying, Cargo sparse registry proxying, and PyPI Simple API proxying, with a React + Vite + Tailwind web console embedded into the Rust binary.
 
 The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go modules, operating system mirrors, and other ecosystems can be added behind the same proxy core.
 
@@ -14,6 +14,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - Docker/OCI proxy at `/v2/*` for Docker Hub, GHCR, Quay, and Kubernetes public images
 - npm/yarn/pnpm proxy at `/npm`
 - Go module proxy at `/goproxy`
+- Maven Central proxy at `/maven`
 - Cargo sparse registry proxy at `/crates-index`
 - pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
@@ -115,6 +116,31 @@ go list -m github.com/gin-gonic/gin@latest
 
 The Go adapter forwards GOPROXY protocol paths such as `@v/list`, `.info`, `.mod`, and `.zip` to `proxy.golang.org`.
 
+## Maven Central Proxy
+
+Configure Maven's user settings to mirror Central through MirrorProxy:
+
+```xml
+<settings>
+  <mirrors>
+    <mirror>
+      <id>mirrorproxy</id>
+      <url>http://127.0.0.1:3000/maven/</url>
+      <mirrorOf>central</mirrorOf>
+    </mirror>
+  </mirrors>
+</settings>
+```
+
+Save this under `~/.m2/settings.xml`, or let the CLI write it with rollback protection:
+
+```bash
+mirrorproxy sources set maven --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mvn dependency:resolve
+```
+
+The Maven adapter streams Maven2 repository paths, including POMs, metadata, artifacts, checksums, and signatures, from Maven Central.
+
 ## Rust Crates Proxy
 
 Configure Cargo to use MirrorProxy as a sparse registry mirror:
@@ -196,7 +222,7 @@ Copy `config.example.toml` and adjust the public URL for your deployment:
 ```toml
 listen_addr = "127.0.0.1:3000"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -208,6 +234,7 @@ quay = "https://quay.io"
 kubernetes = "https://registry.k8s.io"
 npm = "https://registry.npmjs.org"
 go_proxy = "https://proxy.golang.org"
+maven = "https://repo.maven.apache.org/maven2"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
@@ -223,7 +250,7 @@ MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
 MIRRORPROXY_DB=/var/lib/mirrorproxy/mirrorproxy.sqlite3
 MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
-MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,crates,pypi
+MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,maven,crates,pypi
 MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
 MIRRORPROXY_RATE_LIMIT_ENABLED=true
 MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600

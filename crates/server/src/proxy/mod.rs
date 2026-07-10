@@ -2,6 +2,7 @@ pub mod composer;
 pub mod cratesio;
 pub mod github;
 pub mod go;
+pub mod maven;
 pub mod npm;
 pub mod oci;
 pub mod pypi;

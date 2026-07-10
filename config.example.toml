@@ -1,7 +1,7 @@
 listen_addr = "127.0.0.1:3000"
 database_path = "mirrorproxy.sqlite3"
 public_base_url = "http://127.0.0.1:3000"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -13,6 +13,7 @@ quay = "https://quay.io"
 kubernetes = "https://registry.k8s.io"
 npm = "https://registry.npmjs.org"
 go_proxy = "https://proxy.golang.org"
+maven = "https://repo.maven.apache.org/maven2"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
