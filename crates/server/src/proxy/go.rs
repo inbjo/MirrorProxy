@@ -10,7 +10,7 @@ use crate::{proxy, AppState};
 use super::ProxyError;
 
 pub async fn root(State(state): State<AppState>) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("go") {
+    if !state.config().is_enabled("go") {
         return Err(ProxyError::Disabled("go"));
     }
 
@@ -29,14 +29,15 @@ pub async fn proxy(
     Path(path): Path<String>,
     request: axum::extract::Request,
 ) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("go") {
+    let config = state.config();
+    if !config.is_enabled("go") {
         return Err(ProxyError::Disabled("go"));
     }
 
     let clean_path = sanitize_go_proxy_path(&path)?;
     let upstream_path = format!("/{clean_path}");
     let url = proxy::build_url(
-        &state.config.upstreams.go_proxy,
+        &config.upstreams.go_proxy,
         &upstream_path,
         request.uri().query(),
     )?;

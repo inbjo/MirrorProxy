@@ -9,7 +9,7 @@ use std::{
     fs,
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 
@@ -121,15 +121,23 @@ enum ConfigCommand {
 
 #[derive(Clone)]
 pub struct AppState {
-    config: Arc<Config>,
+    config: Arc<RwLock<Config>>,
     database: Arc<Database>,
     client: Client,
-    rate_limiter: Option<Arc<RateLimiter>>,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 pub struct RateLimiter {
-    requests_per_minute: u32,
     window: Mutex<VecDeque<Instant>>,
+}
+
+impl AppState {
+    pub fn config(&self) -> Config {
+        self.config
+            .read()
+            .expect("runtime config lock poisoned")
+            .clone()
+    }
 }
 
 #[tokio::main]
@@ -986,6 +994,13 @@ fn init_tracing() {
 }
 
 async fn build_router(config: Config) -> anyhow::Result<Router> {
+    let database_path = if cfg!(test) {
+        ":memory:"
+    } else {
+        &config.database_path
+    };
+    let (database, initial_admin) = Database::open(database_path).await?;
+    let config = database.load_or_seed_runtime_config(config).await?;
     let request_timeout = Duration::from_secs(config.timeout.request_secs);
     let client = Client::builder()
         .user_agent(format!("MirrorProxy/{}", env!("CARGO_PKG_VERSION")))
@@ -993,12 +1008,6 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .timeout(request_timeout)
         .build()?;
 
-    let database_path = if cfg!(test) {
-        ":memory:"
-    } else {
-        &config.database_path
-    };
-    let (database, initial_admin) = Database::open(database_path).await?;
     if let Some(credentials) = initial_admin {
         tracing::warn!(
             username = credentials.username,
@@ -1008,11 +1017,8 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     }
 
     let state = AppState {
-        rate_limiter: config
-            .rate_limit
-            .enabled
-            .then(|| Arc::new(RateLimiter::new(config.rate_limit.requests_per_minute))),
-        config: Arc::new(config),
+        rate_limiter: Arc::new(RateLimiter::new()),
+        config: Arc::new(RwLock::new(config)),
         database: Arc::new(database),
         client,
     };
@@ -1024,7 +1030,10 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/api/public-config", get(public_config))
         .route("/api/admin/login", post(admin_login))
         .route("/api/admin/logout", post(admin_logout))
-        .route("/api/admin/config", get(admin_config))
+        .route(
+            "/api/admin/config",
+            get(admin_config).put(update_admin_config),
+        )
         .route("/api/sources", get(source_catalog))
         .route("/composer", get(composer::root))
         .route("/composer/", get(composer::root))
@@ -1078,21 +1087,20 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
 }
 
 impl RateLimiter {
-    fn new(requests_per_minute: u32) -> Self {
+    fn new() -> Self {
         Self {
-            requests_per_minute,
             window: Mutex::new(VecDeque::new()),
         }
     }
 
-    fn check(&self, now: Instant) -> bool {
+    fn check(&self, requests_per_minute: u32, now: Instant) -> bool {
         let cutoff = now - Duration::from_secs(60);
         let mut window = self.window.lock().expect("rate limit mutex poisoned");
         while window.front().is_some_and(|timestamp| *timestamp <= cutoff) {
             window.pop_front();
         }
 
-        if window.len() >= self.requests_per_minute as usize {
+        if window.len() >= requests_per_minute as usize {
             return false;
         }
 
@@ -1106,29 +1114,32 @@ async fn rate_limit_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    if let Some(rate_limiter) = &state.rate_limiter {
-        if !rate_limiter.check(Instant::now()) {
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                [(header::RETRY_AFTER, HeaderValue::from_static("60"))],
-                Json(serde_json::json!({
-                    "error": "rate limit exceeded"
-                })),
-            )
-                .into_response();
-        }
+    let config = state.config();
+    if config.rate_limit.enabled
+        && !state
+            .rate_limiter
+            .check(config.rate_limit.requests_per_minute, Instant::now())
+    {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, HeaderValue::from_static("60"))],
+            Json(serde_json::json!({
+                "error": "rate limit exceeded"
+            })),
+        )
+            .into_response();
     }
 
-    if quota_exceeded_for_request(&state, request.uri().path()) {
+    if quota_exceeded_for_request(&config, request.uri().path()) {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             [(header::RETRY_AFTER, HeaderValue::from_static("3600"))],
             Json(serde_json::json!({
                 "error": "monthly traffic quota exceeded",
                 "quota": {
-                    "monthly_gb": state.config.quota.monthly_gb,
-                    "timezone": state.config.quota.timezone,
-                    "on_exceeded": state.config.quota.on_exceeded
+                    "monthly_gb": config.quota.monthly_gb,
+                    "timezone": config.quota.timezone,
+                    "on_exceeded": config.quota.on_exceeded
                 }
             })),
         )
@@ -1138,8 +1149,8 @@ async fn rate_limit_middleware(
     next.run(request).await
 }
 
-fn quota_exceeded_for_request(state: &AppState, path: &str) -> bool {
-    state.config.quota.enabled && state.config.quota.monthly_gb == 0 && is_proxy_path(path)
+fn quota_exceeded_for_request(config: &Config, path: &str) -> bool {
+    config.quota.enabled && config.quota.monthly_gb == 0 && is_proxy_path(path)
 }
 
 fn is_proxy_path(path: &str) -> bool {
@@ -1191,14 +1202,15 @@ struct PublicQuotaConfig {
 }
 
 async fn public_config(State(state): State<AppState>) -> impl IntoResponse {
+    let config = state.config();
     Json(PublicConfig {
-        public_base_url: state.config.public_base_url.clone(),
-        enabled_proxies: state.config.enabled_proxies.clone(),
+        public_base_url: config.public_base_url.clone(),
+        enabled_proxies: config.enabled_proxies.clone(),
         quota: PublicQuotaConfig {
-            enabled: state.config.quota.enabled,
-            monthly_gb: state.config.quota.monthly_gb,
-            timezone: state.config.quota.timezone.clone(),
-            on_exceeded: state.config.quota.on_exceeded.clone(),
+            enabled: config.quota.enabled,
+            monthly_gb: config.quota.monthly_gb,
+            timezone: config.quota.timezone.clone(),
+            on_exceeded: config.quota.on_exceeded.clone(),
         },
     })
 }
@@ -1260,13 +1272,77 @@ async fn admin_logout(headers: HeaderMap, State(state): State<AppState>) -> Resp
 
 async fn admin_config(headers: HeaderMap, State(state): State<AppState>) -> Response {
     match is_admin_authorized(&headers, &state).await {
-        Ok(true) => Json(state.config.as_ref()).into_response(),
+        Ok(true) => Json(state.config()).into_response(),
         Ok(false) => unauthorized_response(),
         Err(error) => {
             tracing::error!(%error, "administrator authorization query failed");
             internal_error_response()
         }
     }
+}
+
+#[derive(Serialize)]
+struct AdminConfigUpdateResponse {
+    config: Config,
+    restart_required: Vec<&'static str>,
+}
+
+async fn update_admin_config(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(next_config): Json<Config>,
+) -> Response {
+    let Some(token) = bearer_token(&headers) else {
+        return unauthorized_response();
+    };
+    let authorized = match state.database.authorize(token).await {
+        Ok(authorized) => authorized,
+        Err(error) => {
+            tracing::error!(%error, "administrator authorization query failed");
+            return internal_error_response();
+        }
+    };
+    if !authorized {
+        return unauthorized_response();
+    }
+
+    if let Err(error) = next_config.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response();
+    }
+    let current = state.config();
+    if next_config.listen_addr != current.listen_addr
+        || next_config.database_path != current.database_path
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "listen_addr and database_path cannot be changed through the runtime API; update the service configuration and restart"
+            })),
+        )
+            .into_response();
+    }
+    let restart_required = (next_config.timeout.request_secs != current.timeout.request_secs)
+        .then_some("timeout.request_secs")
+        .into_iter()
+        .collect::<Vec<_>>();
+    if let Err(error) = state
+        .database
+        .save_runtime_config("admin", &next_config, "update runtime configuration")
+        .await
+    {
+        tracing::error!(%error, "failed to save runtime configuration");
+        return internal_error_response();
+    }
+    *state.config.write().expect("runtime config lock poisoned") = next_config.clone();
+    Json(AdminConfigUpdateResponse {
+        config: next_config,
+        restart_required,
+    })
+    .into_response()
 }
 
 async fn is_admin_authorized(headers: &HeaderMap, state: &AppState) -> anyhow::Result<bool> {
@@ -1861,6 +1937,48 @@ on_exceeded = "stop_proxy"
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn admin_config_update_persists_and_applies_runtime_values() {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let credentials = credentials.unwrap();
+        let initial_config = Config::default();
+        database
+            .load_or_seed_runtime_config(initial_config.clone())
+            .await
+            .unwrap();
+        let state = AppState {
+            config: Arc::new(RwLock::new(initial_config)),
+            database: Arc::new(database.clone()),
+            client: Client::new(),
+            rate_limiter: Arc::new(RateLimiter::new()),
+        };
+        let session = database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {}", session.token).parse().unwrap(),
+        );
+        let mut next_config = state.config();
+        next_config.public_base_url = "https://mirror.example".to_string();
+        next_config.enabled_proxies = vec!["npm".to_string()];
+
+        let response = update_admin_config(headers, State(state.clone()), Json(next_config)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(state.config().public_base_url, "https://mirror.example");
+        assert_eq!(state.config().enabled_proxies, ["npm"]);
+
+        let reloaded = database
+            .load_or_seed_runtime_config(Config::default())
+            .await
+            .unwrap();
+        assert_eq!(reloaded.public_base_url, "https://mirror.example");
+        assert_eq!(reloaded.enabled_proxies, ["npm"]);
     }
 
     #[tokio::test]

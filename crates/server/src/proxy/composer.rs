@@ -31,13 +31,14 @@ async fn proxy_composer_path(
     query: Option<&str>,
     request: Option<axum::extract::Request>,
 ) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("composer") {
+    let config = state.config();
+    if !config.is_enabled("composer") {
         return Err(ProxyError::Disabled("composer"));
     }
 
     let clean_path = sanitize_path(path)?;
     let upstream_path = format!("/{clean_path}");
-    let url = proxy::build_url(&state.config.upstreams.packagist, &upstream_path, query)?;
+    let url = proxy::build_url(&config.upstreams.packagist, &upstream_path, query)?;
     let method = request
         .as_ref()
         .map(|req| req.method().clone())
@@ -101,7 +102,7 @@ fn rewrite_json_response(
     bytes: Bytes,
 ) -> Result<Response, ProxyError> {
     let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| ProxyError::InvalidUrl)?;
-    rewrite_urls(&mut value, &state.config.public_base_url);
+    rewrite_urls(&mut value, &state.config().public_base_url);
     let body = serde_json::to_vec(&value).map_err(|_| ProxyError::InvalidUrl)?;
 
     Response::builder()

@@ -15,6 +15,8 @@ use sqlx::{
     Row, SqlitePool,
 };
 
+use crate::config::Config;
+
 const SESSION_LIFETIME_SECS: i64 = 24 * 60 * 60;
 
 #[derive(Clone)]
@@ -148,6 +150,53 @@ impl Database {
             .await?;
         Ok(())
     }
+
+    pub async fn load_or_seed_runtime_config(&self, fallback: Config) -> anyhow::Result<Config> {
+        let row = sqlx::query("SELECT value FROM settings WHERE key = 'runtime_config'")
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else {
+            self.save_runtime_config("system", &fallback, "seed runtime configuration")
+                .await?;
+            return Ok(fallback);
+        };
+        let value: String = row.try_get("value")?;
+        let config: Config =
+            serde_json::from_str(&value).context("stored runtime configuration is invalid JSON")?;
+        config
+            .validate()
+            .context("stored runtime configuration is invalid")?;
+        Ok(config)
+    }
+
+    pub async fn save_runtime_config(
+        &self,
+        username: &str,
+        config: &Config,
+        action: &str,
+    ) -> anyhow::Result<()> {
+        let value = serde_json::to_string(config)?;
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO settings (key, value, version, updated_at) VALUES ('runtime_config', ?, 1, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, version = settings.version + 1, updated_at = excluded.updated_at",
+        )
+        .bind(value)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, ?, ?)",
+        )
+        .bind(now)
+        .bind(username)
+        .bind(action)
+        .bind("runtime_config")
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
 }
 
 fn ensure_parent_directory(database_path: &str) -> anyhow::Result<()> {
@@ -237,5 +286,30 @@ mod tests {
         assert!(database.authorize(&session.token).await.unwrap());
         database.logout(&session.token).await.unwrap();
         assert!(!database.authorize(&session.token).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn seeds_and_reloads_runtime_config() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let mut config = Config {
+            public_base_url: "https://mirror.example".to_string(),
+            ..Config::default()
+        };
+        let seeded = database
+            .load_or_seed_runtime_config(config.clone())
+            .await
+            .unwrap();
+        assert_eq!(seeded.public_base_url, "https://mirror.example");
+
+        config.quota.monthly_gb = 42;
+        database
+            .save_runtime_config("admin", &config, "update runtime configuration")
+            .await
+            .unwrap();
+        let loaded = database
+            .load_or_seed_runtime_config(Config::default())
+            .await
+            .unwrap();
+        assert_eq!(loaded.quota.monthly_gb, 42);
     }
 }

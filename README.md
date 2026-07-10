@@ -224,6 +224,13 @@ random password for the `admin` account in the local startup log. Use it with
 <token>` to protected endpoints such as `GET /api/admin/config`. The password is
 stored only as an Argon2 hash; keep the startup output private.
 
+`PUT /api/admin/config` accepts a validated full configuration document and
+persists it in SQLite with an audit record. Public URL, enabled adapters,
+upstreams, quota, and rate-limit settings apply to new requests immediately.
+Changing `timeout.request_secs` is persisted but reported as restart-required;
+`listen_addr` and `database_path` must be changed in the service configuration
+and cannot be changed through this API.
+
 Optional global rate limiting can be enabled with:
 
 ```toml

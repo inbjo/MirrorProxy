@@ -25,7 +25,7 @@ pub async fn proxy(
     State(state): State<AppState>,
     request: axum::extract::Request,
 ) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("github") {
+    if !state.config().is_enabled("github") {
         return Err(ProxyError::Disabled("github"));
     }
 

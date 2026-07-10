@@ -27,14 +27,15 @@ pub async fn file(
     Path(path): Path<String>,
     request: axum::extract::Request,
 ) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("pypi") {
+    let config = state.config();
+    if !config.is_enabled("pypi") {
         return Err(ProxyError::Disabled("pypi"));
     }
 
     let clean_path = sanitize_path(&path)?;
     let upstream_path = format!("/{clean_path}");
     let url = proxy::build_url(
-        &state.config.upstreams.pypi_files,
+        &config.upstreams.pypi_files,
         &upstream_path,
         request.uri().query(),
     )?;
@@ -48,7 +49,8 @@ async fn proxy_simple_path(
     query: Option<&str>,
     request: Option<axum::extract::Request>,
 ) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("pypi") {
+    let config = state.config();
+    if !config.is_enabled("pypi") {
         return Err(ProxyError::Disabled("pypi"));
     }
 
@@ -58,7 +60,7 @@ async fn proxy_simple_path(
     } else {
         format!("/{clean_path}")
     };
-    let url = proxy::build_url(&state.config.upstreams.pypi_simple, &upstream_path, query)?;
+    let url = proxy::build_url(&config.upstreams.pypi_simple, &upstream_path, query)?;
     let response = state.client.get(url).send().await?;
     let status = response.status();
     let content_type = response
@@ -71,7 +73,7 @@ async fn proxy_simple_path(
 
     if status.is_success() && content_type.contains("html") {
         let html = String::from_utf8_lossy(&bytes);
-        let body = rewrite_file_links(&html, &state.config.public_base_url);
+        let body = rewrite_file_links(&html, &config.public_base_url);
         return Response::builder()
             .status(status)
             .header(header::CACHE_CONTROL, super::metadata_cache_value())
@@ -92,8 +94,7 @@ async fn proxy_simple_path(
         .as_ref()
         .map(|req| req.method().clone())
         .unwrap_or(axum::http::Method::GET);
-    let fallback_url =
-        proxy::build_url(&state.config.upstreams.pypi_simple, &upstream_path, query)?;
+    let fallback_url = proxy::build_url(&config.upstreams.pypi_simple, &upstream_path, query)?;
     proxy::forward(&state, method, fallback_url, &headers).await
 }
 

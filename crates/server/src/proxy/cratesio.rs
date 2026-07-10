@@ -28,18 +28,15 @@ pub async fn download(
     Path((krate, version)): Path<(String, String)>,
     request: axum::extract::Request,
 ) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("crates") {
+    let config = state.config();
+    if !config.is_enabled("crates") {
         return Err(ProxyError::Disabled("crates"));
     }
 
     let krate = sanitize_segment(&krate)?;
     let version = sanitize_segment(&version)?;
     let path = format!("/api/v1/crates/{krate}/{version}/download");
-    let url = proxy::build_url(
-        &state.config.upstreams.crates_api,
-        &path,
-        request.uri().query(),
-    )?;
+    let url = proxy::build_url(&config.upstreams.crates_api, &path, request.uri().query())?;
 
     proxy::forward(&state, request.method().clone(), url, request.headers()).await
 }
@@ -50,15 +47,16 @@ async fn proxy_index_path(
     query: Option<&str>,
     request: Option<axum::extract::Request>,
 ) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("crates") {
+    let config = state.config();
+    if !config.is_enabled("crates") {
         return Err(ProxyError::Disabled("crates"));
     }
 
     let clean_path = sanitize_index_path(path)?;
     if clean_path == "config.json" {
         let body = json!({
-            "dl": format!("{}/crates/api/v1/crates", state.config.public_base_url),
-            "api": state.config.public_base_url,
+            "dl": format!("{}/crates/api/v1/crates", config.public_base_url),
+            "api": config.public_base_url,
         });
 
         return Response::builder()
@@ -73,7 +71,7 @@ async fn proxy_index_path(
     }
 
     let upstream_path = format!("/{clean_path}");
-    let url = proxy::build_url(&state.config.upstreams.crates_index, &upstream_path, query)?;
+    let url = proxy::build_url(&config.upstreams.crates_index, &upstream_path, query)?;
     let headers = request
         .as_ref()
         .map(|req| req.headers())

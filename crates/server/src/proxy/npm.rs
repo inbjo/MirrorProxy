@@ -31,7 +31,8 @@ async fn proxy_npm_path(
     query: Option<&str>,
     request: Option<axum::extract::Request>,
 ) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("npm") {
+    let config = state.config();
+    if !config.is_enabled("npm") {
         return Err(ProxyError::Disabled("npm"));
     }
 
@@ -41,7 +42,7 @@ async fn proxy_npm_path(
     } else {
         format!("/{clean_path}")
     };
-    let url = proxy::build_url(&state.config.upstreams.npm, &upstream_path, query)?;
+    let url = proxy::build_url(&config.upstreams.npm, &upstream_path, query)?;
     let method = request
         .as_ref()
         .map(|req| req.method().clone())
@@ -98,7 +99,7 @@ fn rewrite_json_response(
     bytes: Bytes,
 ) -> Result<Response, ProxyError> {
     let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| ProxyError::InvalidUrl)?;
-    rewrite_tarball_urls(&mut value, &state.config.public_base_url);
+    rewrite_tarball_urls(&mut value, &state.config().public_base_url);
     let body = serde_json::to_vec(&value).map_err(|_| ProxyError::InvalidUrl)?;
 
     Response::builder()

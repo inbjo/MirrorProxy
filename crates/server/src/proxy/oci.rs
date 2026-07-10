@@ -28,7 +28,7 @@ pub enum OciRegistry {
 }
 
 pub async fn root(State(state): State<AppState>) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("oci") {
+    if !state.config().is_enabled("oci") {
         return Err(ProxyError::Disabled("oci"));
     }
 
@@ -47,12 +47,13 @@ pub async fn proxy(
     Path(path): Path<String>,
     request: axum::extract::Request,
 ) -> Result<Response, ProxyError> {
-    if !state.config.is_enabled("oci") {
+    let config = state.config();
+    if !config.is_enabled("oci") {
         return Err(ProxyError::Disabled("oci"));
     }
 
     let target = parse_oci_path(&path)?;
-    let upstream = build_upstream_url(&state.config.upstreams, &target, request.uri().query())?;
+    let upstream = build_upstream_url(&config.upstreams, &target, request.uri().query())?;
     forward_with_public_auth(
         &state,
         request.method().clone(),
