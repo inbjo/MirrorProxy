@@ -26,7 +26,7 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use proxy::{composer, cratesio, github, go, npm, oci, pypi, ProxyError};
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -70,7 +70,7 @@ enum SourcesCommand {
         #[arg(long)]
         base_url: Option<String>,
     },
-    /// Preview changing a local source target to a mirror.
+    /// Change a local source target to a mirror.
     Set {
         target: String,
         #[arg(long, default_value = "mirrorproxy")]
@@ -79,14 +79,26 @@ enum SourcesCommand {
         base_url: Option<String>,
         #[arg(long, default_value = "user")]
         scope: String,
+        /// Override the home directory used to locate user-level configuration files.
+        #[arg(long)]
+        config_root: Option<PathBuf>,
+        /// Replace a non-empty target configuration file after creating a rollback record.
+        #[arg(long)]
+        force: bool,
         #[arg(long)]
         dry_run: bool,
     },
-    /// Preview resetting a local source target to its default source.
+    /// Restore a local source target from MirrorProxy's rollback record.
     Reset {
         target: String,
         #[arg(long, default_value = "user")]
         scope: String,
+        /// Override the home directory used to locate user-level configuration files.
+        #[arg(long)]
+        config_root: Option<PathBuf>,
+        /// Restore even when the managed file was changed after `sources set`.
+        #[arg(long)]
+        force: bool,
         #[arg(long)]
         dry_run: bool,
     },
@@ -571,38 +583,48 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
             mirror,
             base_url,
             scope,
+            config_root,
+            force,
             dry_run,
         } => {
-            if !dry_run {
-                anyhow::bail!(
-                    "sources set currently supports preview only; pass --dry-run to print the planned command"
-                );
-            }
             let command = plan_source_set_command(&target, &mirror, base_url.as_deref())?;
+            validate_user_scope(&scope)?;
             println!("target: {}", command.target_code);
             println!("mirror: {}", command.provider_code);
             println!("scope: {scope}");
             println!("repository: {}", command.repo_url);
-            println!("dry_run: true");
-            println!("command:");
-            print_source_command(command.provider_code, &command.command);
+            if dry_run {
+                println!("dry_run: true");
+                println!("command:");
+                print_source_command(command.provider_code, &command.command);
+            } else {
+                let config_root = source_config_root(config_root)?;
+                let applied = apply_source_set(&command, &config_root, force)?;
+                println!("config: {}", applied.config_path.display());
+                println!("rollback: {}", applied.rollback_path.display());
+            }
         }
         SourcesCommand::Reset {
             target,
             scope,
+            config_root,
+            force,
             dry_run,
         } => {
-            if !dry_run {
-                anyhow::bail!(
-                    "sources reset currently supports preview only; pass --dry-run to print the planned reset"
-                );
-            }
             let command = plan_source_reset_command(&target)?;
+            validate_user_scope(&scope)?;
             println!("target: {}", command.target_code);
             println!("scope: {scope}");
-            println!("dry_run: true");
-            println!("command:");
-            print_source_command("default", &command.command);
+            if dry_run {
+                println!("dry_run: true");
+                println!("command:");
+                print_source_command("default", &command.command);
+            } else {
+                let config_root = source_config_root(config_root)?;
+                let restored = apply_source_reset(command.target_code, &config_root, force)?;
+                println!("config: {}", restored.display());
+                println!("restored: true");
+            }
         }
     }
 
@@ -619,6 +641,208 @@ struct PlannedSourceCommand {
 struct PlannedResetCommand {
     target_code: &'static str,
     command: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SourceRollback {
+    target_code: String,
+    config_path: PathBuf,
+    original_content: Option<String>,
+    expected_content: String,
+}
+
+struct AppliedSource {
+    config_path: PathBuf,
+    rollback_path: PathBuf,
+}
+
+fn validate_user_scope(scope: &str) -> anyhow::Result<()> {
+    match scope {
+        "user" => Ok(()),
+        "system" => anyhow::bail!(
+            "system scope is not implemented yet; use --scope user or configure the system package manager manually"
+        ),
+        other => anyhow::bail!("unknown scope '{other}', expected user or system"),
+    }
+}
+
+fn source_config_root(config_root: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    config_root
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .ok_or_else(|| {
+            anyhow::anyhow!("cannot determine home directory; pass --config-root <PATH>")
+        })
+}
+
+fn apply_source_set(
+    command: &PlannedSourceCommand,
+    config_root: &Path,
+    force: bool,
+) -> anyhow::Result<AppliedSource> {
+    if command.repo_url.contains("${MIRRORPROXY_BASE_URL}") {
+        anyhow::bail!("setting the MirrorProxy provider requires --base-url <http://host[:port]>");
+    }
+    let config_path = source_config_path(command.target_code, config_root)?;
+    let rollback_path = source_rollback_path(command.target_code, config_root);
+    if rollback_path.exists() {
+        anyhow::bail!(
+            "a managed {} source already exists; run `mirrorproxy sources reset {}` before setting it again",
+            command.target_code,
+            command.target_code
+        );
+    }
+
+    let original_content = read_optional_file(&config_path)?;
+    if original_content
+        .as_deref()
+        .is_some_and(|content| !content.trim().is_empty())
+        && !force
+    {
+        anyhow::bail!(
+            "{} already contains user configuration; rerun with --force to replace it after recording a rollback",
+            config_path.display()
+        );
+    }
+
+    let expected_content = source_config_content(command.target_code, &command.repo_url)?;
+    write_atomic(&config_path, &expected_content)?;
+    let rollback = SourceRollback {
+        target_code: command.target_code.to_string(),
+        config_path: config_path.clone(),
+        original_content,
+        expected_content,
+    };
+    let rollback_content = serde_json::to_string_pretty(&rollback)?;
+    if let Err(error) = write_atomic(&rollback_path, &rollback_content) {
+        let _ = restore_original_file(&config_path, rollback.original_content.as_deref());
+        return Err(error)
+            .context("failed to save source rollback record; configuration was restored");
+    }
+
+    Ok(AppliedSource {
+        config_path,
+        rollback_path,
+    })
+}
+
+fn apply_source_reset(
+    target_code: &str,
+    config_root: &Path,
+    force: bool,
+) -> anyhow::Result<PathBuf> {
+    let rollback_path = source_rollback_path(target_code, config_root);
+    let raw = fs::read_to_string(&rollback_path).with_context(|| {
+        format!(
+            "no rollback record for {target_code}; {} has not been changed by MirrorProxy",
+            rollback_path.display()
+        )
+    })?;
+    let rollback: SourceRollback = serde_json::from_str(&raw)
+        .with_context(|| format!("invalid rollback record {}", rollback_path.display()))?;
+    if rollback.target_code != target_code {
+        anyhow::bail!("rollback record does not match target '{target_code}'");
+    }
+
+    let current = read_optional_file(&rollback.config_path)?;
+    if current.as_deref() != Some(rollback.expected_content.as_str()) && !force {
+        anyhow::bail!(
+            "{} changed after `sources set`; refusing to overwrite it without --force",
+            rollback.config_path.display()
+        );
+    }
+    restore_original_file(&rollback.config_path, rollback.original_content.as_deref())?;
+    fs::remove_file(&rollback_path).with_context(|| {
+        format!(
+            "failed to remove rollback record {}",
+            rollback_path.display()
+        )
+    })?;
+    Ok(rollback.config_path)
+}
+
+fn source_config_path(target_code: &str, config_root: &Path) -> anyhow::Result<PathBuf> {
+    let relative_path = match target_code {
+        "npm" => ".npmrc",
+        "pip" => ".config/pip/pip.conf",
+        "cargo" => ".cargo/config.toml",
+        "go" => ".config/go/env",
+        "composer" => ".config/composer/config.json",
+        other => anyhow::bail!(
+            "{} does not yet support safe user-scope configuration writes",
+            other
+        ),
+    };
+    Ok(config_root.join(relative_path))
+}
+
+fn source_rollback_path(target_code: &str, config_root: &Path) -> PathBuf {
+    config_root
+        .join(".local/state/mirrorproxy/sources")
+        .join(format!("{target_code}.json"))
+}
+
+fn source_config_content(target_code: &str, repo_url: &str) -> anyhow::Result<String> {
+    match target_code {
+        "npm" => Ok(format!("registry={repo_url}\n")),
+        "pip" => Ok(format!("[global]\nindex-url = {repo_url}\n")),
+        "cargo" => source_config_command("cargo", repo_url)
+            .map(|content| format!("{content}\n"))
+            .ok_or_else(|| anyhow::anyhow!("missing Cargo configuration template")),
+        "go" => Ok(format!("GOPROXY={repo_url},direct\n")),
+        "composer" => Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "repositories": {
+                "packagist": { "type": "composer", "url": repo_url }
+            }
+        }))? + "\n"),
+        other => anyhow::bail!("no user-scope configuration writer for {other}"),
+    }
+}
+
+fn read_optional_file(path: &Path) -> anyhow::Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
+fn restore_original_file(path: &Path, original_content: Option<&str>) -> anyhow::Result<()> {
+    match original_content {
+        Some(content) => write_atomic(path, content),
+        None => match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                Err(error).with_context(|| format!("failed to remove {}", path.display()))
+            }
+        },
+    }
+}
+
+fn write_atomic(path: &Path, content: &str) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;
+    fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "failed to create configuration directory {}",
+            parent.display()
+        )
+    })?;
+    let temporary_path = path.with_extension(format!(
+        "{}.mirrorproxy-tmp",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("tmp")
+    ));
+    fs::write(&temporary_path, content).with_context(|| {
+        format!(
+            "failed to write temporary file {}",
+            temporary_path.display()
+        )
+    })?;
+    fs::rename(&temporary_path, path)
+        .with_context(|| format!("failed to replace {}", path.display()))
 }
 
 fn plan_source_set_command(
@@ -1301,6 +1525,92 @@ on_exceeded = "stop_proxy"
 
         assert!(plan_source_reset_command("github").is_err());
         assert!(plan_source_reset_command("missing").is_err());
+    }
+
+    #[test]
+    fn source_set_and_reset_manage_user_config_with_rollback() {
+        let directory =
+            std::env::temp_dir().join(format!("mirrorproxy-sources-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+
+        for target_code in ["npm", "pip", "cargo", "go", "composer"] {
+            let command = PlannedSourceCommand {
+                target_code,
+                provider_code: "mirrorproxy",
+                repo_url: format!("https://mirror.example/{target_code}/"),
+                command: String::new(),
+            };
+            let applied = apply_source_set(&command, &directory, false).unwrap();
+            assert!(applied.config_path.is_file());
+            assert!(applied.rollback_path.is_file());
+            assert!(fs::read_to_string(&applied.config_path)
+                .unwrap()
+                .contains("mirror.example"));
+
+            let restored = apply_source_reset(target_code, &directory, false).unwrap();
+            assert_eq!(restored, applied.config_path);
+            assert!(!restored.exists());
+            assert!(!applied.rollback_path.exists());
+        }
+
+        fs::write(directory.join(".npmrc"), "registry=https://user.example/\n").unwrap();
+        let npm = PlannedSourceCommand {
+            target_code: "npm",
+            provider_code: "mirrorproxy",
+            repo_url: "https://mirror.example/npm/".to_string(),
+            command: String::new(),
+        };
+        assert!(apply_source_set(&npm, &directory, false).is_err());
+        let applied = apply_source_set(&npm, &directory, true).unwrap();
+        apply_source_reset("npm", &directory, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(applied.config_path).unwrap(),
+            "registry=https://user.example/\n"
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn source_set_rejects_unresolved_mirrorproxy_url() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrorproxy-source-url-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        let command = PlannedSourceCommand {
+            target_code: "npm",
+            provider_code: "mirrorproxy",
+            repo_url: "${MIRRORPROXY_BASE_URL}/npm/".to_string(),
+            command: String::new(),
+        };
+
+        assert!(apply_source_set(&command, &directory, false).is_err());
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn source_reset_refuses_post_set_changes_without_force() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrorproxy-source-conflict-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        let command = PlannedSourceCommand {
+            target_code: "npm",
+            provider_code: "mirrorproxy",
+            repo_url: "https://mirror.example/npm/".to_string(),
+            command: String::new(),
+        };
+        let applied = apply_source_set(&command, &directory, false).unwrap();
+        fs::write(&applied.config_path, "registry=https://changed.example/\n").unwrap();
+
+        assert!(apply_source_reset("npm", &directory, false).is_err());
+        apply_source_reset("npm", &directory, true).unwrap();
+        assert!(!applied.config_path.exists());
+
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]

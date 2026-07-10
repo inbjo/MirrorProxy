@@ -157,6 +157,24 @@ mirrorproxy --config ./config.toml config set public_base_url https://mirror.exa
 mirrorproxy --config ./config.toml config set quota.monthly_gb 100 --dry-run
 ```
 
+## 本机改源 CLI
+
+`sources set` 会直接写入用户级 npm、pip、Cargo、Go 或 Composer 配置，不依赖
+执行包管理器命令。首次写入前会把完整原文件记录到
+`~/.local/state/mirrorproxy/sources/`，`sources reset` 可精确恢复。非空配置默认
+拒绝覆盖，必须显式使用 `--force`；如果 set 之后文件又被修改，reset 同样会拒绝
+覆盖，避免误删用户内容。
+
+```bash
+mirrorproxy sources set npm --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy sources set cargo --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy sources reset npm
+```
+
+自动化或测试可使用 `--config-root /tmp/mirrorproxy-home` 指定隔离的主目录。
+本轮暂不直接写入系统级包管理器文件和 Docker daemon 配置；目录中仍会展示对应的
+配置指引。
+
 复制 `config.example.toml` 并修改公开访问地址：
 
 ```toml

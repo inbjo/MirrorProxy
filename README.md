@@ -158,6 +158,26 @@ mirrorproxy --config ./config.toml config set public_base_url https://mirror.exa
 mirrorproxy --config ./config.toml config set quota.monthly_gb 100 --dry-run
 ```
 
+## Local Source CLI
+
+`sources set` writes user-level npm, pip, Cargo, Go, or Composer configuration
+without invoking the package-manager executable. Before its first change it
+records the complete previous file under `~/.local/state/mirrorproxy/sources/`;
+`sources reset` restores that exact file. A non-empty configuration is never
+replaced unless `--force` is explicit, and reset similarly refuses a file that
+was changed after the command.
+
+```bash
+mirrorproxy sources set npm --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy sources set cargo --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy sources reset npm
+```
+
+Use `--config-root /tmp/mirrorproxy-home` for an isolated home directory in
+automation or tests. System-level package-manager files and Docker daemon
+configuration are deliberately not written by this slice yet; their catalog
+entries remain available as generated guidance.
+
 Copy `config.example.toml` and adjust the public URL for your deployment:
 
 ```toml
