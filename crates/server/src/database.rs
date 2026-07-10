@@ -73,6 +73,14 @@ pub struct TrafficOverview {
     pub targets: Vec<TrafficTargetPoint>,
 }
 
+#[derive(Serialize)]
+pub struct AuditLogEntry {
+    pub created_at: i64,
+    pub username: String,
+    pub action: String,
+    pub detail: String,
+}
+
 impl Database {
     pub async fn open(
         database_path: &str,
@@ -402,6 +410,27 @@ impl Database {
             targets,
         })
     }
+
+    pub async fn recent_audit_log(&self, limit: u32) -> anyhow::Result<Vec<AuditLogEntry>> {
+        let limit = i64::from(limit.clamp(1, 100));
+        sqlx::query(
+            "SELECT created_at, username, action, detail FROM config_audit_log ORDER BY created_at DESC, id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok::<_, sqlx::Error>(AuditLogEntry {
+                created_at: row.try_get("created_at")?,
+                username: row.try_get("username")?,
+                action: row.try_get("action")?,
+                detail: row.try_get("detail")?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    }
 }
 
 fn as_u64(value: i64) -> u64 {
@@ -588,5 +617,19 @@ mod tests {
         assert_eq!(overview.error_count, 1);
         assert!(overview.quota_exceeded);
         assert_eq!(overview.targets[0].target_code, "npm");
+    }
+
+    #[tokio::test]
+    async fn returns_recent_audit_log() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        database
+            .save_runtime_config("admin", &Config::default(), "update runtime configuration")
+            .await
+            .unwrap();
+
+        let entries = database.recent_audit_log(10).await.unwrap();
+        assert!(entries.iter().any(|entry| entry.username == "admin"
+            && entry.action == "update runtime configuration"
+            && entry.detail == "runtime_config"));
     }
 }

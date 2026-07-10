@@ -1112,6 +1112,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             get(admin_config).put(update_admin_config),
         )
         .route("/api/admin/stats", get(admin_stats))
+        .route("/api/admin/audit-log", get(admin_audit_log))
         .route("/api/sources", get(source_catalog))
         .route("/composer", get(composer::root))
         .route("/composer/", get(composer::root))
@@ -1685,6 +1686,25 @@ async fn admin_stats(headers: HeaderMap, State(state): State<AppState>) -> Respo
         targets: overview.targets,
     })
     .into_response()
+}
+
+async fn admin_audit_log(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => {}
+        Ok(false) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator authorization query failed");
+            return internal_error_response();
+        }
+    }
+
+    match state.database.recent_audit_log(20).await {
+        Ok(entries) => Json(entries).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to query audit log");
+            internal_error_response()
+        }
+    }
 }
 
 async fn update_admin_config(
@@ -2470,6 +2490,42 @@ on_exceeded = "stop_proxy"
         assert_eq!(value["month"], month);
         assert_eq!(value["response_bytes"], 256);
         assert_eq!(value["targets"][0]["target_code"], "npm");
+    }
+
+    #[tokio::test]
+    async fn admin_audit_log_requires_authentication_and_returns_entries() {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let credentials = credentials.unwrap();
+        database
+            .save_runtime_config("admin", &Config::default(), "update runtime configuration")
+            .await
+            .unwrap();
+        let state = AppState {
+            config: Arc::new(RwLock::new(Config::default())),
+            database: Arc::new(database.clone()),
+            client: Client::new(),
+            rate_limiter: Arc::new(RateLimiter::new()),
+        };
+
+        let unauthenticated = admin_audit_log(HeaderMap::new(), State(state.clone())).await;
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+        let session = database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {}", session.token).parse().unwrap(),
+        );
+        let response = admin_audit_log(headers, State(state)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value[0]["username"], "admin");
+        assert_eq!(value[0]["detail"], "runtime_config");
     }
 
     #[tokio::test]

@@ -59,6 +59,12 @@ type AdminStats = {
   daily: Array<{ day: string; target_code: string; request_count: number; response_bytes: number; error_count: number }>
   targets: Array<{ target_code: string; request_count: number; response_bytes: number; error_count: number }>
 }
+type AuditLogEntry = {
+  created_at: number
+  username: string
+  action: string
+  detail: string
+}
 type SourceCatalog = {
   providers: MirrorProvider[]
   targets: SourceTarget[]
@@ -421,7 +427,7 @@ const byteLabel = (bytes: number | null) => {
 }
 
 function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: SourceCatalog | null; onClose: () => void }) {
-  const text = locale === 'zh'
+  const text: Record<string, string> = locale === 'zh'
     ? {
         title: '运行控制台', login: '管理员登录', password: '管理员密码', signIn: '登录', signOut: '退出登录',
         overview: '本月概览', sent: '已发送', remaining: '配额剩余', requests: '请求', errors: '错误',
@@ -442,12 +448,13 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         close: 'Close console', badLogin: 'Sign in failed. Check the administrator password.', saveError: 'Configuration save failed.', restart: 'These fields apply after restart:',
         quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is printed only in the local startup log.',
         security: 'Security', currentPassword: 'Current password', newPassword: 'New password (12 characters minimum)', changePassword: 'Change password and revoke all sessions', passwordChanged: 'Password changed. Sign in again with the new password.', passwordError: 'Password update failed. Check the current password.', passwordConfirm: 'This revokes every administrator session. Continue?',
-        generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', distribution: 'Distribution codename', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied',
+        generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', distribution: 'Distribution codename', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied', auditLog: 'Audit log', noAudit: 'No audit entries yet.',
       }
   const [token, setToken] = React.useState<string | null>(() => sessionStorage.getItem('mirrorproxy.admin-token'))
   const [password, setPassword] = React.useState('')
   const [draft, setDraft] = React.useState<AdminConfig | null>(null)
   const [stats, setStats] = React.useState<AdminStats | null>(null)
+  const [auditLog, setAuditLog] = React.useState<AuditLogEntry[]>([])
   const [error, setError] = React.useState<string | null>(null)
   const [saving, setSaving] = React.useState(false)
   const [passwordBusy, setPasswordBusy] = React.useState(false)
@@ -457,15 +464,17 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
 
   const load = React.useCallback(async (activeToken: string) => {
     const headers = { Authorization: `Bearer ${activeToken}` }
-    const [configResponse, statsResponse] = await Promise.all([
+    const [configResponse, statsResponse, auditResponse] = await Promise.all([
       fetch('/api/admin/config', { headers }),
       fetch('/api/admin/stats', { headers }),
+      fetch('/api/admin/audit-log', { headers }),
     ])
-    if (configResponse.status === 401 || statsResponse.status === 401) throw new Error('unauthorized')
-    if (!configResponse.ok || !statsResponse.ok) throw new Error('load failed')
-    const [config, nextStats] = await Promise.all([configResponse.json() as Promise<AdminConfig>, statsResponse.json() as Promise<AdminStats>])
+    if (configResponse.status === 401 || statsResponse.status === 401 || auditResponse.status === 401) throw new Error('unauthorized')
+    if (!configResponse.ok || !statsResponse.ok || !auditResponse.ok) throw new Error('load failed')
+    const [config, nextStats, nextAuditLog] = await Promise.all([configResponse.json() as Promise<AdminConfig>, statsResponse.json() as Promise<AdminStats>, auditResponse.json() as Promise<AuditLogEntry[]>])
     setDraft(config)
     setStats(nextStats)
+    setAuditLog(nextAuditLog)
   }, [])
 
   React.useEffect(() => {
@@ -493,7 +502,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
   const signOut = async () => {
     if (token) await fetch('/api/admin/logout', { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => undefined)
     sessionStorage.removeItem('mirrorproxy.admin-token')
-    setToken(null); setDraft(null); setStats(null); setRestartRequired([])
+    setToken(null); setDraft(null); setStats(null); setAuditLog([]); setRestartRequired([])
   }
 
   const save = async () => {
@@ -551,6 +560,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
           <h4>{text.upstreams}</h4><div className="upstream-fields">{Object.entries(draft.upstreams).map(([key, value]) => <label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>)}</div>
           {catalog ? <SourceCommandGenerator catalog={catalog} baseUrl={draft.public_base_url} text={text} /> : null}
           <form className="security-form" onSubmit={changePassword}><div><h4><KeyRound size={14} /> {text.security}</h4><p>{text.passwordHint}</p></div><label>{text.currentPassword}<input required autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>{text.newPassword}<input required minLength={12} autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label><button className="danger-button" disabled={passwordBusy} type="submit"><KeyRound size={16} /> {text.changePassword}</button></form>
+          <section className="audit-log"><h4>{'auditLog' in text ? text.auditLog : 'Audit log'}</h4>{auditLog.length ? auditLog.slice(0, 8).map((entry) => <div className="audit-row" key={`${entry.created_at}-${entry.username}-${entry.action}`}><span>{new Date(entry.created_at * 1000).toLocaleString()}</span><strong>{entry.action}</strong><small>{entry.username} / {entry.detail}</small></div>) : <p className="empty-stat">{'noAudit' in text ? text.noAudit : 'No audit entries yet.'}</p>}</section>
         </section>
       </div> : null}
     </section>
