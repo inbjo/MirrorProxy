@@ -828,6 +828,7 @@ fn source_config_path(
             other => anyhow::bail!("{other} does not support safe user-scope configuration writes"),
         },
         CliSourceScope::System => match target_code {
+            "docker" => "etc/docker/daemon.json",
             "apt" => "etc/apt/sources.list.d/mirrorproxy.list",
             "dnf" => "etc/yum.repos.d/mirrorproxy.repo",
             "pacman" => "etc/pacman.d/mirrorproxy",
@@ -871,6 +872,9 @@ fn source_config_content(
             other => anyhow::bail!("no user-scope configuration writer for {other}"),
         },
         CliSourceScope::System => match target_code {
+            "docker" => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                "registry-mirrors": [docker_registry_mirror_url(repo_url)?]
+            }))? + "\n"),
             "apt" => {
                 let distribution = distribution.filter(|value| !value.trim().is_empty()).ok_or_else(|| {
                     anyhow::anyhow!("APT system scope requires --distribution <codename>, for example jammy or bookworm")
@@ -1022,6 +1026,18 @@ fn template_repo_url(target_code: &str, repo_url: &str) -> Option<String> {
         "docker" => Some(docker_registry_host(repo_url)?),
         _ => Some(repo_url.to_string()),
     }
+}
+
+fn docker_registry_mirror_url(repo_url: &str) -> anyhow::Result<String> {
+    let mut url = reqwest::Url::parse(repo_url)
+        .with_context(|| format!("invalid Docker registry URL {repo_url}"))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        anyhow::bail!("Docker registry mirror URL must use http or https and include a host");
+    }
+    url.set_path("");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
 fn render_source_template(template: &str, repo_url: &str) -> String {
@@ -2251,6 +2267,46 @@ on_exceeded = "stop_proxy"
         assert!(!applied.config_path.exists());
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn docker_system_source_set_writes_registry_mirror_and_rolls_back() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrorproxy-docker-source-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        let docker = PlannedSourceCommand {
+            target_code: "docker",
+            provider_code: "mirrorproxy",
+            repo_url: "https://mirror.example/v2/".to_string(),
+            command: String::new(),
+        };
+
+        assert!(apply_source_set(&docker, CliSourceScope::User, &directory, None, false).is_err());
+        let applied =
+            apply_source_set(&docker, CliSourceScope::System, &directory, None, false).unwrap();
+        assert_eq!(
+            applied.config_path,
+            directory.join("etc/docker/daemon.json")
+        );
+        assert_eq!(
+            fs::read_to_string(&applied.config_path).unwrap(),
+            "{\n  \"registry-mirrors\": [\n    \"https://mirror.example\"\n  ]\n}\n"
+        );
+        apply_source_reset("docker", CliSourceScope::System, &directory, false).unwrap();
+        assert!(!applied.config_path.exists());
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn docker_registry_mirror_url_removes_distribution_path() {
+        assert_eq!(
+            docker_registry_mirror_url("https://mirror.example/v2/?token=secret").unwrap(),
+            "https://mirror.example"
+        );
+        assert!(docker_registry_mirror_url("file:///etc/docker/daemon.json").is_err());
     }
 
     #[test]

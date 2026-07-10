@@ -582,7 +582,9 @@ function SourceCommandGenerator({ catalog, baseUrl, text }: { catalog: SourceCat
   const command = selected
     ? `mirrorproxy sources set ${target.code} --mirror ${activeMirror}${activeMirror === 'mirrorproxy' ? ` --base-url ${baseUrl.replace(/\/$/, '')}` : ''} --scope ${scope}${target?.code === 'apt' && scope === 'system' ? ` --distribution ${distribution}` : ''}`
     : `mirrorproxy sources get ${target?.code ?? targetCode}`
-  const executable = ['npm', 'pip', 'cargo', 'go', 'composer'].includes(target?.code ?? '') && scope === 'user'
+  const executable = scope === 'user'
+    ? ['npm', 'pip', 'cargo', 'go', 'composer'].includes(target?.code ?? '')
+    : ['apt', 'dnf', 'pacman', 'docker'].includes(target?.code ?? '')
 
   const copyGenerated = async () => {
     await copy(command)
@@ -590,7 +592,7 @@ function SourceCommandGenerator({ catalog, baseUrl, text }: { catalog: SourceCat
     window.setTimeout(() => setCopied(false), 1400)
   }
 
-  return <section className="source-generator"><div className="generator-head"><h4><Terminal size={14} /> {text.generator}</h4><span className={executable ? 'generator-status ready' : 'generator-status'}>{executable ? text.ready : text.guidance}</span></div><div className="generator-fields"><label>{text.target}<select value={target?.code ?? targetCode} onChange={(event) => { setTargetCode(event.target.value); setMirrorCode('mirrorproxy') }}>{catalog.targets.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label><label>{text.mirror}<select value={activeMirror} onChange={(event) => setMirrorCode(event.target.value)}>{sources.map((source) => <option key={source.provider_code} value={source.provider_code}>{source.provider_code}</option>)}</select></label><label>{text.scope}<select value={scope} onChange={(event) => setScope(event.target.value)}><option value="user">user</option><option value="system">system</option></select></label>{target?.code === 'apt' && scope === 'system' ? <label>{text.distribution}<input value={distribution} onChange={(event) => setDistribution(event.target.value)} /></label> : null}</div><div className="generator-command"><code>{command}</code><button onClick={copyGenerated}><Clipboard size={15} /> {copied ? text.copiedCommand : text.copyCommand}</button></div></section>
+  return <section className="source-generator"><div className="generator-head"><h4><Terminal size={14} /> {text.generator}</h4><span className={executable ? 'generator-status ready' : 'generator-status'}>{executable ? text.ready : text.guidance}</span></div><div className="generator-fields"><label>{text.target}<select value={target?.code ?? targetCode} onChange={(event) => { const nextTarget = catalog.targets.find((item) => item.code === event.target.value); setTargetCode(event.target.value); setMirrorCode('mirrorproxy'); setScope(nextTarget?.default_scope ?? 'user') }}>{catalog.targets.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label><label>{text.mirror}<select value={activeMirror} onChange={(event) => setMirrorCode(event.target.value)}>{sources.map((source) => <option key={source.provider_code} value={source.provider_code}>{source.provider_code}</option>)}</select></label><label>{text.scope}<select value={scope} onChange={(event) => setScope(event.target.value)}><option value="user">user</option><option value="system">system</option></select></label>{target?.code === 'apt' && scope === 'system' ? <label>{text.distribution}<input value={distribution} onChange={(event) => setDistribution(event.target.value)} /></label> : null}</div><div className="generator-command"><code>{command}</code><button onClick={copyGenerated}><Clipboard size={15} /> {copied ? text.copiedCommand : text.copyCommand}</button></div></section>
 }
 
 function SourceCatalogPanel({ catalog, labels }: { catalog: SourceCatalog; labels: Record<string, string> }) {

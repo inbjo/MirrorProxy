@@ -172,16 +172,19 @@ mirrorproxy sources reset npm
 ```
 
 自动化或测试可使用 `--config-root /tmp/mirrorproxy-home` 指定隔离的主目录。APT、
-DNF/YUM、pacman 额外支持显式的 `--scope system`：MirrorProxy 只会创建自身专用的
-托管文件，并在 `/var/lib/mirrorproxy/sources/`（或指定 root）保存 rollback 记录。APT
-必须提供发行版代号；系统级写入通常需要 root 权限。
+DNF/YUM、pacman 和 Docker 额外支持显式的 `--scope system`：MirrorProxy 只管理对应的
+配置文件，并在 `/var/lib/mirrorproxy/sources/`（或指定 root）保存 rollback 记录。
+APT 必须提供发行版代号；系统级写入通常需要 root 权限。
 
 ```bash
 mirrorproxy sources set apt --mirror tuna --scope system --distribution jammy
 mirrorproxy sources reset apt --scope system
+mirrorproxy sources set docker --mirror mirrorproxy --base-url https://mirror.example --scope system
+mirrorproxy sources reset docker --scope system
 ```
 
-Docker daemon 配置仍只生成指引，待实现可安全合并 JSON 的写入器后再支持实际写入。
+Docker 会写入包含 `registry-mirrors` 的 `/etc/docker/daemon.json`。已有 daemon 配置
+不会在未显式传入 `--force` 时被覆盖；reset 会精确恢复原文件。配置生效后需要重启 Docker。
 
 复制 `config.example.toml` 并修改公开访问地址：
 

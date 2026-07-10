@@ -174,18 +174,22 @@ mirrorproxy sources reset npm
 ```
 
 Use `--config-root /tmp/mirrorproxy-home` for an isolated home directory in
-automation or tests. APT, DNF/YUM, and pacman additionally support explicit
-`--scope system`: MirrorProxy only creates its dedicated managed file and keeps
-a rollback record under `/var/lib/mirrorproxy/sources/` (or the supplied root).
-APT requires a release codename; system writes normally require root access.
+automation or tests. APT, DNF/YUM, pacman, and Docker additionally support
+explicit `--scope system`: MirrorProxy only manages the relevant configuration
+file and keeps a rollback record under `/var/lib/mirrorproxy/sources/` (or the
+supplied root). APT requires a release codename; system writes normally require
+root access.
 
 ```bash
 mirrorproxy sources set apt --mirror tuna --scope system --distribution jammy
 mirrorproxy sources reset apt --scope system
+mirrorproxy sources set docker --mirror mirrorproxy --base-url https://mirror.example --scope system
+mirrorproxy sources reset docker --scope system
 ```
 
-Docker daemon configuration remains generated guidance until its merge-safe
-JSON writer is implemented.
+Docker writes `/etc/docker/daemon.json` with `registry-mirrors`. It never
+replaces an existing daemon configuration without `--force`, and reset restores
+the exact previous file. Restart Docker after applying the configuration.
 
 Copy `config.example.toml` and adjust the public URL for your deployment:
 

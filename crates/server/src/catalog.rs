@@ -259,7 +259,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         category: SourceCategory::Repository,
         aliases: &["oci", "container"],
         supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
-        default_scope: SourceScope::User,
+        default_scope: SourceScope::System,
     },
     SourceTarget {
         code: "github",
@@ -566,6 +566,10 @@ mod tests {
     fn finds_targets_by_alias() {
         assert_eq!(find_target("pypi").unwrap().code, "pip");
         assert_eq!(find_target("oci").unwrap().code, "docker");
+        assert_eq!(
+            find_target("docker").unwrap().default_scope,
+            SourceScope::System
+        );
     }
 
     #[test]
