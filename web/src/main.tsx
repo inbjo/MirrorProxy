@@ -18,6 +18,7 @@ import {
   Save,
   ServerCog,
   ShieldCheck,
+  Terminal,
   Sun,
 } from 'lucide-react'
 import './styles.css'
@@ -282,7 +283,7 @@ function App() {
         </div>
       </header>
 
-      {adminVisible ? <AdminConsole locale={locale} onClose={() => setAdminVisible(false)} /> : null}
+      {adminVisible ? <AdminConsole locale={locale} catalog={catalog} onClose={() => setAdminVisible(false)} /> : null}
 
       <section className="status-strip">
         <Metric icon={<CheckCircle2 size={18} />} label={t.status} value={t.online} tone="ok" />
@@ -419,7 +420,7 @@ const byteLabel = (bytes: number | null) => {
   return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
 }
 
-function AdminConsole({ locale, onClose }: { locale: Locale; onClose: () => void }) {
+function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: SourceCatalog | null; onClose: () => void }) {
   const text = locale === 'zh'
     ? {
         title: '运行控制台', login: '管理员登录', password: '管理员密码', signIn: '登录', signOut: '退出登录',
@@ -430,6 +431,7 @@ function AdminConsole({ locale, onClose }: { locale: Locale; onClose: () => void
         close: '关闭控制台', badLogin: '登录失败，请检查管理员密码。', saveError: '配置保存失败。', restart: '以下字段将在重启后生效：',
         quotaStopped: '代理已因月流量上限停止', noData: '本月尚无代理流量。', passwordHint: '首次启动时密码只会出现在本机日志中。',
         security: '安全', currentPassword: '当前密码', newPassword: '新密码（至少 12 位）', changePassword: '修改密码并退出所有会话', passwordChanged: '密码已修改，请使用新密码重新登录。', passwordError: '密码修改失败，请确认当前密码。', passwordConfirm: '修改密码将使所有管理员会话失效，确定继续吗？',
+        generator: 'CLI 改源命令', target: '目标', mirror: '镜像站', scope: '作用域', ready: '可直接执行', guidance: '当前仅生成配置指引', copyCommand: '复制命令', copiedCommand: '已复制',
       }
     : {
         title: 'Operations console', login: 'Administrator sign in', password: 'Administrator password', signIn: 'Sign in', signOut: 'Sign out',
@@ -440,6 +442,7 @@ function AdminConsole({ locale, onClose }: { locale: Locale; onClose: () => void
         close: 'Close console', badLogin: 'Sign in failed. Check the administrator password.', saveError: 'Configuration save failed.', restart: 'These fields apply after restart:',
         quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is printed only in the local startup log.',
         security: 'Security', currentPassword: 'Current password', newPassword: 'New password (12 characters minimum)', changePassword: 'Change password and revoke all sessions', passwordChanged: 'Password changed. Sign in again with the new password.', passwordError: 'Password update failed. Check the current password.', passwordConfirm: 'This revokes every administrator session. Continue?',
+        generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied',
       }
   const [token, setToken] = React.useState<string | null>(() => sessionStorage.getItem('mirrorproxy.admin-token'))
   const [password, setPassword] = React.useState('')
@@ -546,6 +549,7 @@ function AdminConsole({ locale, onClose }: { locale: Locale; onClose: () => void
           <div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label>{text.quotaGb}<input min="0" type="number" value={draft.quota.monthly_gb} onChange={(event) => updateQuota('monthly_gb', Number(event.target.value))} /></label><label>{text.timezone}<input value={draft.quota.timezone} onChange={(event) => updateQuota('timezone', event.target.value)} /></label><label>{text.action}<select value={draft.quota.on_exceeded} onChange={(event) => updateQuota('on_exceeded', event.target.value)}><option value="stop_proxy">stop_proxy · 503</option><option value="throttle">throttle · 429</option></select></label><label className="toggle-field"><input type="checkbox" checked={draft.quota.enabled} onChange={(event) => updateQuota('enabled', event.target.checked)} />{text.quota}</label><label className="toggle-field"><input type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<input min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label></div>
           <h4>{text.adapters}</h4><div className="adapter-toggles">{['github', 'composer', 'oci', 'npm', 'go', 'crates', 'pypi'].map((adapter) => <label key={adapter}><input type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div>
           <h4>{text.upstreams}</h4><div className="upstream-fields">{Object.entries(draft.upstreams).map(([key, value]) => <label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>)}</div>
+          {catalog ? <SourceCommandGenerator catalog={catalog} baseUrl={draft.public_base_url} text={text} /> : null}
           <form className="security-form" onSubmit={changePassword}><div><h4><KeyRound size={14} /> {text.security}</h4><p>{text.passwordHint}</p></div><label>{text.currentPassword}<input required autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>{text.newPassword}<input required minLength={12} autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label><button className="danger-button" disabled={passwordBusy} type="submit"><KeyRound size={16} /> {text.changePassword}</button></form>
         </section>
       </div> : null}
@@ -554,6 +558,29 @@ function AdminConsole({ locale, onClose }: { locale: Locale; onClose: () => void
 }
 
 function ConsoleMetric({ label, value }: { label: string; value: string }) { return <div className="console-metric"><small>{label}</small><strong>{value}</strong></div> }
+
+function SourceCommandGenerator({ catalog, baseUrl, text }: { catalog: SourceCatalog; baseUrl: string; text: Record<string, string> }) {
+  const [targetCode, setTargetCode] = React.useState('npm')
+  const [mirrorCode, setMirrorCode] = React.useState('mirrorproxy')
+  const [scope, setScope] = React.useState('user')
+  const [copied, setCopied] = React.useState(false)
+  const target = catalog.targets.find((item) => item.code === targetCode) ?? catalog.targets[0]
+  const sources = catalog.sources.filter((source) => source.target_code === target?.code)
+  const selected = sources.find((source) => source.provider_code === mirrorCode) ?? sources[0]
+  const activeMirror = selected?.provider_code ?? mirrorCode
+  const command = selected
+    ? `mirrorproxy sources set ${target.code} --mirror ${activeMirror}${activeMirror === 'mirrorproxy' ? ` --base-url ${baseUrl.replace(/\/$/, '')}` : ''} --scope ${scope}`
+    : `mirrorproxy sources get ${target?.code ?? targetCode}`
+  const executable = ['npm', 'pip', 'cargo', 'go', 'composer'].includes(target?.code ?? '') && scope === 'user'
+
+  const copyGenerated = async () => {
+    await copy(command)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1400)
+  }
+
+  return <section className="source-generator"><div className="generator-head"><h4><Terminal size={14} /> {text.generator}</h4><span className={executable ? 'generator-status ready' : 'generator-status'}>{executable ? text.ready : text.guidance}</span></div><div className="generator-fields"><label>{text.target}<select value={target?.code ?? targetCode} onChange={(event) => { setTargetCode(event.target.value); setMirrorCode('mirrorproxy') }}>{catalog.targets.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label><label>{text.mirror}<select value={activeMirror} onChange={(event) => setMirrorCode(event.target.value)}>{sources.map((source) => <option key={source.provider_code} value={source.provider_code}>{source.provider_code}</option>)}</select></label><label>{text.scope}<select value={scope} onChange={(event) => setScope(event.target.value)}><option value="user">user</option><option value="system">system</option></select></label></div><div className="generator-command"><code>{command}</code><button onClick={copyGenerated}><Clipboard size={15} /> {copied ? text.copiedCommand : text.copyCommand}</button></div></section>
+}
 
 function SourceCatalogPanel({ catalog, labels }: { catalog: SourceCatalog; labels: Record<string, string> }) {
   const groups = [
