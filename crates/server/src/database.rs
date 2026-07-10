@@ -9,6 +9,7 @@ use argon2::{
     Argon2,
 };
 use rand::{distributions::Alphanumeric, Rng};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -43,6 +44,33 @@ pub struct ProxyTrafficRecord<'a> {
     pub status_code: u16,
     pub response_bytes: u64,
     pub stream_error: bool,
+}
+
+#[derive(Serialize)]
+pub struct TrafficDailyPoint {
+    pub day: String,
+    pub target_code: String,
+    pub request_count: u64,
+    pub response_bytes: u64,
+    pub error_count: u64,
+}
+
+#[derive(Serialize)]
+pub struct TrafficTargetPoint {
+    pub target_code: String,
+    pub request_count: u64,
+    pub response_bytes: u64,
+    pub error_count: u64,
+}
+
+#[derive(Serialize)]
+pub struct TrafficOverview {
+    pub request_count: u64,
+    pub response_bytes: u64,
+    pub error_count: u64,
+    pub quota_exceeded: bool,
+    pub daily: Vec<TrafficDailyPoint>,
+    pub targets: Vec<TrafficTargetPoint>,
 }
 
 impl Database {
@@ -260,6 +288,82 @@ impl Database {
         transaction.commit().await?;
         Ok(())
     }
+
+    pub async fn mark_month_quota_exceeded(&self, month: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO traffic_monthly (month, quota_exceeded) VALUES (?, 1) ON CONFLICT(month) DO UPDATE SET quota_exceeded = 1",
+        )
+        .bind(month)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn traffic_overview(&self, month: &str) -> anyhow::Result<TrafficOverview> {
+        let row = sqlx::query(
+            "SELECT request_count, response_bytes, error_count, quota_exceeded FROM traffic_monthly WHERE month = ?",
+        )
+        .bind(month)
+        .fetch_optional(&self.pool)
+        .await?;
+        let (request_count, response_bytes, error_count, quota_exceeded) = row
+            .map(|row| {
+                Ok::<_, sqlx::Error>((
+                    row.try_get::<i64, _>("request_count")?,
+                    row.try_get::<i64, _>("response_bytes")?,
+                    row.try_get::<i64, _>("error_count")?,
+                    row.try_get::<i64, _>("quota_exceeded")?,
+                ))
+            })
+            .transpose()?
+            .unwrap_or((0, 0, 0, 0));
+        let month_days = format!("{month}-%");
+        let daily = sqlx::query(
+            "SELECT day, target_code, request_count, response_bytes, error_count FROM traffic_daily WHERE day LIKE ? ORDER BY day ASC, target_code ASC",
+        )
+        .bind(&month_days)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok::<_, sqlx::Error>(TrafficDailyPoint {
+                day: row.try_get("day")?,
+                target_code: row.try_get("target_code")?,
+                request_count: as_u64(row.try_get("request_count")?),
+                response_bytes: as_u64(row.try_get("response_bytes")?),
+                error_count: as_u64(row.try_get("error_count")?),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+        let targets = sqlx::query(
+            "SELECT target_code, SUM(request_count) AS request_count, SUM(response_bytes) AS response_bytes, SUM(error_count) AS error_count FROM traffic_daily WHERE day LIKE ? GROUP BY target_code ORDER BY response_bytes DESC, request_count DESC LIMIT 10",
+        )
+        .bind(&month_days)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok::<_, sqlx::Error>(TrafficTargetPoint {
+                target_code: row.try_get("target_code")?,
+                request_count: as_u64(row.try_get("request_count")?),
+                response_bytes: as_u64(row.try_get("response_bytes")?),
+                error_count: as_u64(row.try_get("error_count")?),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+        Ok(TrafficOverview {
+            request_count: as_u64(request_count),
+            response_bytes: as_u64(response_bytes),
+            error_count: as_u64(error_count),
+            quota_exceeded: quota_exceeded != 0,
+            daily,
+            targets,
+        })
+    }
+}
+
+fn as_u64(value: i64) -> u64 {
+    value.max(0) as u64
 }
 
 fn ensure_parent_directory(database_path: &str) -> anyhow::Result<()> {
@@ -410,5 +514,12 @@ mod tests {
             database.monthly_response_bytes("2026-07").await.unwrap(),
             1036
         );
+        database.mark_month_quota_exceeded("2026-07").await.unwrap();
+        let overview = database.traffic_overview("2026-07").await.unwrap();
+        assert_eq!(overview.request_count, 2);
+        assert_eq!(overview.response_bytes, 1036);
+        assert_eq!(overview.error_count, 1);
+        assert!(overview.quota_exceeded);
+        assert_eq!(overview.targets[0].target_code, "npm");
     }
 }

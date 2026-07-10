@@ -1037,6 +1037,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             "/api/admin/config",
             get(admin_config).put(update_admin_config),
         )
+        .route("/api/admin/stats", get(admin_stats))
         .route("/api/sources", get(source_catalog))
         .route("/composer", get(composer::root))
         .route("/composer/", get(composer::root))
@@ -1192,7 +1193,15 @@ async fn quota_exceeded_for_request(
     }
     let limit = config.quota.monthly_gb.saturating_mul(1024 * 1024 * 1024);
     match state.database.monthly_response_bytes(month).await {
-        Ok(used) => used >= limit,
+        Ok(used) => {
+            let exceeded = used >= limit;
+            if exceeded {
+                if let Err(error) = state.database.mark_month_quota_exceeded(month).await {
+                    tracing::error!(%error, "failed to mark monthly quota as exceeded");
+                }
+            }
+            exceeded
+        }
         Err(error) => {
             tracing::error!(%error, "failed to read monthly quota usage");
             true
@@ -1481,6 +1490,71 @@ async fn admin_config(headers: HeaderMap, State(state): State<AppState>) -> Resp
 struct AdminConfigUpdateResponse {
     config: Config,
     restart_required: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct AdminStatsResponse {
+    month: String,
+    request_count: u64,
+    response_bytes: u64,
+    error_count: u64,
+    quota: AdminQuotaStats,
+    daily: Vec<database::TrafficDailyPoint>,
+    targets: Vec<database::TrafficTargetPoint>,
+}
+
+#[derive(Serialize)]
+struct AdminQuotaStats {
+    enabled: bool,
+    monthly_limit_bytes: Option<u64>,
+    remaining_bytes: Option<u64>,
+    exceeded: bool,
+    timezone: String,
+    on_exceeded: String,
+}
+
+async fn admin_stats(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => {}
+        Ok(false) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator authorization query failed");
+            return internal_error_response();
+        }
+    }
+    let config = state.config();
+    let (_, month) = quota_period(&config.quota.timezone);
+    let overview = match state.database.traffic_overview(&month).await {
+        Ok(overview) => overview,
+        Err(error) => {
+            tracing::error!(%error, "failed to query traffic statistics");
+            return internal_error_response();
+        }
+    };
+    let monthly_limit_bytes = config
+        .quota
+        .enabled
+        .then(|| config.quota.monthly_gb.saturating_mul(1024 * 1024 * 1024));
+    let quota = AdminQuotaStats {
+        enabled: config.quota.enabled,
+        remaining_bytes: monthly_limit_bytes
+            .map(|limit| limit.saturating_sub(overview.response_bytes)),
+        monthly_limit_bytes,
+        exceeded: overview.quota_exceeded
+            || monthly_limit_bytes.is_some_and(|limit| overview.response_bytes >= limit),
+        timezone: config.quota.timezone,
+        on_exceeded: config.quota.on_exceeded,
+    };
+    Json(AdminStatsResponse {
+        month,
+        request_count: overview.request_count,
+        response_bytes: overview.response_bytes,
+        error_count: overview.error_count,
+        quota,
+        daily: overview.daily,
+        targets: overview.targets,
+    })
+    .into_response()
 }
 
 async fn update_admin_config(
@@ -2175,6 +2249,55 @@ on_exceeded = "stop_proxy"
             .unwrap();
         assert_eq!(reloaded.public_base_url, "https://mirror.example");
         assert_eq!(reloaded.enabled_proxies, ["npm"]);
+    }
+
+    #[tokio::test]
+    async fn admin_stats_returns_monthly_usage_and_targets() {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let credentials = credentials.unwrap();
+        let config = Config::default();
+        database
+            .load_or_seed_runtime_config(config.clone())
+            .await
+            .unwrap();
+        let (day, month) = quota_period(&config.quota.timezone);
+        database
+            .record_proxy_response(ProxyTrafficRecord {
+                day: &day,
+                month: &month,
+                target_code: "npm",
+                method: "GET",
+                path: "/npm/react",
+                status_code: 200,
+                response_bytes: 256,
+                stream_error: false,
+            })
+            .await
+            .unwrap();
+        let state = AppState {
+            config: Arc::new(RwLock::new(config)),
+            database: Arc::new(database.clone()),
+            client: Client::new(),
+            rate_limiter: Arc::new(RateLimiter::new()),
+        };
+        let session = database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {}", session.token).parse().unwrap(),
+        );
+
+        let response = admin_stats(headers, State(state)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["month"], month);
+        assert_eq!(value["response_bytes"], 256);
+        assert_eq!(value["targets"][0]["target_code"], "npm");
     }
 
     #[tokio::test]

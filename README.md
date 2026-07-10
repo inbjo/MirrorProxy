@@ -231,6 +231,10 @@ Changing `timeout.request_secs` is persisted but reported as restart-required;
 `listen_addr` and `database_path` must be changed in the service configuration
 and cannot be changed through this API.
 
+`GET /api/admin/stats` returns the current configured-month summary, quota
+remaining bytes, per-day/per-target traffic points, and the ten busiest proxy
+targets. It requires the same administrator Bearer token.
+
 Optional global rate limiting can be enabled with:
 
 ```toml
