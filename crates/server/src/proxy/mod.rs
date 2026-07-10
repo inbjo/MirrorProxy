@@ -6,6 +6,7 @@ pub mod maven;
 pub mod npm;
 pub mod oci;
 pub mod pypi;
+pub mod rubygems;
 
 use axum::{
     body::Body,

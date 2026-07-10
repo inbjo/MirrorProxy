@@ -29,7 +29,7 @@ use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
-use proxy::{composer, cratesio, github, go, maven, npm, oci, pypi, ProxyError};
+use proxy::{composer, cratesio, github, go, maven, npm, oci, pypi, rubygems, ProxyError};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -458,6 +458,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.npm" => Some(config.upstreams.npm.clone()),
         "upstreams.go_proxy" => Some(config.upstreams.go_proxy.clone()),
         "upstreams.maven" => Some(config.upstreams.maven.clone()),
+        "upstreams.rubygems" => Some(config.upstreams.rubygems.clone()),
         "upstreams.crates_index" => Some(config.upstreams.crates_index.clone()),
         "upstreams.crates_api" => Some(config.upstreams.crates_api.clone()),
         "upstreams.pypi_simple" => Some(config.upstreams.pypi_simple.clone()),
@@ -489,6 +490,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.npm",
         "upstreams.go_proxy",
         "upstreams.maven",
+        "upstreams.rubygems",
         "upstreams.crates_index",
         "upstreams.crates_api",
         "upstreams.pypi_simple",
@@ -827,6 +829,7 @@ fn source_config_path(
             "cargo" => ".cargo/config.toml",
             "go" => ".config/go/env",
             "maven" => ".m2/settings.xml",
+            "rubygems" => ".gemrc",
             "composer" => ".config/composer/config.json",
             other => anyhow::bail!("{other} does not support safe user-scope configuration writes"),
         },
@@ -870,6 +873,9 @@ fn source_config_content(
             "maven" => source_config_command("maven", repo_url)
                 .map(|content| format!("{content}\n"))
                 .ok_or_else(|| anyhow::anyhow!("missing Maven configuration template")),
+            "rubygems" => source_config_command("rubygems", repo_url)
+                .map(|content| format!("{content}\n"))
+                .ok_or_else(|| anyhow::anyhow!("missing RubyGems configuration template")),
             "composer" => Ok(serde_json::to_string_pretty(&serde_json::json!({
                 "repositories": {
                     "packagist": { "type": "composer", "url": repo_url }
@@ -1016,6 +1022,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         "maven" => Some(
             "Remove the MirrorProxy mirror entry from Maven ~/.m2/settings.xml".to_string(),
         ),
+        "rubygems" => Some("Restore the previous RubyGems ~/.gemrc source list".to_string()),
         "composer" => Some("composer config --unset repos.packagist".to_string()),
         "docker" => Some(
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
@@ -1154,6 +1161,12 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/maven", get(maven::root).head(maven::root))
         .route("/maven/", get(maven::root).head(maven::root))
         .route("/maven/{*path}", get(maven::proxy).head(maven::proxy))
+        .route("/rubygems", get(rubygems::root).head(rubygems::root))
+        .route("/rubygems/", get(rubygems::root).head(rubygems::root))
+        .route(
+            "/rubygems/{*path}",
+            get(rubygems::proxy).head(rubygems::proxy),
+        )
         .route(
             "/pypi/simple",
             get(pypi::simple_root).head(pypi::simple_root),
@@ -1339,6 +1352,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("go")
     } else if path == "/maven" || path.starts_with("/maven/") {
         Some("maven")
+    } else if path == "/rubygems" || path.starts_with("/rubygems/") {
+        Some("rubygems")
     } else if path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -1472,6 +1487,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/goproxy/")
         || path == "/maven"
         || path.starts_with("/maven/")
+        || path == "/rubygems"
+        || path.starts_with("/rubygems/")
         || path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -2006,6 +2023,10 @@ mod tests {
             config_value(&config, "upstreams.maven").unwrap(),
             "https://repo.maven.apache.org/maven2"
         );
+        assert_eq!(
+            config_value(&config, "upstreams.rubygems").unwrap(),
+            "https://rubygems.org"
+        );
         assert!(config_value(&config, "missing.key").is_none());
     }
 
@@ -2026,6 +2047,9 @@ mod tests {
                 && value == "https://files.pythonhosted.org"));
         assert!(entries.iter().any(|(key, value)| *key == "upstreams.maven"
             && value == "https://repo.maven.apache.org/maven2"));
+        assert!(entries
+            .iter()
+            .any(|(key, value)| *key == "upstreams.rubygems" && value == "https://rubygems.org"));
     }
 
     #[test]
@@ -2119,6 +2143,10 @@ on_exceeded = "stop_proxy"
                 .contains("<url>https://mirror.example/maven/</url>")
         );
         assert_eq!(
+            source_config_command("rubygems", "https://mirror.example/rubygems/").unwrap(),
+            "---\n:sources:\n- https://mirror.example/rubygems/"
+        );
+        assert_eq!(
             source_config_command("composer", "https://mirror.example/composer/").unwrap(),
             "composer config repo.packagist composer https://mirror.example/composer/"
         );
@@ -2199,7 +2227,7 @@ on_exceeded = "stop_proxy"
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).unwrap();
 
-        for target_code in ["npm", "pip", "cargo", "go", "maven", "composer"] {
+        for target_code in ["npm", "pip", "cargo", "go", "maven", "rubygems", "composer"] {
             let command = PlannedSourceCommand {
                 target_code,
                 provider_code: "mirrorproxy",
@@ -2459,6 +2487,11 @@ on_exceeded = "stop_proxy"
             .unwrap()
             .iter()
             .any(|proxy| proxy == "maven"));
+        assert!(value["enabled_proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|proxy| proxy == "rubygems"));
         assert!(value["enabled_proxies"]
             .as_array()
             .unwrap()
@@ -2780,6 +2813,13 @@ on_exceeded = "stop_proxy"
             .any(|source| source["target_code"] == "maven"
                 && source["provider_code"] == "mirrorproxy"
                 && source["repo_url"] == "/maven/"));
+        assert!(value["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|source| source["target_code"] == "rubygems"
+                && source["provider_code"] == "mirrorproxy"
+                && source["repo_url"] == "/rubygems/"));
         assert!(value["templates"]
             .as_array()
             .unwrap()
@@ -2838,6 +2878,24 @@ on_exceeded = "stop_proxy"
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("Maven repository proxy"));
+    }
+
+    #[tokio::test]
+    async fn rubygems_root_returns_proxy_info() {
+        let app = build_router(Config::default()).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/rubygems/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("RubyGems repository proxy"));
     }
 
     #[tokio::test]

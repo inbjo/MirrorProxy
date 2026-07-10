@@ -314,7 +314,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "RubyGems",
         category: SourceCategory::Language,
         aliases: &["ruby", "gem"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -375,6 +375,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "maven",
         provider_code: "mirrorproxy",
         repo_url: "/maven/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "rubygems",
+        provider_code: "mirrorproxy",
+        repo_url: "/rubygems/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -498,6 +505,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         os_family: "any",
         scope: SourceScope::User,
         template: "<settings>\n  <mirrors>\n    <mirror>\n      <id>mirrorproxy</id>\n      <name>MirrorProxy Maven Central</name>\n      <url>{repo_url}</url>\n      <mirrorOf>central</mirrorOf>\n    </mirror>\n  </mirrors>\n</settings>",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "rubygems",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "---\n:sources:\n- {repo_url}",
         requires_sudo: false,
     },
     SourceTemplate {
