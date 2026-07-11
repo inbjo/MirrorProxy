@@ -22,6 +22,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - Hackage repository proxy at `/hackage`
 - Clojars repository proxy at `/clojars`
 - Dart / Flutter Pub proxy at `/pub`
+- Anaconda / Conda proxy at `/anaconda`
 - Cargo sparse registry proxy at `/crates-index`
 - pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
@@ -246,6 +247,10 @@ PUB_HOSTED_URL=http://127.0.0.1:3000/pub/ flutter pub get
 ```
 
 Pub package metadata and official archives stay on MirrorProxy; archive URLs are rewritten only for the official Google Cloud Storage host.
+
+## Anaconda / Conda Proxy
+
+Use MirrorProxy as a Conda channel base, for example `http://127.0.0.1:3000/anaconda/main`. The adapter streams `repodata.json` and package artifacts while rejecting traversal paths.
 
 ## Rust Crates Proxy
 
