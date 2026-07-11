@@ -423,7 +423,7 @@ MIRRORPROXY_CACHE_MAX_ENTRY_MB=8
 
 MirrorProxy validates `public_base_url`, all upstream URLs, enabled proxy names, and timeout values during startup. Invalid configuration fails fast with a field-specific error.
 
-Optional disk caching is disabled by default. When enabled, it stores only successful public GET responses with an explicit `Content-Length` no larger than `cache.max_entry_mb`; requests carrying `Authorization`, `Cookie`, or `Range` bypass the cache. Large or unknown-length responses stay streamed and are never buffered for caching.
+Optional disk caching is disabled by default. When enabled, it stores only successful public GET responses with an explicit `Content-Length` no larger than `cache.max_entry_mb`; `cache.max_total_mb` bounds disk usage and evicts least-recently-used entries. Requests carrying `Authorization`, `Cookie`, or `Range` bypass the cache. Large or unknown-length responses stay streamed and are never buffered for caching.
 
 On the first startup, MirrorProxy creates its SQLite database and prints a one-time
 random password for the `admin` account in the local startup log. Use it with

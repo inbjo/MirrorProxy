@@ -382,6 +382,11 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             "cache.max_entry_mb",
             ConfigValueKind::PositiveU64,
         ),
+        "cache.max_total_mb" => (
+            "cache.max_total_mb",
+            "cache.max_total_mb",
+            ConfigValueKind::PositiveU64,
+        ),
         "quota.enabled" => ("quota.enabled", "quota.enabled", ConfigValueKind::Bool),
         "quota.monthly_gb" => ("quota.monthly_gb", "quota.monthly_gb", ConfigValueKind::U64),
         "quota.timezone" => (
@@ -464,6 +469,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "cache.enabled" => Some(config.cache.enabled.to_string()),
         "cache.directory" => Some(config.cache.directory.clone()),
         "cache.max_entry_mb" => Some(config.cache.max_entry_mb.to_string()),
+        "cache.max_total_mb" => Some(config.cache.max_total_mb.to_string()),
         "quota.enabled" => Some(config.quota.enabled.to_string()),
         "quota.monthly_gb" => Some(config.quota.monthly_gb.to_string()),
         "quota.timezone" => Some(config.quota.timezone.clone()),
@@ -523,6 +529,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "cache.enabled",
         "cache.directory",
         "cache.max_entry_mb",
+        "cache.max_total_mb",
         "quota.enabled",
         "quota.monthly_gb",
         "quota.timezone",

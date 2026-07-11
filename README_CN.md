@@ -418,7 +418,7 @@ MIRRORPROXY_CACHE_MAX_ENTRY_MB=8
 
 MirrorProxy 会在启动时校验 `public_base_url`、所有上游 URL、启用的代理名称和超时配置。配置非法会快速失败，并提示具体字段。
 
-可选磁盘缓存默认关闭。启用后，仅缓存带明确 `Content-Length` 且不大于 `cache.max_entry_mb` 的成功公开 GET 响应；携带 `Authorization`、`Cookie` 或 `Range` 的请求会绕过缓存。大文件或长度未知的响应保持流式转发，绝不会为了缓存整块读入内存。
+可选磁盘缓存默认关闭。启用后，仅缓存带明确 `Content-Length` 且不大于 `cache.max_entry_mb` 的成功公开 GET 响应；`cache.max_total_mb` 限制总磁盘用量并按最近最少使用淘汰。携带 `Authorization`、`Cookie` 或 `Range` 的请求会绕过缓存。大文件或长度未知的响应保持流式转发，绝不会为了缓存整块读入内存。
 
 首次启动时，MirrorProxy 会创建 SQLite 数据库，并在本机启动日志中仅输出一次
 `admin` 账号的随机密码。使用它调用 `POST /api/admin/login`，再将返回 token 作为

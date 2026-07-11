@@ -348,4 +348,29 @@ mod tests {
         headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-99"));
         assert!(!cacheable_request(Method::GET, &headers));
     }
+
+    #[test]
+    fn capacity_eviction_removes_cached_body_and_metadata() {
+        let directory =
+            std::env::temp_dir().join(format!("mirrorproxy-evict-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let cache = CacheConfig {
+            enabled: true,
+            directory: directory.display().to_string(),
+            max_entry_mb: 1,
+            max_total_mb: 0,
+        };
+        let url = Url::parse("https://upstream.example/evict").unwrap();
+        write_disk_cache(
+            &cache,
+            &url,
+            reqwest::StatusCode::OK,
+            &HeaderMap::new(),
+            b"entry",
+        );
+        let (body, metadata) = cache_paths(&cache, &url).unwrap();
+        assert!(!body.exists());
+        assert!(!metadata.exists());
+        let _ = fs::remove_dir_all(directory);
+    }
 }

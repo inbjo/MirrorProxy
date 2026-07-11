@@ -55,6 +55,7 @@ requests_per_minute = 600
 enabled = false
 directory = "mirrorproxy-cache"
 max_entry_mb = 8
+max_total_mb = 256
 
 [quota]
 enabled = false
