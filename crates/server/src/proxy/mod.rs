@@ -9,6 +9,7 @@ pub mod flatpak;
 pub mod github;
 pub mod go;
 pub mod hackage;
+pub mod homebrew;
 pub mod maven;
 pub mod nix;
 pub mod npm;

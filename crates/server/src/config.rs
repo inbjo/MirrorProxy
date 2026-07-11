@@ -72,6 +72,8 @@ pub struct Upstreams {
     pub nix: String,
     #[serde(default = "default_flatpak_repository")]
     pub flatpak: String,
+    #[serde(default = "default_homebrew_bottles_repository")]
+    pub homebrew: String,
     #[serde(default = "default_alpine_repository")]
     pub alpine: String,
     #[serde(default = "default_openwrt_repository")]
@@ -252,7 +254,7 @@ impl Config {
             match *proxy {
                 "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "nuget"
                 | "cpan" | "cran" | "hackage" | "clojars" | "pub" | "anaconda" | "texlive"
-                | "elpa" | "nix" | "flatpak" | "os" | "crates" | "pypi" => {}
+                | "elpa" | "nix" | "flatpak" | "homebrew" | "os" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -279,6 +281,7 @@ impl Config {
         validate_http_url("upstreams.elpa", &self.upstreams.elpa)?;
         validate_http_url("upstreams.nix", &self.upstreams.nix)?;
         validate_http_url("upstreams.flatpak", &self.upstreams.flatpak)?;
+        validate_http_url("upstreams.homebrew", &self.upstreams.homebrew)?;
         validate_http_url("upstreams.alpine", &self.upstreams.alpine)?;
         validate_http_url("upstreams.openwrt", &self.upstreams.openwrt)?;
         validate_http_url("upstreams.termux", &self.upstreams.termux)?;
@@ -336,6 +339,7 @@ impl Default for Upstreams {
             elpa: default_elpa_repository(),
             nix: default_nix_repository(),
             flatpak: default_flatpak_repository(),
+            homebrew: default_homebrew_bottles_repository(),
             alpine: default_alpine_repository(),
             openwrt: default_openwrt_repository(),
             termux: default_termux_repository(),
@@ -424,6 +428,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "elpa".to_string(),
         "nix".to_string(),
         "flatpak".to_string(),
+        "homebrew".to_string(),
         "os".to_string(),
         "crates".to_string(),
         "pypi".to_string(),
@@ -516,6 +521,10 @@ fn default_nix_repository() -> String {
 
 fn default_flatpak_repository() -> String {
     "https://dl.flathub.org/repo".to_string()
+}
+
+fn default_homebrew_bottles_repository() -> String {
+    "https://ghcr.io/v2/homebrew/core".to_string()
 }
 
 fn default_alpine_repository() -> String {

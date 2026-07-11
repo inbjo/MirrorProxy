@@ -298,7 +298,11 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Homebrew",
         category: SourceCategory::Repository,
         aliases: &["brew"],
-        supported_modes: &[SourceMode::LocalConfig, SourceMode::TemplateOnly],
+        supported_modes: &[
+            SourceMode::ProxyAdapter,
+            SourceMode::LocalConfig,
+            SourceMode::TemplateOnly,
+        ],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -717,6 +721,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         capability: SourceMode::ProxyAdapter,
     },
     TargetSource {
+        target_code: "homebrew",
+        provider_code: "mirrorproxy",
+        repo_url: "/homebrew",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
         target_code: "github",
         provider_code: "mirrorproxy",
         repo_url: "/https://github.com/",
@@ -868,6 +879,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         os_family: "any",
         scope: SourceScope::User,
         template: "docker pull {repo_url}/nginx",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "homebrew",
+        os_family: "macos",
+        scope: SourceScope::User,
+        template: "export HOMEBREW_BOTTLE_DOMAIN={repo_url}",
         requires_sudo: false,
     },
     SourceTemplate {

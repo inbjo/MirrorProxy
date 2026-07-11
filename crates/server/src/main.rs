@@ -30,8 +30,8 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
-    anaconda, clojars, composer, cpan, cran, cratesio, elpa, flatpak, github, go, hackage, maven,
-    nix, npm, nuget, oci, os, pub_repository, pypi, rubygems, texlive, ProxyError,
+    anaconda, clojars, composer, cpan, cran, cratesio, elpa, flatpak, github, go, hackage,
+    homebrew, maven, nix, npm, nuget, oci, os, pub_repository, pypi, rubygems, texlive, ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -489,6 +489,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.elpa" => Some(config.upstreams.elpa.clone()),
         "upstreams.nix" => Some(config.upstreams.nix.clone()),
         "upstreams.flatpak" => Some(config.upstreams.flatpak.clone()),
+        "upstreams.homebrew" => Some(config.upstreams.homebrew.clone()),
         "upstreams.alpine" => Some(config.upstreams.alpine.clone()),
         "upstreams.openwrt" => Some(config.upstreams.openwrt.clone()),
         "upstreams.termux" => Some(config.upstreams.termux.clone()),
@@ -538,6 +539,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.elpa",
         "upstreams.nix",
         "upstreams.flatpak",
+        "upstreams.homebrew",
         "upstreams.alpine",
         "upstreams.openwrt",
         "upstreams.termux",
@@ -1298,6 +1300,12 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/flatpak", get(flatpak::root).head(flatpak::root))
         .route("/flatpak/", get(flatpak::root).head(flatpak::root))
         .route("/flatpak/{*path}", get(flatpak::proxy).head(flatpak::proxy))
+        .route("/homebrew", get(homebrew::root).head(homebrew::root))
+        .route("/homebrew/", get(homebrew::root).head(homebrew::root))
+        .route(
+            "/homebrew/{*path}",
+            get(homebrew::proxy).head(homebrew::proxy),
+        )
         .route("/os", get(os::root).head(os::root))
         .route("/os/", get(os::root).head(os::root))
         .route("/os/{*path}", get(os::proxy).head(os::proxy))
@@ -1535,6 +1543,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("nix")
     } else if path == "/flatpak" || path.starts_with("/flatpak/") {
         Some("flatpak")
+    } else if path == "/homebrew" || path.starts_with("/homebrew/") {
+        Some("homebrew")
     } else if path == "/os" || path.starts_with("/os/") {
         Some("os")
     } else if path == "/pypi/simple"
@@ -1705,6 +1715,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/nix/")
         || path == "/flatpak"
         || path.starts_with("/flatpak/")
+        || path == "/homebrew"
+        || path.starts_with("/homebrew/")
         || path == "/os"
         || path.starts_with("/os/")
         || path == "/pypi/simple"
@@ -2427,6 +2439,10 @@ on_exceeded = "stop_proxy"
         assert_eq!(
             source_config_command("docker", "https://mirror.example/v2/").unwrap(),
             "docker pull mirror.example/nginx"
+        );
+        assert_eq!(
+            source_config_command("homebrew", "https://mirror.example/homebrew").unwrap(),
+            "export HOMEBREW_BOTTLE_DOMAIN=https://mirror.example/homebrew"
         );
     }
 
