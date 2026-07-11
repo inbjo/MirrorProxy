@@ -144,6 +144,9 @@ fn response_with_headers(
 fn max_cache_entry_bytes(cache: &CacheConfig) -> u64 {
     cache.max_entry_mb.saturating_mul(1024 * 1024)
 }
+fn max_cache_total_bytes(cache: &CacheConfig) -> u64 {
+    cache.max_total_mb.saturating_mul(1024 * 1024)
+}
 
 fn cache_paths(cache: &CacheConfig, url: &Url) -> Option<(PathBuf, PathBuf)> {
     if !cache.enabled || cache.directory.trim().is_empty() {
@@ -159,7 +162,9 @@ fn cache_paths(cache: &CacheConfig, url: &Url) -> Option<(PathBuf, PathBuf)> {
 
 fn read_disk_cache(cache: &CacheConfig, url: &Url) -> Option<Response> {
     let (body_path, metadata_path) = cache_paths(cache, url)?;
-    let body = fs::read(body_path).ok()?;
+    let body = fs::read(&body_path).ok()?;
+    let _ =
+        fs::File::open(&body_path).and_then(|file| file.set_modified(std::time::SystemTime::now()));
     let metadata: DiskCacheMetadata =
         serde_json::from_slice(&fs::read(metadata_path).ok()?).ok()?;
     let status = StatusCode::from_u16(metadata.status).ok()?;
@@ -214,6 +219,40 @@ fn write_disk_cache(
     {
         let _ = fs::rename(body_tmp, body_path);
         let _ = fs::rename(metadata_tmp, metadata_path);
+        evict_disk_cache(cache);
+    }
+}
+
+fn evict_disk_cache(cache: &CacheConfig) {
+    let Ok(entries) = fs::read_dir(&cache.directory) else {
+        return;
+    };
+    let mut bodies: Vec<_> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.extension().and_then(|v| v.to_str()) == Some("body")).then_some(path)
+        })
+        .filter_map(|path| {
+            let metadata = fs::metadata(&path).ok()?;
+            Some((
+                metadata
+                    .modified()
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                metadata.len(),
+                path,
+            ))
+        })
+        .collect();
+    let mut total: u64 = bodies.iter().map(|(_, len, _)| *len).sum();
+    bodies.sort_by_key(|(modified, _, _)| *modified);
+    for (_, len, path) in bodies {
+        if total <= max_cache_total_bytes(cache) {
+            break;
+        }
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("json"));
+        total = total.saturating_sub(len);
     }
 }
 
@@ -276,6 +315,7 @@ mod tests {
             enabled: true,
             directory: directory.display().to_string(),
             max_entry_mb: 1,
+            max_total_mb: 2,
         };
         let url = Url::parse("https://upstream.example/package").unwrap();
         let mut headers = HeaderMap::new();

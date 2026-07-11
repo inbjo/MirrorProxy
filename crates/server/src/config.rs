@@ -130,6 +130,8 @@ pub struct CacheConfig {
     pub directory: String,
     #[serde(default = "default_cache_max_entry_mb")]
     pub max_entry_mb: u64,
+    #[serde(default = "default_cache_max_total_mb")]
+    pub max_total_mb: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +211,11 @@ impl Config {
                 self.cache.max_entry_mb = max_entry_mb;
             }
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_CACHE_MAX_TOTAL_MB") {
+            if let Ok(max_total_mb) = value.parse() {
+                self.cache.max_total_mb = max_total_mb;
+            }
+        }
         if let Ok(value) = std::env::var("MIRRORPROXY_QUOTA_ENABLED") {
             self.quota.enabled = matches!(
                 value.to_ascii_lowercase().as_str(),
@@ -248,6 +255,9 @@ impl Config {
         }
         if self.cache.enabled && self.cache.max_entry_mb == 0 {
             anyhow::bail!("cache.max_entry_mb must be greater than 0 when cache is enabled");
+        }
+        if self.cache.enabled && self.cache.max_total_mb == 0 {
+            anyhow::bail!("cache.max_total_mb must be greater than 0 when cache is enabled");
         }
         if self.quota.enabled && self.quota.timezone.trim().is_empty() {
             anyhow::bail!("quota.timezone cannot be empty when quota is enabled");
@@ -411,6 +421,7 @@ impl Default for CacheConfig {
             enabled: false,
             directory: default_cache_directory(),
             max_entry_mb: default_cache_max_entry_mb(),
+            max_total_mb: default_cache_max_total_mb(),
         }
     }
 }
@@ -439,6 +450,9 @@ fn default_cache_directory() -> String {
 }
 fn default_cache_max_entry_mb() -> u64 {
     8
+}
+fn default_cache_max_total_mb() -> u64 {
+    256
 }
 
 fn default_public_base_url() -> String {
