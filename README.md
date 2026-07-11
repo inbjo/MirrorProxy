@@ -21,6 +21,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - CRAN repository proxy at `/cran`
 - Hackage repository proxy at `/hackage`
 - Clojars repository proxy at `/clojars`
+- CocoaPods CDN proxy at `/cocoapods`
 - Dart / Flutter Pub proxy at `/pub`
 - Anaconda / Conda proxy at `/anaconda`
 - TeX Live proxy at `/texlive`

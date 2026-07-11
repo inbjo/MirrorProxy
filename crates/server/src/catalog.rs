@@ -532,7 +532,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "CocoaPods",
         category: SourceCategory::Repository,
         aliases: &["pods"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -578,6 +578,13 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "cocoapods",
+        provider_code: "mirrorproxy",
+        repo_url: "/cocoapods/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
     TargetSource {
         target_code: "apt",
         provider_code: "mirrorproxy",
