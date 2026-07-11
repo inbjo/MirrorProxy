@@ -1,5 +1,6 @@
 pub mod anaconda;
 pub mod clojars;
+pub mod cocoapods;
 pub mod composer;
 pub mod cpan;
 pub mod cran;

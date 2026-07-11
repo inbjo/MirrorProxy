@@ -30,8 +30,9 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
-    anaconda, clojars, composer, cpan, cran, cratesio, elpa, flatpak, github, go, hackage,
-    homebrew, maven, nix, npm, nuget, oci, os, pub_repository, pypi, rubygems, texlive, ProxyError,
+    anaconda, clojars, cocoapods, composer, cpan, cran, cratesio, elpa, flatpak, github, go,
+    hackage, homebrew, maven, nix, npm, nuget, oci, os, pub_repository, pypi, rubygems, texlive,
+    ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -483,6 +484,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.cran" => Some(config.upstreams.cran.clone()),
         "upstreams.hackage" => Some(config.upstreams.hackage.clone()),
         "upstreams.clojars" => Some(config.upstreams.clojars.clone()),
+        "upstreams.cocoapods" => Some(config.upstreams.cocoapods.clone()),
         "upstreams.pub_repository" => Some(config.upstreams.pub_repository.clone()),
         "upstreams.anaconda" => Some(config.upstreams.anaconda.clone()),
         "upstreams.texlive" => Some(config.upstreams.texlive.clone()),
@@ -541,6 +543,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.cran",
         "upstreams.hackage",
         "upstreams.clojars",
+        "upstreams.cocoapods",
         "upstreams.pub_repository",
         "upstreams.anaconda",
         "upstreams.texlive",
@@ -1289,6 +1292,12 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/clojars", get(clojars::root).head(clojars::root))
         .route("/clojars/", get(clojars::root).head(clojars::root))
         .route("/clojars/{*path}", get(clojars::proxy).head(clojars::proxy))
+        .route("/cocoapods", get(cocoapods::root).head(cocoapods::root))
+        .route("/cocoapods/", get(cocoapods::root).head(cocoapods::root))
+        .route(
+            "/cocoapods/{*path}",
+            get(cocoapods::proxy).head(cocoapods::proxy),
+        )
         .route("/pub", get(pub_repository::root).head(pub_repository::root))
         .route(
             "/pub/",
@@ -1547,6 +1556,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("hackage")
     } else if path == "/clojars" || path.starts_with("/clojars/") {
         Some("clojars")
+    } else if path == "/cocoapods" || path.starts_with("/cocoapods/") {
+        Some("cocoapods")
     } else if path == "/pub" || path.starts_with("/pub/") {
         Some("pub")
     } else if path == "/anaconda" || path.starts_with("/anaconda/") {
@@ -1719,6 +1730,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/hackage/")
         || path == "/clojars"
         || path.starts_with("/clojars/")
+        || path == "/cocoapods"
+        || path.starts_with("/cocoapods/")
         || path == "/pub"
         || path.starts_with("/pub/")
         || path == "/anaconda"

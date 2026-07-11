@@ -60,6 +60,8 @@ pub struct Upstreams {
     pub hackage: String,
     #[serde(default = "default_clojars_repository")]
     pub clojars: String,
+    #[serde(default = "default_cocoapods_repository")]
+    pub cocoapods: String,
     #[serde(default = "default_pub_repository")]
     pub pub_repository: String,
     #[serde(default = "default_anaconda_repository")]
@@ -269,8 +271,9 @@ impl Config {
         for proxy in enabled.keys() {
             match *proxy {
                 "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "nuget"
-                | "cpan" | "cran" | "hackage" | "clojars" | "pub" | "anaconda" | "texlive"
-                | "elpa" | "nix" | "flatpak" | "homebrew" | "os" | "crates" | "pypi" => {}
+                | "cpan" | "cran" | "hackage" | "clojars" | "cocoapods" | "pub" | "anaconda"
+                | "texlive" | "elpa" | "nix" | "flatpak" | "homebrew" | "os" | "crates"
+                | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -291,6 +294,7 @@ impl Config {
         validate_http_url("upstreams.cran", &self.upstreams.cran)?;
         validate_http_url("upstreams.hackage", &self.upstreams.hackage)?;
         validate_http_url("upstreams.clojars", &self.upstreams.clojars)?;
+        validate_http_url("upstreams.cocoapods", &self.upstreams.cocoapods)?;
         validate_http_url("upstreams.pub_repository", &self.upstreams.pub_repository)?;
         validate_http_url("upstreams.anaconda", &self.upstreams.anaconda)?;
         validate_http_url("upstreams.texlive", &self.upstreams.texlive)?;
@@ -357,6 +361,7 @@ impl Default for Upstreams {
             cran: default_cran_repository(),
             hackage: default_hackage_repository(),
             clojars: default_clojars_repository(),
+            cocoapods: default_cocoapods_repository(),
             pub_repository: default_pub_repository(),
             anaconda: default_anaconda_repository(),
             texlive: default_texlive_repository(),
@@ -529,6 +534,9 @@ fn default_hackage_repository() -> String {
 
 fn default_clojars_repository() -> String {
     "https://repo.clojars.org".to_string()
+}
+fn default_cocoapods_repository() -> String {
+    "https://cdn.cocoapods.org".to_string()
 }
 
 fn default_pub_repository() -> String {
