@@ -65,6 +65,9 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"

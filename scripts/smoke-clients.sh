@@ -22,7 +22,7 @@ cat >"${config}" <<EOF
 listen_addr = "127.0.0.1:${port}"
 database_path = "${work}/mirrorproxy.sqlite3"
 public_base_url = "${base}"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi", "cpan", "rubygems", "maven"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi", "cpan", "rubygems", "maven", "nuget"]
 
 [upstreams]
 github = "https://github.com"
@@ -41,6 +41,7 @@ pypi_files = "https://files.pythonhosted.org"
 cpan = "https://cpan.metacpan.org"
 rubygems = "https://rubygems.org"
 maven = "https://repo.maven.apache.org/maven2"
+nuget = "https://api.nuget.org"
 EOF
 
 cd "${root}"
@@ -90,6 +91,9 @@ cat >"${work}/maven/settings.xml" <<EOF
 <settings><mirrors><mirror><id>mirrorproxy</id><url>${base}/maven/</url><mirrorOf>central</mirrorOf></mirror></mirrors></settings>
 EOF
 mvn -s "${work}/maven/settings.xml" -Dmaven.repo.local="${work}/m2" dependency:get -Dartifact=org.apache.commons:commons-lang3:3.14.0 -q
+dotnet new classlib --output "${work}/nuget" --no-restore >/dev/null
+NUGET_PACKAGES="${work}/nuget-packages" dotnet add "${work}/nuget/nuget.csproj" package Newtonsoft.Json --version 13.0.3 --source "${base}/nuget/v3/index.json" --no-restore >/dev/null
+NUGET_PACKAGES="${work}/nuget-packages" dotnet restore "${work}/nuget/nuget.csproj" --source "${base}/nuget/v3/index.json" >/dev/null
 mkdir "${work}/composer"
 (
   cd "${work}/composer"
@@ -102,5 +106,5 @@ if [[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]]; then
   docker pull "127.0.0.1:${port}/library/busybox:1.36.1" >/dev/null
 fi
 
-printf 'client smoke passed: git npm yarn pnpm go cargo pip cpanm rubygems maven composer%s\n' \
+printf 'client smoke passed: git npm yarn pnpm go cargo pip cpanm rubygems maven nuget composer%s\n' \
   "$([[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]] && printf ' docker' || true)"
