@@ -44,6 +44,7 @@ pub struct ProxyTrafficRecord<'a> {
     pub status_code: u16,
     pub response_bytes: u64,
     pub stream_error: bool,
+    pub reserved_bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -109,6 +110,19 @@ impl Database {
                 .execute(&self.pool)
                 .await
                 .context("failed to apply SQLite migration")?;
+        }
+        let has_reservation_column = sqlx::query("PRAGMA table_info(traffic_monthly)")
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .any(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("reserved_bytes"));
+        if !has_reservation_column {
+            sqlx::query(
+                "ALTER TABLE traffic_monthly ADD COLUMN reserved_bytes INTEGER NOT NULL DEFAULT 0",
+            )
+            .execute(&self.pool)
+            .await
+            .context("failed to add traffic reservation column")?;
         }
         Ok(())
     }
@@ -299,11 +313,29 @@ impl Database {
         Ok(bytes.max(0) as u64)
     }
 
+    pub async fn try_reserve_monthly_bytes(
+        &self,
+        month: &str,
+        limit: u64,
+        bytes: u64,
+    ) -> anyhow::Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("INSERT OR IGNORE INTO traffic_monthly (month) VALUES (?)")
+            .bind(month)
+            .execute(&mut *transaction)
+            .await?;
+        let result = sqlx::query("UPDATE traffic_monthly SET reserved_bytes = reserved_bytes + ? WHERE month = ? AND response_bytes + reserved_bytes + ? <= ?")
+            .bind(i64::try_from(bytes).unwrap_or(i64::MAX)).bind(month).bind(i64::try_from(bytes).unwrap_or(i64::MAX)).bind(i64::try_from(limit).unwrap_or(i64::MAX)).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn record_proxy_response(
         &self,
         record: ProxyTrafficRecord<'_>,
     ) -> anyhow::Result<()> {
         let bytes = i64::try_from(record.response_bytes).unwrap_or(i64::MAX);
+        let reserved = i64::try_from(record.reserved_bytes).unwrap_or(i64::MAX);
         let errors = i64::from(record.stream_error || record.status_code >= 400);
         let now = unix_timestamp();
         let mut transaction = self.pool.begin().await?;
@@ -317,11 +349,12 @@ impl Database {
         .execute(&mut *transaction)
         .await?;
         sqlx::query(
-            "INSERT INTO traffic_monthly (month, request_count, response_bytes, upstream_bytes, error_count, quota_exceeded) VALUES (?, 1, ?, 0, ?, 0) ON CONFLICT(month) DO UPDATE SET request_count = request_count + 1, response_bytes = response_bytes + excluded.response_bytes, error_count = error_count + excluded.error_count",
+            "INSERT INTO traffic_monthly (month, request_count, response_bytes, upstream_bytes, error_count, quota_exceeded) VALUES (?, 1, ?, 0, ?, 0) ON CONFLICT(month) DO UPDATE SET request_count = request_count + 1, response_bytes = response_bytes + excluded.response_bytes, reserved_bytes = MAX(0, reserved_bytes - ?), error_count = error_count + excluded.error_count",
         )
         .bind(record.month)
         .bind(bytes)
         .bind(errors)
+        .bind(reserved)
         .execute(&mut *transaction)
         .await?;
         sqlx::query(
@@ -589,6 +622,7 @@ mod tests {
                 status_code: 200,
                 response_bytes: 1024,
                 stream_error: false,
+                reserved_bytes: 0,
             })
             .await
             .unwrap();
@@ -602,6 +636,7 @@ mod tests {
                 status_code: 404,
                 response_bytes: 12,
                 stream_error: false,
+                reserved_bytes: 0,
             })
             .await
             .unwrap();

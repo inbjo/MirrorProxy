@@ -38,6 +38,8 @@ use serde::{Deserialize, Serialize};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+const QUOTA_RESERVATION_BYTES: u64 = 8 * 1024 * 1024;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about = "MirrorProxy multi-source mirror proxy")]
 struct Cli {
@@ -1356,6 +1358,30 @@ async fn rate_limit_middleware(
                 .into_response();
         }
 
+        let reserved_bytes = if config.quota.enabled {
+            let limit = config.quota.monthly_gb.saturating_mul(1024 * 1024 * 1024);
+            match state
+                .database
+                .try_reserve_monthly_bytes(&month, limit, QUOTA_RESERVATION_BYTES)
+                .await
+            {
+                Ok(true) => QUOTA_RESERVATION_BYTES,
+                Ok(false) | Err(_) => {
+                    let status = if config.quota.on_exceeded == "throttle" {
+                        StatusCode::TOO_MANY_REQUESTS
+                    } else {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    };
+                    return (
+                        status,
+                        Json(serde_json::json!({"error": "monthly traffic quota exceeded"})),
+                    )
+                        .into_response();
+                }
+            }
+        } else {
+            0
+        };
         let response = next.run(request).await;
         return track_proxy_response(
             response,
@@ -1365,6 +1391,7 @@ async fn rate_limit_middleware(
             target_code,
             method,
             path,
+            reserved_bytes,
         );
     }
 
@@ -1458,6 +1485,7 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn track_proxy_response(
     response: Response,
     database: Arc<Database>,
@@ -1466,6 +1494,7 @@ fn track_proxy_response(
     target_code: &'static str,
     method: String,
     path: String,
+    reserved_bytes: u64,
 ) -> Response {
     let status_code = response.status().as_u16();
     let (parts, body) = response.into_parts();
@@ -1481,6 +1510,7 @@ fn track_proxy_response(
             target_code,
             method,
             path,
+            reserved_bytes,
         ),
         move |(
             mut stream,
@@ -1492,6 +1522,7 @@ fn track_proxy_response(
             target_code,
             method,
             path,
+            reserved_bytes,
         )| async move {
             match futures_util::StreamExt::next(&mut stream).await {
                 Some(Ok(chunk)) => Some((
@@ -1506,6 +1537,7 @@ fn track_proxy_response(
                         target_code,
                         method,
                         path,
+                        reserved_bytes,
                     ),
                 )),
                 Some(Err(error)) => {
@@ -1519,6 +1551,7 @@ fn track_proxy_response(
                             status_code,
                             response_bytes,
                             stream_error: true,
+                            reserved_bytes,
                         })
                         .await
                     {
@@ -1536,6 +1569,7 @@ fn track_proxy_response(
                             target_code,
                             method,
                             path,
+                            reserved_bytes,
                         ),
                     ))
                 }
@@ -1550,6 +1584,7 @@ fn track_proxy_response(
                             status_code,
                             response_bytes,
                             stream_error,
+                            reserved_bytes,
                         })
                         .await
                     {
@@ -2716,6 +2751,7 @@ on_exceeded = "stop_proxy"
                 status_code: 200,
                 response_bytes: 256,
                 stream_error: false,
+                reserved_bytes: 0,
             })
             .await
             .unwrap();
@@ -2835,6 +2871,7 @@ on_exceeded = "stop_proxy"
             "npm",
             "GET".to_string(),
             "/npm/react".to_string(),
+            0,
         );
 
         assert_eq!(
