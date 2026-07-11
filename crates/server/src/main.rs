@@ -30,8 +30,8 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
-    anaconda, clojars, composer, cpan, cran, cratesio, github, go, hackage, maven, npm, nuget, oci,
-    pub_repository, pypi, rubygems, texlive, ProxyError,
+    anaconda, clojars, composer, cpan, cran, cratesio, elpa, github, go, hackage, maven, npm,
+    nuget, oci, pub_repository, pypi, rubygems, texlive, ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -472,6 +472,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.pub_repository" => Some(config.upstreams.pub_repository.clone()),
         "upstreams.anaconda" => Some(config.upstreams.anaconda.clone()),
         "upstreams.texlive" => Some(config.upstreams.texlive.clone()),
+        "upstreams.elpa" => Some(config.upstreams.elpa.clone()),
         "upstreams.crates_index" => Some(config.upstreams.crates_index.clone()),
         "upstreams.crates_api" => Some(config.upstreams.crates_api.clone()),
         "upstreams.pypi_simple" => Some(config.upstreams.pypi_simple.clone()),
@@ -512,6 +513,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.pub_repository",
         "upstreams.anaconda",
         "upstreams.texlive",
+        "upstreams.elpa",
         "upstreams.crates_index",
         "upstreams.crates_api",
         "upstreams.pypi_simple",
@@ -1260,6 +1262,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/texlive", get(texlive::root).head(texlive::root))
         .route("/texlive/", get(texlive::root).head(texlive::root))
         .route("/texlive/{*path}", get(texlive::proxy).head(texlive::proxy))
+        .route("/elpa", get(elpa::root).head(elpa::root))
+        .route("/elpa/", get(elpa::root).head(elpa::root))
+        .route("/elpa/{*path}", get(elpa::proxy).head(elpa::proxy))
         .route(
             "/pypi/simple",
             get(pypi::simple_root).head(pypi::simple_root),
@@ -1488,6 +1493,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("anaconda")
     } else if path == "/texlive" || path.starts_with("/texlive/") {
         Some("texlive")
+    } else if path == "/elpa" || path.starts_with("/elpa/") {
+        Some("elpa")
     } else if path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -1650,6 +1657,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/anaconda/")
         || path == "/texlive"
         || path.starts_with("/texlive/")
+        || path == "/elpa"
+        || path.starts_with("/elpa/")
         || path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")

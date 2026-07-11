@@ -4,6 +4,7 @@ pub mod composer;
 pub mod cpan;
 pub mod cran;
 pub mod cratesio;
+pub mod elpa;
 pub mod github;
 pub mod go;
 pub mod hackage;

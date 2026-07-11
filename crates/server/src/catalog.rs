@@ -548,7 +548,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Emacs ELPA",
         category: SourceCategory::Repository,
         aliases: &["emacs"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -562,6 +562,13 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "elpa",
+        provider_code: "mirrorproxy",
+        repo_url: "/elpa/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
     TargetSource {
         target_code: "texlive",
         provider_code: "mirrorproxy",

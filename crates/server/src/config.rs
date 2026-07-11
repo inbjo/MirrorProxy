@@ -64,6 +64,8 @@ pub struct Upstreams {
     pub anaconda: String,
     #[serde(default = "default_texlive_repository")]
     pub texlive: String,
+    #[serde(default = "default_elpa_repository")]
+    pub elpa: String,
     #[serde(default = "default_crates_index")]
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
@@ -208,7 +210,7 @@ impl Config {
             match *proxy {
                 "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "nuget"
                 | "cpan" | "cran" | "hackage" | "clojars" | "pub" | "anaconda" | "texlive"
-                | "crates" | "pypi" => {}
+                | "elpa" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -281,6 +283,7 @@ impl Default for Upstreams {
             pub_repository: default_pub_repository(),
             anaconda: default_anaconda_repository(),
             texlive: default_texlive_repository(),
+            elpa: default_elpa_repository(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
             pypi_simple: default_pypi_simple(),
@@ -346,6 +349,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "pub".to_string(),
         "anaconda".to_string(),
         "texlive".to_string(),
+        "elpa".to_string(),
         "crates".to_string(),
         "pypi".to_string(),
     ]
@@ -425,6 +429,10 @@ fn default_anaconda_repository() -> String {
 
 fn default_texlive_repository() -> String {
     "https://mirror.ctan.org/systems/texlive/tlnet".to_string()
+}
+
+fn default_elpa_repository() -> String {
+    "https://elpa.gnu.org/packages".to_string()
 }
 
 fn default_crates_index() -> String {
