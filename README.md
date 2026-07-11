@@ -20,6 +20,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - CPAN repository proxy at `/cpan`
 - CRAN repository proxy at `/cran`
 - Hackage repository proxy at `/hackage`
+- Clojars repository proxy at `/clojars`
 - Cargo sparse registry proxy at `/crates-index`
 - pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
@@ -227,6 +228,16 @@ repository hackage.haskell.org
 
 `mirrorproxy sources set hackage --mirror mirrorproxy --base-url http://127.0.0.1:3000` writes and can restore `~/.cabal/config`. The adapter streams the package index and package tarballs while rejecting traversal paths.
 
+## Clojars Proxy
+
+Configure the Clojure CLI user `deps.edn` to route Clojars through MirrorProxy:
+
+```clojure
+{:mvn/repos {"clojars" {:url "http://127.0.0.1:3000/clojars/"}}}
+```
+
+`mirrorproxy sources set clojars --mirror mirrorproxy --base-url http://127.0.0.1:3000` writes and can restore `~/.clojure/deps.edn`. The adapter streams Clojars POMs, metadata, and JARs with normalized repository paths only.
+
 ## Rust Crates Proxy
 
 Configure Cargo to use MirrorProxy as a sparse registry mirror:
@@ -308,7 +319,7 @@ Copy `config.example.toml` and adjust the public URL for your deployment:
 ```toml
 listen_addr = "127.0.0.1:3000"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -326,6 +337,7 @@ nuget = "https://api.nuget.org"
 cpan = "https://cpan.metacpan.org"
 cran = "https://cloud.r-project.org"
 hackage = "https://hackage.haskell.org"
+clojars = "https://repo.clojars.org"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
@@ -341,7 +353,7 @@ MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
 MIRRORPROXY_DB=/var/lib/mirrorproxy/mirrorproxy.sqlite3
 MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
-MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,maven,rubygems,nuget,cpan,cran,hackage,crates,pypi
+MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,maven,rubygems,nuget,cpan,cran,hackage,clojars,crates,pypi
 MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
 MIRRORPROXY_RATE_LIMIT_ENABLED=true
 MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
