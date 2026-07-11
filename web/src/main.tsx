@@ -196,7 +196,7 @@ const messages = {
   },
 } satisfies Record<Locale, Record<string, string>>
 
-function App() {
+export function App() {
   const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en', ['en', 'zh']))
   const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light', ['light', 'dark']))
   const [config, setConfig] = React.useState<PublicConfig>({
@@ -706,8 +706,5 @@ function InfoBlock({ title, body, mono }: { title: string; body: string; mono?: 
   )
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+const root = document.getElementById('root')
+if (root) createRoot(root).render(<StrictMode><App /></StrictMode>)
