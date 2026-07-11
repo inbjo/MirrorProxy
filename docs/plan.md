@@ -11,27 +11,27 @@
 当前仓库已经不是空目录，已有一个可运行的基础版本：
 
 - Rust workspace 已存在，服务端在 `crates/server`，前端在 `web`。
-- 已实现并注册的代理类型：GitHub、Composer/Packagist、Docker/OCI、npm、Go module、Cargo sparse registry、PyPI Simple API、Maven、RubyGems、NuGet v3、CPAN、CRAN、Hackage、Clojars、Pub/Flutter。
+- 已实现并注册的代理类型：GitHub、Composer/Packagist、Docker/OCI、npm、Go module、Cargo sparse registry、PyPI Simple API、Maven、RubyGems、NuGet v3、CPAN、CRAN、Hackage、Clojars、Pub/Flutter、Anaconda/Conda。
 - 已有运行时配置读取与持久化：`config.example.toml`、环境变量覆盖、SQLite 运行时配置、`/api/public-config` 公开摘要与受保护的管理配置 API。
 - 已有 Web 控制台：React + Vite 内嵌到 Rust 二进制，支持说明页、源目录、登录、代理/上游/配额配置、CLI 命令生成、统计与审计日志。
 - 已有请求限流、SQLite 流量统计和按月流量封停；代理响应保持流式计量，不整块读入内存。
 
 未完成或需要重做的部分：
 
-- 仍缺少多个计划中的生态 adapter（Homebrew、Anaconda、TeX Live、ELPA、Nix、Flatpak 与 OS 静态目录等）。
-- chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚仅覆盖 npm、pip、cargo、go、composer、docker、apt、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars，其他登记目标明确标为仅配置/计划中。
+- 仍缺少多个计划中的生态 adapter（Homebrew、TeX Live、ELPA、Nix、Flatpak 与 OS 静态目录等）。
+- chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚覆盖 npm、pip、cargo、go、composer、docker、apt、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Anaconda，其他登记目标明确标为仅配置/计划中。
 - 真实客户端 smoke 覆盖仍不完整：当前以 Rust 单测、路由测试与本地 smoke 脚本为主，尚未在 CI 中逐项运行 git/docker/composer/npm/yarn/pnpm/go/cargo/pip/cpan 客户端。
 - 可选磁盘缓存、私有 registry 凭证和按用户配额仍属于后续增强；月配额已使用 SQLite 原子预留窗口控制并发超卖，超大单流仍按流式计量结算。
 
 当前完成度估算：
 
-- 代理服务基础能力：约 72%（主流开发生态已覆盖，但协议级客户端 smoke、缓存与后续 adapter 尚缺）。
+- 代理服务基础能力：约 76%（主流开发生态已覆盖，但协议级客户端 smoke、缓存与后续 adapter 尚缺）。
 - Web 控制台：约 75%（公开说明、源目录、登录、设置、统计、审计已完成；自动化前端测试与更完整的交互仍缺）。
 - 配置持久化与管理后台：约 85%。
 - CLI 改源能力：约 65%（已覆盖计划中首批目标并具备回滚；尚未覆盖更多生态和跨平台细节）。
 - SQLite 统计与月流量限制：约 82%（持久统计、封停与并发原子预留已完成；按用户配额和可选明细保留策略仍待完善）。
-- 对齐 chsrc 支持源范围：约 58%，主要目标已登记且更多语言协议可代理，但 OS/软件仓库 adapter 仍有明显缺口。
-- 整体按本计划口径估算：约 75%。
+- 对齐 chsrc 支持源范围：约 61%，主要目标已登记且更多语言协议可代理，但 OS/软件仓库 adapter 仍有明显缺口。
+- 整体按本计划口径估算：约 77%。
 
 ## Key Changes
 
