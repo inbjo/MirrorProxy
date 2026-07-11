@@ -68,6 +68,8 @@ pub struct Upstreams {
     pub elpa: String,
     #[serde(default = "default_nix_repository")]
     pub nix: String,
+    #[serde(default = "default_flatpak_repository")]
+    pub flatpak: String,
     #[serde(default = "default_crates_index")]
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
@@ -212,7 +214,7 @@ impl Config {
             match *proxy {
                 "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "nuget"
                 | "cpan" | "cran" | "hackage" | "clojars" | "pub" | "anaconda" | "texlive"
-                | "elpa" | "nix" | "crates" | "pypi" => {}
+                | "elpa" | "nix" | "flatpak" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -238,6 +240,7 @@ impl Config {
         validate_http_url("upstreams.texlive", &self.upstreams.texlive)?;
         validate_http_url("upstreams.elpa", &self.upstreams.elpa)?;
         validate_http_url("upstreams.nix", &self.upstreams.nix)?;
+        validate_http_url("upstreams.flatpak", &self.upstreams.flatpak)?;
         validate_http_url("upstreams.crates_index", &self.upstreams.crates_index)?;
         validate_http_url("upstreams.crates_api", &self.upstreams.crates_api)?;
         validate_http_url("upstreams.pypi_simple", &self.upstreams.pypi_simple)?;
@@ -290,6 +293,7 @@ impl Default for Upstreams {
             texlive: default_texlive_repository(),
             elpa: default_elpa_repository(),
             nix: default_nix_repository(),
+            flatpak: default_flatpak_repository(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
             pypi_simple: default_pypi_simple(),
@@ -357,6 +361,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "texlive".to_string(),
         "elpa".to_string(),
         "nix".to_string(),
+        "flatpak".to_string(),
         "crates".to_string(),
         "pypi".to_string(),
     ]
@@ -444,6 +449,10 @@ fn default_elpa_repository() -> String {
 
 fn default_nix_repository() -> String {
     "https://cache.nixos.org".to_string()
+}
+
+fn default_flatpak_repository() -> String {
+    "https://dl.flathub.org/repo".to_string()
 }
 
 fn default_crates_index() -> String {
