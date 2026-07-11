@@ -76,7 +76,7 @@ jobs:
           php-version: "8.3"
           tools: composer
       - name: Install CPAN client
-        run: sudo apt-get update && sudo apt-get install -y cpanminus maven
+        run: sudo apt-get update && sudo apt-get install -y cpanminus maven r-base
       - name: Build web console
         working-directory: web
         run: |
