@@ -55,7 +55,7 @@ try {
 listen_addr = "127.0.0.1:$Port"
 database_path = "$databaseToml"
 public_base_url = "$publicBaseUrl"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "pub", "anaconda", "texlive", "elpa", "nix", "flatpak", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "pub", "anaconda", "texlive", "elpa", "nix", "flatpak", "os", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -80,6 +80,9 @@ texlive = "https://mirror.ctan.org/systems/texlive/tlnet"
 elpa = "https://elpa.gnu.org/packages"
 nix = "https://cache.nixos.org"
 flatpak = "https://dl.flathub.org/repo"
+alpine = "https://dl-cdn.alpinelinux.org/alpine"
+openwrt = "https://downloads.openwrt.org"
+termux = "https://packages.termux.dev/apt/termux-main"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
@@ -122,6 +125,7 @@ requests_per_minute = 600
     $null = Assert-Status "/elpa/"
     $null = Assert-Status "/nix/"
     $null = Assert-Status "/flatpak/"
+    $null = Assert-Status "/os/"
 
     $cratesConfig = Assert-Status "/crates-index/config.json"
     if ($cratesConfig.Content -notlike "*/crates/api/v1/crates*") {
