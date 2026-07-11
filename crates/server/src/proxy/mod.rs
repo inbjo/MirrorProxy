@@ -14,6 +14,7 @@ pub mod oci;
 pub mod pub_repository;
 pub mod pypi;
 pub mod rubygems;
+pub mod texlive;
 
 use axum::{
     body::Body,

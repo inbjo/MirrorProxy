@@ -62,6 +62,8 @@ pub struct Upstreams {
     pub pub_repository: String,
     #[serde(default = "default_anaconda_repository")]
     pub anaconda: String,
+    #[serde(default = "default_texlive_repository")]
+    pub texlive: String,
     #[serde(default = "default_crates_index")]
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
@@ -205,8 +207,8 @@ impl Config {
         for proxy in enabled.keys() {
             match *proxy {
                 "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "nuget"
-                | "cpan" | "cran" | "hackage" | "clojars" | "pub" | "anaconda" | "crates"
-                | "pypi" => {}
+                | "cpan" | "cran" | "hackage" | "clojars" | "pub" | "anaconda" | "texlive"
+                | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -278,6 +280,7 @@ impl Default for Upstreams {
             clojars: default_clojars_repository(),
             pub_repository: default_pub_repository(),
             anaconda: default_anaconda_repository(),
+            texlive: default_texlive_repository(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
             pypi_simple: default_pypi_simple(),
@@ -342,6 +345,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "clojars".to_string(),
         "pub".to_string(),
         "anaconda".to_string(),
+        "texlive".to_string(),
         "crates".to_string(),
         "pypi".to_string(),
     ]
@@ -417,6 +421,10 @@ fn default_pub_repository() -> String {
 
 fn default_anaconda_repository() -> String {
     "https://repo.anaconda.com/pkgs".to_string()
+}
+
+fn default_texlive_repository() -> String {
+    "https://mirror.ctan.org/systems/texlive/tlnet".to_string()
 }
 
 fn default_crates_index() -> String {

@@ -556,12 +556,19 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "TeX Live",
         category: SourceCategory::Repository,
         aliases: &["tex"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "texlive",
+        provider_code: "mirrorproxy",
+        repo_url: "/texlive/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
     TargetSource {
         target_code: "anaconda",
         provider_code: "mirrorproxy",
