@@ -163,8 +163,10 @@ fn cache_paths(cache: &CacheConfig, url: &Url) -> Option<(PathBuf, PathBuf)> {
 fn read_disk_cache(cache: &CacheConfig, url: &Url) -> Option<Response> {
     let (body_path, metadata_path) = cache_paths(cache, url)?;
     let body = fs::read(&body_path).ok()?;
-    let _ =
-        fs::File::open(&body_path).and_then(|file| file.set_modified(std::time::SystemTime::now()));
+    let _ = fs::OpenOptions::new()
+        .write(true)
+        .open(&body_path)
+        .and_then(|file| file.set_modified(std::time::SystemTime::now()));
     let metadata: DiskCacheMetadata =
         serde_json::from_slice(&fs::read(metadata_path).ok()?).ok()?;
     let status = StatusCode::from_u16(metadata.status).ok()?;
@@ -393,7 +395,9 @@ mod tests {
         write_disk_cache(&cache, &first, reqwest::StatusCode::OK, &headers, &payload);
         let (first_body, _) = cache_paths(&cache, &first).unwrap();
         write_disk_cache(&cache, &second, reqwest::StatusCode::OK, &headers, &payload);
-        fs::File::open(&first_body)
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&first_body)
             .unwrap()
             .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(1))
             .unwrap();
