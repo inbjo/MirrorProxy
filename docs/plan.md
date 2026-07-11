@@ -20,7 +20,7 @@
 
 - 仍缺少部分计划中的生态 adapter；主流 Linux 发行版（含 Debian、Ubuntu、Fedora、Arch、openSUSE、Void、Gentoo、FreeBSD）已加入受限 OS 静态目录代理，Homebrew bottles 已通过 `/homebrew` 提供 GHCR OCI bottle 流式代理。
 - chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚覆盖 npm、pip、cargo、go、composer、docker、apt、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Anaconda，其他登记目标明确标为仅配置/计划中。
-- 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip、Docker、CPAN cpanm、RubyGems 和 Maven；其余生态客户端仍待补齐，并需持续保留路由/单元测试。
+- 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip、Docker、CPAN cpanm、RubyGems、Maven 和 NuGet；其余生态客户端仍待补齐，并需持续保留路由/单元测试。
 - 小对象可选磁盘缓存已完成（默认关闭，跳过认证、Cookie 与 Range 请求）；缓存总量/LRU、私有 registry 凭证和按用户配额仍属于后续增强。月配额已使用 SQLite 原子预留窗口控制并发超卖，超大单流仍按流式计量结算。
 
 当前完成度估算：
