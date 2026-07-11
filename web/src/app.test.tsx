@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from './main'
 
@@ -13,5 +13,15 @@ describe('App preferences', () => {
     expect(document.documentElement.dataset.theme).toBe('dark')
     expect(localStorage.getItem('mirrorproxy.locale')).toBe('zh')
     expect(localStorage.getItem('mirrorproxy.theme')).toBe('dark')
+  })
+
+  it('copies a generated command and shows feedback', async () => {
+    const writeText = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))))
+    Object.assign(navigator, { clipboard: { writeText } })
+    render(<App />)
+    fireEvent.click(screen.getAllByText('Copy')[0])
+    await waitFor(() => expect(writeText).toHaveBeenCalled())
+    expect(screen.getByText('Copied')).toBeTruthy()
   })
 })
