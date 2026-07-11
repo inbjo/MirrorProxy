@@ -373,4 +373,35 @@ mod tests {
         assert!(!metadata.exists());
         let _ = fs::remove_dir_all(directory);
     }
+
+    #[test]
+    fn capacity_eviction_keeps_most_recently_read_entry() {
+        let directory =
+            std::env::temp_dir().join(format!("mirrorproxy-lru-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let mut cache = CacheConfig {
+            enabled: true,
+            directory: directory.display().to_string(),
+            max_entry_mb: 1,
+            max_total_mb: 2,
+        };
+        let headers = HeaderMap::new();
+        let first = Url::parse("https://upstream.example/first").unwrap();
+        let second = Url::parse("https://upstream.example/second").unwrap();
+        let third = Url::parse("https://upstream.example/third").unwrap();
+        let payload = vec![0; 600 * 1024];
+        write_disk_cache(&cache, &first, reqwest::StatusCode::OK, &headers, &payload);
+        let (first_body, _) = cache_paths(&cache, &first).unwrap();
+        write_disk_cache(&cache, &second, reqwest::StatusCode::OK, &headers, &payload);
+        fs::File::open(&first_body)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        cache.max_total_mb = 1;
+        write_disk_cache(&cache, &third, reqwest::StatusCode::OK, &headers, &payload);
+        let (second_body, _) = cache_paths(&cache, &second).unwrap();
+        assert!(first_body.exists());
+        assert!(!second_body.exists());
+        let _ = fs::remove_dir_all(directory);
+    }
 }
