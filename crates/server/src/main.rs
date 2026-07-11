@@ -1574,6 +1574,9 @@ fn track_proxy_response(
                     ))
                 }
                 None => {
+                    if stream_error {
+                        return None;
+                    }
                     if let Err(record_error) = database
                         .record_proxy_response(ProxyTrafficRecord {
                             day: &day,
