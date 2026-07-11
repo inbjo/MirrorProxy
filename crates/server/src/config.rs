@@ -54,6 +54,8 @@ pub struct Upstreams {
     pub cpan: String,
     #[serde(default = "default_cran_repository")]
     pub cran: String,
+    #[serde(default = "default_hackage_repository")]
+    pub hackage: String,
     #[serde(default = "default_crates_index")]
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
@@ -197,7 +199,7 @@ impl Config {
         for proxy in enabled.keys() {
             match *proxy {
                 "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "nuget"
-                | "cpan" | "cran" | "crates" | "pypi" => {}
+                | "cpan" | "cran" | "hackage" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -216,6 +218,7 @@ impl Config {
         validate_http_url("upstreams.nuget", &self.upstreams.nuget)?;
         validate_http_url("upstreams.cpan", &self.upstreams.cpan)?;
         validate_http_url("upstreams.cran", &self.upstreams.cran)?;
+        validate_http_url("upstreams.hackage", &self.upstreams.hackage)?;
         validate_http_url("upstreams.crates_index", &self.upstreams.crates_index)?;
         validate_http_url("upstreams.crates_api", &self.upstreams.crates_api)?;
         validate_http_url("upstreams.pypi_simple", &self.upstreams.pypi_simple)?;
@@ -261,6 +264,7 @@ impl Default for Upstreams {
             nuget: default_nuget_repository(),
             cpan: default_cpan_repository(),
             cran: default_cran_repository(),
+            hackage: default_hackage_repository(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
             pypi_simple: default_pypi_simple(),
@@ -321,6 +325,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "nuget".to_string(),
         "cpan".to_string(),
         "cran".to_string(),
+        "hackage".to_string(),
         "crates".to_string(),
         "pypi".to_string(),
     ]
@@ -380,6 +385,10 @@ fn default_cpan_repository() -> String {
 
 fn default_cran_repository() -> String {
     "https://cloud.r-project.org".to_string()
+}
+
+fn default_hackage_repository() -> String {
+    "https://hackage.haskell.org".to_string()
 }
 
 fn default_crates_index() -> String {

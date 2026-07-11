@@ -30,7 +30,8 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
-    composer, cpan, cran, cratesio, github, go, maven, npm, nuget, oci, pypi, rubygems, ProxyError,
+    composer, cpan, cran, cratesio, github, go, hackage, maven, npm, nuget, oci, pypi, rubygems,
+    ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -464,6 +465,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.nuget" => Some(config.upstreams.nuget.clone()),
         "upstreams.cpan" => Some(config.upstreams.cpan.clone()),
         "upstreams.cran" => Some(config.upstreams.cran.clone()),
+        "upstreams.hackage" => Some(config.upstreams.hackage.clone()),
         "upstreams.crates_index" => Some(config.upstreams.crates_index.clone()),
         "upstreams.crates_api" => Some(config.upstreams.crates_api.clone()),
         "upstreams.pypi_simple" => Some(config.upstreams.pypi_simple.clone()),
@@ -499,6 +501,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.nuget",
         "upstreams.cpan",
         "upstreams.cran",
+        "upstreams.hackage",
         "upstreams.crates_index",
         "upstreams.crates_api",
         "upstreams.pypi_simple",
@@ -848,6 +851,7 @@ fn source_config_path(
             "nuget" => ".config/NuGet/NuGet.Config",
             "cpan" => ".cpan/CPAN/MyConfig.pm",
             "cran" => ".Rprofile",
+            "hackage" => ".cabal/config",
             "composer" => ".config/composer/config.json",
             other => anyhow::bail!("{other} does not support safe user-scope configuration writes"),
         },
@@ -901,6 +905,9 @@ fn source_config_content(
             "cran" => source_config_command("cran", repo_url)
                 .map(|content| format!("# Managed by MirrorProxy\n{content}\n"))
                 .ok_or_else(|| anyhow::anyhow!("missing CRAN configuration template")),
+            "hackage" => source_config_command("hackage", repo_url)
+                .map(|content| format!("-- Managed by MirrorProxy\n{content}\n"))
+                .ok_or_else(|| anyhow::anyhow!("missing Hackage configuration template")),
             "composer" => Ok(serde_json::to_string_pretty(&serde_json::json!({
                 "repositories": {
                     "packagist": { "type": "composer", "url": repo_url }
@@ -1051,6 +1058,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         "nuget" => Some("Restore the previous NuGet.Config package source list".to_string()),
         "cpan" => Some("Restore the previous CPAN ~/.cpan/CPAN/MyConfig.pm mirror list".to_string()),
         "cran" => Some("Restore the previous R ~/.Rprofile repository setting".to_string()),
+        "hackage" => Some("Restore the previous Cabal ~/.cabal/config repository setting".to_string()),
         "composer" => Some("composer config --unset repos.packagist".to_string()),
         "docker" => Some(
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
@@ -1208,6 +1216,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/cran", get(cran::root).head(cran::root))
         .route("/cran/", get(cran::root).head(cran::root))
         .route("/cran/{*path}", get(cran::proxy).head(cran::proxy))
+        .route("/hackage", get(hackage::root).head(hackage::root))
+        .route("/hackage/", get(hackage::root).head(hackage::root))
+        .route("/hackage/{*path}", get(hackage::proxy).head(hackage::proxy))
         .route(
             "/pypi/simple",
             get(pypi::simple_root).head(pypi::simple_root),
@@ -1401,6 +1412,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("cpan")
     } else if path == "/cran" || path.starts_with("/cran/") {
         Some("cran")
+    } else if path == "/hackage" || path.starts_with("/hackage/") {
+        Some("hackage")
     } else if path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -1542,6 +1555,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/cpan/")
         || path == "/cran"
         || path.starts_with("/cran/")
+        || path == "/hackage"
+        || path.starts_with("/hackage/")
         || path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")

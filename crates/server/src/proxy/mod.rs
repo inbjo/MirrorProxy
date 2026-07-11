@@ -4,6 +4,7 @@ pub mod cran;
 pub mod cratesio;
 pub mod github;
 pub mod go;
+pub mod hackage;
 pub mod maven;
 pub mod npm;
 pub mod nuget;
