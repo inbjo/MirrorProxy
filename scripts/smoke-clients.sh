@@ -22,12 +22,16 @@ cat >"${config}" <<EOF
 listen_addr = "127.0.0.1:${port}"
 database_path = "${work}/mirrorproxy.sqlite3"
 public_base_url = "${base}"
-enabled_proxies = ["github", "composer", "npm", "go", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
 github_raw = "https://raw.githubusercontent.com"
 packagist = "https://repo.packagist.org"
+docker_hub = "https://registry-1.docker.io"
+ghcr = "https://ghcr.io"
+quay = "https://quay.io"
+kubernetes = "https://registry.k8s.io"
 npm = "https://registry.npmjs.org"
 go_proxy = "https://proxy.golang.org"
 crates_index = "https://index.crates.io"
@@ -83,4 +87,9 @@ mkdir "${work}/composer"
   COMPOSER_HOME="${work}/composer-home" composer require monolog/monolog:^3 --no-interaction --no-progress >/dev/null
 )
 
-printf 'client smoke passed: git npm yarn pnpm go cargo pip composer\n'
+if [[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]]; then
+  docker pull "127.0.0.1:${port}/library/busybox:1.36.1" >/dev/null
+fi
+
+printf 'client smoke passed: git npm yarn pnpm go cargo pip composer%s\n' \
+  "$([[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]] && printf ' docker' || true)"

@@ -70,4 +70,6 @@ jobs:
           npm ci
           npm run build
       - name: Run public client protocol smoke
+        env:
+          MIRRORPROXY_SMOKE_DOCKER: "1"
         run: ./scripts/smoke-clients.sh
