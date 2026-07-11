@@ -334,6 +334,14 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         default_scope: SourceScope::User,
     },
     SourceTarget {
+        code: "cran",
+        name: "R CRAN",
+        category: SourceCategory::Language,
+        aliases: &["r", "r-project"],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
         code: "anaconda",
         name: "Anaconda",
         category: SourceCategory::Repository,
@@ -404,6 +412,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "cpan",
         provider_code: "mirrorproxy",
         repo_url: "/cpan/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "cran",
+        provider_code: "mirrorproxy",
+        repo_url: "/cran/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -548,6 +563,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         os_family: "any",
         scope: SourceScope::User,
         template: "cpanm --mirror {repo_url} --mirror-only <module>",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "cran",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "options(repos = c(CRAN = \"{repo_url}\"))",
         requires_sudo: false,
     },
     SourceTemplate {

@@ -30,7 +30,7 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
-    composer, cpan, cratesio, github, go, maven, npm, nuget, oci, pypi, rubygems, ProxyError,
+    composer, cpan, cran, cratesio, github, go, maven, npm, nuget, oci, pypi, rubygems, ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -463,6 +463,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.rubygems" => Some(config.upstreams.rubygems.clone()),
         "upstreams.nuget" => Some(config.upstreams.nuget.clone()),
         "upstreams.cpan" => Some(config.upstreams.cpan.clone()),
+        "upstreams.cran" => Some(config.upstreams.cran.clone()),
         "upstreams.crates_index" => Some(config.upstreams.crates_index.clone()),
         "upstreams.crates_api" => Some(config.upstreams.crates_api.clone()),
         "upstreams.pypi_simple" => Some(config.upstreams.pypi_simple.clone()),
@@ -497,6 +498,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.rubygems",
         "upstreams.nuget",
         "upstreams.cpan",
+        "upstreams.cran",
         "upstreams.crates_index",
         "upstreams.crates_api",
         "upstreams.pypi_simple",
@@ -845,6 +847,7 @@ fn source_config_path(
             "nuget" if cfg!(windows) => "NuGet/NuGet.Config",
             "nuget" => ".config/NuGet/NuGet.Config",
             "cpan" => ".cpan/CPAN/MyConfig.pm",
+            "cran" => ".Rprofile",
             "composer" => ".config/composer/config.json",
             other => anyhow::bail!("{other} does not support safe user-scope configuration writes"),
         },
@@ -895,6 +898,9 @@ fn source_config_content(
                 .map(|content| format!("{content}\n"))
                 .ok_or_else(|| anyhow::anyhow!("missing NuGet configuration template")),
             "cpan" => Ok(format!("# Managed by MirrorProxy\n$CPAN::Config->{{'urllist'}} = [q[{repo_url}]];\n")),
+            "cran" => source_config_command("cran", repo_url)
+                .map(|content| format!("# Managed by MirrorProxy\n{content}\n"))
+                .ok_or_else(|| anyhow::anyhow!("missing CRAN configuration template")),
             "composer" => Ok(serde_json::to_string_pretty(&serde_json::json!({
                 "repositories": {
                     "packagist": { "type": "composer", "url": repo_url }
@@ -1044,6 +1050,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         "rubygems" => Some("Restore the previous RubyGems ~/.gemrc source list".to_string()),
         "nuget" => Some("Restore the previous NuGet.Config package source list".to_string()),
         "cpan" => Some("Restore the previous CPAN ~/.cpan/CPAN/MyConfig.pm mirror list".to_string()),
+        "cran" => Some("Restore the previous R ~/.Rprofile repository setting".to_string()),
         "composer" => Some("composer config --unset repos.packagist".to_string()),
         "docker" => Some(
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
@@ -1198,6 +1205,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/cpan", get(cpan::root).head(cpan::root))
         .route("/cpan/", get(cpan::root).head(cpan::root))
         .route("/cpan/{*path}", get(cpan::proxy).head(cpan::proxy))
+        .route("/cran", get(cran::root).head(cran::root))
+        .route("/cran/", get(cran::root).head(cran::root))
+        .route("/cran/{*path}", get(cran::proxy).head(cran::proxy))
         .route(
             "/pypi/simple",
             get(pypi::simple_root).head(pypi::simple_root),
@@ -1389,6 +1399,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("nuget")
     } else if path == "/cpan" || path.starts_with("/cpan/") {
         Some("cpan")
+    } else if path == "/cran" || path.starts_with("/cran/") {
+        Some("cran")
     } else if path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -1528,6 +1540,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/nuget/")
         || path == "/cpan"
         || path.starts_with("/cpan/")
+        || path == "/cran"
+        || path.starts_with("/cran/")
         || path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
