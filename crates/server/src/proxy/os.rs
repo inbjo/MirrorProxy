@@ -43,6 +43,10 @@ pub async fn proxy(
         "alpine" => &c.upstreams.alpine,
         "openwrt" => &c.upstreams.openwrt,
         "termux" => &c.upstreams.termux,
+        "debian" => &c.upstreams.debian,
+        "ubuntu" => &c.upstreams.ubuntu,
+        "fedora" => &c.upstreams.fedora,
+        "archlinux" => &c.upstreams.archlinux,
         _ => return Err(ProxyError::UnsupportedTarget),
     };
     let mut u = reqwest::Url::parse(base).map_err(|_| ProxyError::InvalidUrl)?;
@@ -55,6 +59,9 @@ pub async fn proxy(
 mod tests {
     #[test]
     fn documents_fixed_targets() {
-        assert!(matches!("alpine", "alpine" | "openwrt" | "termux"));
+        assert!(matches!(
+            "alpine",
+            "alpine" | "openwrt" | "termux" | "debian" | "ubuntu" | "fedora" | "archlinux"
+        ));
     }
 }

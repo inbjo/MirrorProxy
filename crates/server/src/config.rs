@@ -80,6 +80,14 @@ pub struct Upstreams {
     pub openwrt: String,
     #[serde(default = "default_termux_repository")]
     pub termux: String,
+    #[serde(default = "default_debian_repository")]
+    pub debian: String,
+    #[serde(default = "default_ubuntu_repository")]
+    pub ubuntu: String,
+    #[serde(default = "default_fedora_repository")]
+    pub fedora: String,
+    #[serde(default = "default_archlinux_repository")]
+    pub archlinux: String,
     #[serde(default = "default_crates_index")]
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
@@ -285,6 +293,10 @@ impl Config {
         validate_http_url("upstreams.alpine", &self.upstreams.alpine)?;
         validate_http_url("upstreams.openwrt", &self.upstreams.openwrt)?;
         validate_http_url("upstreams.termux", &self.upstreams.termux)?;
+        validate_http_url("upstreams.debian", &self.upstreams.debian)?;
+        validate_http_url("upstreams.ubuntu", &self.upstreams.ubuntu)?;
+        validate_http_url("upstreams.fedora", &self.upstreams.fedora)?;
+        validate_http_url("upstreams.archlinux", &self.upstreams.archlinux)?;
         validate_http_url("upstreams.crates_index", &self.upstreams.crates_index)?;
         validate_http_url("upstreams.crates_api", &self.upstreams.crates_api)?;
         validate_http_url("upstreams.pypi_simple", &self.upstreams.pypi_simple)?;
@@ -343,6 +355,10 @@ impl Default for Upstreams {
             alpine: default_alpine_repository(),
             openwrt: default_openwrt_repository(),
             termux: default_termux_repository(),
+            debian: default_debian_repository(),
+            ubuntu: default_ubuntu_repository(),
+            fedora: default_fedora_repository(),
+            archlinux: default_archlinux_repository(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
             pypi_simple: default_pypi_simple(),
@@ -535,6 +551,18 @@ fn default_openwrt_repository() -> String {
 }
 fn default_termux_repository() -> String {
     "https://packages.termux.dev/apt/termux-main".to_string()
+}
+fn default_debian_repository() -> String {
+    "https://deb.debian.org/debian".to_string()
+}
+fn default_ubuntu_repository() -> String {
+    "https://archive.ubuntu.com/ubuntu".to_string()
+}
+fn default_fedora_repository() -> String {
+    "https://download.fedoraproject.org/pub/fedora/linux".to_string()
+}
+fn default_archlinux_repository() -> String {
+    "https://geo.mirror.pkgbuild.com".to_string()
 }
 
 fn default_crates_index() -> String {

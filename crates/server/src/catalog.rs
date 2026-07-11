@@ -274,7 +274,11 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "APT",
         category: SourceCategory::OperatingSystem,
         aliases: &["debian", "ubuntu"],
-        supported_modes: &[SourceMode::LocalConfig, SourceMode::TemplateOnly],
+        supported_modes: &[
+            SourceMode::ProxyAdapter,
+            SourceMode::LocalConfig,
+            SourceMode::TemplateOnly,
+        ],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -282,7 +286,11 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "YUM / DNF",
         category: SourceCategory::OperatingSystem,
         aliases: &["yum", "fedora", "rocky", "alma"],
-        supported_modes: &[SourceMode::LocalConfig, SourceMode::TemplateOnly],
+        supported_modes: &[
+            SourceMode::ProxyAdapter,
+            SourceMode::LocalConfig,
+            SourceMode::TemplateOnly,
+        ],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -290,7 +298,11 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "pacman",
         category: SourceCategory::OperatingSystem,
         aliases: &["arch", "manjaro"],
-        supported_modes: &[SourceMode::LocalConfig, SourceMode::TemplateOnly],
+        supported_modes: &[
+            SourceMode::ProxyAdapter,
+            SourceMode::LocalConfig,
+            SourceMode::TemplateOnly,
+        ],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -566,6 +578,27 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "apt",
+        provider_code: "mirrorproxy",
+        repo_url: "/os",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "dnf",
+        provider_code: "mirrorproxy",
+        repo_url: "/os",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "pacman",
+        provider_code: "mirrorproxy",
+        repo_url: "/os",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
     TargetSource {
         target_code: "alpine",
         provider_code: "mirrorproxy",
