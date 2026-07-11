@@ -29,7 +29,9 @@ use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
-use proxy::{composer, cratesio, github, go, maven, npm, nuget, oci, pypi, rubygems, ProxyError};
+use proxy::{
+    composer, cpan, cratesio, github, go, maven, npm, nuget, oci, pypi, rubygems, ProxyError,
+};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -460,6 +462,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.maven" => Some(config.upstreams.maven.clone()),
         "upstreams.rubygems" => Some(config.upstreams.rubygems.clone()),
         "upstreams.nuget" => Some(config.upstreams.nuget.clone()),
+        "upstreams.cpan" => Some(config.upstreams.cpan.clone()),
         "upstreams.crates_index" => Some(config.upstreams.crates_index.clone()),
         "upstreams.crates_api" => Some(config.upstreams.crates_api.clone()),
         "upstreams.pypi_simple" => Some(config.upstreams.pypi_simple.clone()),
@@ -493,6 +496,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.maven",
         "upstreams.rubygems",
         "upstreams.nuget",
+        "upstreams.cpan",
         "upstreams.crates_index",
         "upstreams.crates_api",
         "upstreams.pypi_simple",
@@ -840,6 +844,7 @@ fn source_config_path(
             "rubygems" => ".gemrc",
             "nuget" if cfg!(windows) => "NuGet/NuGet.Config",
             "nuget" => ".config/NuGet/NuGet.Config",
+            "cpan" => ".cpan/CPAN/MyConfig.pm",
             "composer" => ".config/composer/config.json",
             other => anyhow::bail!("{other} does not support safe user-scope configuration writes"),
         },
@@ -889,6 +894,7 @@ fn source_config_content(
             "nuget" => source_config_command("nuget", repo_url)
                 .map(|content| format!("{content}\n"))
                 .ok_or_else(|| anyhow::anyhow!("missing NuGet configuration template")),
+            "cpan" => Ok(format!("# Managed by MirrorProxy\n$CPAN::Config->{{'urllist'}} = [q[{repo_url}]];\n")),
             "composer" => Ok(serde_json::to_string_pretty(&serde_json::json!({
                 "repositories": {
                     "packagist": { "type": "composer", "url": repo_url }
@@ -1037,6 +1043,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         ),
         "rubygems" => Some("Restore the previous RubyGems ~/.gemrc source list".to_string()),
         "nuget" => Some("Restore the previous NuGet.Config package source list".to_string()),
+        "cpan" => Some("Restore the previous CPAN ~/.cpan/CPAN/MyConfig.pm mirror list".to_string()),
         "composer" => Some("composer config --unset repos.packagist".to_string()),
         "docker" => Some(
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
@@ -1188,6 +1195,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             get(nuget::service_index).head(nuget::service_index),
         )
         .route("/nuget/{*path}", get(nuget::proxy).head(nuget::proxy))
+        .route("/cpan", get(cpan::root).head(cpan::root))
+        .route("/cpan/", get(cpan::root).head(cpan::root))
+        .route("/cpan/{*path}", get(cpan::proxy).head(cpan::proxy))
         .route(
             "/pypi/simple",
             get(pypi::simple_root).head(pypi::simple_root),
@@ -1377,6 +1387,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("rubygems")
     } else if path == "/nuget" || path.starts_with("/nuget/") {
         Some("nuget")
+    } else if path == "/cpan" || path.starts_with("/cpan/") {
+        Some("cpan")
     } else if path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -1514,6 +1526,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/rubygems/")
         || path == "/nuget"
         || path.starts_with("/nuget/")
+        || path == "/cpan"
+        || path.starts_with("/cpan/")
         || path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -2056,6 +2070,10 @@ mod tests {
             config_value(&config, "upstreams.nuget").unwrap(),
             "https://api.nuget.org"
         );
+        assert_eq!(
+            config_value(&config, "upstreams.cpan").unwrap(),
+            "https://cpan.metacpan.org"
+        );
         assert!(config_value(&config, "missing.key").is_none());
     }
 
@@ -2082,6 +2100,9 @@ mod tests {
         assert!(entries
             .iter()
             .any(|(key, value)| *key == "upstreams.nuget" && value == "https://api.nuget.org"));
+        assert!(entries
+            .iter()
+            .any(|(key, value)| *key == "upstreams.cpan" && value == "https://cpan.metacpan.org"));
     }
 
     #[test]
@@ -2184,6 +2205,10 @@ on_exceeded = "stop_proxy"
                 .contains("value=\"https://mirror.example/nuget/v3/index.json\"")
         );
         assert_eq!(
+            source_config_command("cpan", "https://mirror.example/cpan/").unwrap(),
+            "cpanm --mirror https://mirror.example/cpan/ --mirror-only <module>"
+        );
+        assert_eq!(
             source_config_command("composer", "https://mirror.example/composer/").unwrap(),
             "composer config repo.packagist composer https://mirror.example/composer/"
         );
@@ -2265,7 +2290,7 @@ on_exceeded = "stop_proxy"
         fs::create_dir_all(&directory).unwrap();
 
         for target_code in [
-            "npm", "pip", "cargo", "go", "maven", "rubygems", "nuget", "composer",
+            "npm", "pip", "cargo", "go", "maven", "rubygems", "nuget", "cpan", "composer",
         ] {
             let command = PlannedSourceCommand {
                 target_code,
@@ -2536,6 +2561,11 @@ on_exceeded = "stop_proxy"
             .unwrap()
             .iter()
             .any(|proxy| proxy == "nuget"));
+        assert!(value["enabled_proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|proxy| proxy == "cpan"));
         assert!(value["enabled_proxies"]
             .as_array()
             .unwrap()
@@ -2871,6 +2901,13 @@ on_exceeded = "stop_proxy"
             .any(|source| source["target_code"] == "nuget"
                 && source["provider_code"] == "mirrorproxy"
                 && source["repo_url"] == "/nuget/v3/index.json"));
+        assert!(value["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|source| source["target_code"] == "cpan"
+                && source["provider_code"] == "mirrorproxy"
+                && source["repo_url"] == "/cpan/"));
         assert!(value["templates"]
             .as_array()
             .unwrap()
@@ -2965,6 +3002,24 @@ on_exceeded = "stop_proxy"
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("NuGet v3 repository proxy"));
+    }
+
+    #[tokio::test]
+    async fn cpan_root_returns_proxy_info() {
+        let app = build_router(Config::default()).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/cpan/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("CPAN repository proxy"));
     }
 
     #[tokio::test]

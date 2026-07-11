@@ -1,4 +1,5 @@
 pub mod composer;
+pub mod cpan;
 pub mod cratesio;
 pub mod github;
 pub mod go;

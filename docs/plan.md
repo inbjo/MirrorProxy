@@ -11,30 +11,27 @@
 当前仓库已经不是空目录，已有一个可运行的基础版本：
 
 - Rust workspace 已存在，服务端在 `crates/server`，前端在 `web`。
-- 已实现并注册的代理类型：GitHub、Composer/Packagist、Docker/OCI、npm、Go module、Cargo sparse registry、PyPI Simple API。
-- 已有运行时配置读取：`config.example.toml`、环境变量覆盖、`/api/config` 公开运行时基础配置。
-- 已有 Web 控制台：React + Vite，内嵌到 Rust 二进制，主要展示状态和各类代理配置命令。
-- 已有简单请求限流：全局 `requests_per_minute`，但还不是按流量、用户、月份统计的配额系统。
+- 已实现并注册的代理类型：GitHub、Composer/Packagist、Docker/OCI、npm、Go module、Cargo sparse registry、PyPI Simple API、Maven、RubyGems、NuGet v3、CPAN。
+- 已有运行时配置读取与持久化：`config.example.toml`、环境变量覆盖、SQLite 运行时配置、`/api/public-config` 公开摘要与受保护的管理配置 API。
+- 已有 Web 控制台：React + Vite 内嵌到 Rust 二进制，支持说明页、源目录、登录、代理/上游/配额配置、CLI 命令生成、统计与审计日志。
+- 已有请求限流、SQLite 流量统计和按月流量封停；代理响应保持流式计量，不整块读入内存。
 
 未完成或需要重做的部分：
 
-- 没有 SQLite 持久化配置、统计、配额、鉴权状态。
-- 没有管理 API 鉴权；`/api/config` 仍是公开只读。
-- 没有服务启动随机管理密码生成、登录、会话或 token 管理。
-- Web 只展示配置和命令，尚不支持可视化编辑配置。
-- 没有 CLI 子命令，也没有像 chsrc 一样修改本机包管理器源配置。
-- 没有按月流量上限，到达 N GB 后停止代理服务的硬限制。
-- 没有把 chsrc 支持的源体系完整建模进 MirrorProxy。
+- 仍缺少多个计划中的生态 adapter（CPAN 之后的 CRAN、Hackage、Clojars、Pub/Flutter、Homebrew、Anaconda、TeX Live、ELPA、Nix、Flatpak 与 OS 静态目录等）。
+- chsrc 目标和镜像站目录仍未完整登记；当前 CLI 写入/回滚仅覆盖 npm、pip、cargo、go、composer、docker、apt、dnf、pacman、Maven、RubyGems、NuGet、CPAN。
+- 真实客户端 smoke 覆盖仍不完整：当前以 Rust 单测、路由测试与本地 smoke 脚本为主，尚未在 CI 中逐项运行 git/docker/composer/npm/yarn/pnpm/go/cargo/pip/cpan 客户端。
+- 配额的并发预留/精确防超卖、可选磁盘缓存、私有 registry 凭证和按用户配额仍属于后续增强。
 
 当前完成度估算：
 
-- 代理服务基础能力：约 55%。
-- Web 展示页：约 35%。
-- 配置持久化与管理后台：约 5%。
-- CLI 改源能力：0%。
-- SQLite 统计与月流量限制：0%。
-- 对齐 chsrc 支持源范围：约 20%，仅覆盖 npm、Go、Cargo、PyPI、Composer、Docker 等重叠部分。
-- 整体按本计划口径估算：约 30%。
+- 代理服务基础能力：约 72%（主流开发生态已覆盖，但协议级客户端 smoke、缓存与后续 adapter 尚缺）。
+- Web 控制台：约 75%（公开说明、源目录、登录、设置、统计、审计已完成；自动化前端测试与更完整的交互仍缺）。
+- 配置持久化与管理后台：约 85%。
+- CLI 改源能力：约 65%（已覆盖计划中首批目标并具备回滚；尚未覆盖更多生态和跨平台细节）。
+- SQLite 统计与月流量限制：约 75%（持久统计和封停已完成，并发精确预留仍待完善）。
+- 对齐 chsrc 支持源范围：约 42%，已覆盖更多语言生态，但 OS/软件仓库目录和 adapter 仍有明显缺口。
+- 整体按本计划口径估算：约 68%。
 
 ## Key Changes
 

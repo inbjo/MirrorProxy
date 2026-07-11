@@ -50,6 +50,8 @@ pub struct Upstreams {
     pub rubygems: String,
     #[serde(default = "default_nuget_repository")]
     pub nuget: String,
+    #[serde(default = "default_cpan_repository")]
+    pub cpan: String,
     #[serde(default = "default_crates_index")]
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
@@ -193,7 +195,7 @@ impl Config {
         for proxy in enabled.keys() {
             match *proxy {
                 "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "nuget"
-                | "crates" | "pypi" => {}
+                | "cpan" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -210,6 +212,7 @@ impl Config {
         validate_http_url("upstreams.maven", &self.upstreams.maven)?;
         validate_http_url("upstreams.rubygems", &self.upstreams.rubygems)?;
         validate_http_url("upstreams.nuget", &self.upstreams.nuget)?;
+        validate_http_url("upstreams.cpan", &self.upstreams.cpan)?;
         validate_http_url("upstreams.crates_index", &self.upstreams.crates_index)?;
         validate_http_url("upstreams.crates_api", &self.upstreams.crates_api)?;
         validate_http_url("upstreams.pypi_simple", &self.upstreams.pypi_simple)?;
@@ -253,6 +256,7 @@ impl Default for Upstreams {
             maven: default_maven_repository(),
             rubygems: default_rubygems_repository(),
             nuget: default_nuget_repository(),
+            cpan: default_cpan_repository(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
             pypi_simple: default_pypi_simple(),
@@ -311,6 +315,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "maven".to_string(),
         "rubygems".to_string(),
         "nuget".to_string(),
+        "cpan".to_string(),
         "crates".to_string(),
         "pypi".to_string(),
     ]
@@ -362,6 +367,10 @@ fn default_rubygems_repository() -> String {
 
 fn default_nuget_repository() -> String {
     "https://api.nuget.org".to_string()
+}
+
+fn default_cpan_repository() -> String {
+    "https://cpan.metacpan.org".to_string()
 }
 
 fn default_crates_index() -> String {

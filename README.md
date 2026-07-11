@@ -1,6 +1,6 @@
 # MirrorProxy
 
-MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, public Docker/OCI registry pull-through routing, npm registry proxying, Go module proxying, Maven Central proxying, RubyGems proxying, NuGet v3 proxying, Cargo sparse registry proxying, and PyPI Simple API proxying, with a React + Vite + Tailwind web console embedded into the Rust binary.
+MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, public Docker/OCI registry pull-through routing, npm registry proxying, Go module proxying, Maven Central proxying, RubyGems proxying, NuGet v3 proxying, CPAN proxying, Cargo sparse registry proxying, and PyPI Simple API proxying, with a React + Vite + Tailwind web console embedded into the Rust binary.
 
 The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go modules, operating system mirrors, and other ecosystems can be added behind the same proxy core.
 
@@ -17,6 +17,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - Maven Central proxy at `/maven`
 - RubyGems proxy at `/rubygems`
 - NuGet v3 proxy at `/nuget/v3/index.json`
+- CPAN repository proxy at `/cpan`
 - Cargo sparse registry proxy at `/crates-index`
 - pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
@@ -185,6 +186,22 @@ dotnet restore
 
 The adapter rewrites NuGet v3 service-index resource URLs to MirrorProxy, then streams flat-container packages, registration metadata, search results, and package downloads through `/nuget`.
 
+## CPAN Proxy
+
+Use the CPAN static-mirror endpoint with `cpanm`:
+
+```bash
+cpanm --mirror http://127.0.0.1:3000/cpan/ --mirror-only Moo
+```
+
+The CLI can save a rollback-protected CPAN mirror list to `~/.cpan/CPAN/MyConfig.pm`:
+
+```bash
+mirrorproxy sources set cpan --mirror mirrorproxy --base-url http://127.0.0.1:3000
+```
+
+The adapter streams CPAN indexes and distributions such as `modules/02packages.details.txt.gz` and `authors/id/...` while rejecting traversal paths.
+
 ## Rust Crates Proxy
 
 Configure Cargo to use MirrorProxy as a sparse registry mirror:
@@ -266,7 +283,7 @@ Copy `config.example.toml` and adjust the public URL for your deployment:
 ```toml
 listen_addr = "127.0.0.1:3000"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -281,6 +298,7 @@ go_proxy = "https://proxy.golang.org"
 maven = "https://repo.maven.apache.org/maven2"
 rubygems = "https://rubygems.org"
 nuget = "https://api.nuget.org"
+cpan = "https://cpan.metacpan.org"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
@@ -296,7 +314,7 @@ MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
 MIRRORPROXY_DB=/var/lib/mirrorproxy/mirrorproxy.sqlite3
 MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
-MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,maven,rubygems,nuget,crates,pypi
+MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,maven,rubygems,nuget,cpan,crates,pypi
 MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
 MIRRORPROXY_RATE_LIMIT_ENABLED=true
 MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600

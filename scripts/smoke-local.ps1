@@ -55,7 +55,7 @@ try {
 listen_addr = "127.0.0.1:$Port"
 database_path = "$databaseToml"
 public_base_url = "$publicBaseUrl"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -70,6 +70,7 @@ go_proxy = "https://proxy.golang.org"
 maven = "https://repo.maven.apache.org/maven2"
 rubygems = "https://rubygems.org"
 nuget = "https://api.nuget.org"
+cpan = "https://cpan.metacpan.org"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
@@ -102,6 +103,7 @@ requests_per_minute = 600
     $null = Assert-Status "/maven/"
     $null = Assert-Status "/rubygems/"
     $null = Assert-Status "/nuget/"
+    $null = Assert-Status "/cpan/"
 
     $cratesConfig = Assert-Status "/crates-index/config.json"
     if ($cratesConfig.Content -notlike "*/crates/api/v1/crates*") {

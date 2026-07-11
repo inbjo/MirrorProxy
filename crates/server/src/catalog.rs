@@ -326,6 +326,14 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         default_scope: SourceScope::User,
     },
     SourceTarget {
+        code: "cpan",
+        name: "Perl CPAN",
+        category: SourceCategory::Language,
+        aliases: &["perl", "cpanm"],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
         code: "anaconda",
         name: "Anaconda",
         category: SourceCategory::Repository,
@@ -389,6 +397,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "nuget",
         provider_code: "mirrorproxy",
         repo_url: "/nuget/v3/index.json",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "cpan",
+        provider_code: "mirrorproxy",
+        repo_url: "/cpan/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -526,6 +541,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         os_family: "any",
         scope: SourceScope::User,
         template: "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<configuration>\n  <packageSources>\n    <clear />\n    <add key=\"mirrorproxy\" value=\"{repo_url}\" protocolVersion=\"3\" />\n  </packageSources>\n</configuration>",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "cpan",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "cpanm --mirror {repo_url} --mirror-only <module>",
         requires_sudo: false,
     },
     SourceTemplate {
