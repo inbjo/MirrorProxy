@@ -9,6 +9,7 @@ pub mod github;
 pub mod go;
 pub mod hackage;
 pub mod maven;
+pub mod nix;
 pub mod npm;
 pub mod nuget;
 pub mod oci;
