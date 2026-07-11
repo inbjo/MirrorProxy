@@ -21,6 +21,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - CRAN repository proxy at `/cran`
 - Hackage repository proxy at `/hackage`
 - Clojars repository proxy at `/clojars`
+- Dart / Flutter Pub proxy at `/pub`
 - Cargo sparse registry proxy at `/crates-index`
 - pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
@@ -237,6 +238,14 @@ Configure the Clojure CLI user `deps.edn` to route Clojars through MirrorProxy:
 ```
 
 `mirrorproxy sources set clojars --mirror mirrorproxy --base-url http://127.0.0.1:3000` writes and can restore `~/.clojure/deps.edn`. The adapter streams Clojars POMs, metadata, and JARs with normalized repository paths only.
+
+## Pub / Flutter Proxy
+
+```bash
+PUB_HOSTED_URL=http://127.0.0.1:3000/pub/ flutter pub get
+```
+
+Pub package metadata and official archives stay on MirrorProxy; archive URLs are rewritten only for the official Google Cloud Storage host.
 
 ## Rust Crates Proxy
 
