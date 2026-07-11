@@ -26,6 +26,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - TeX Live proxy at `/texlive`
 - GNU ELPA proxy at `/elpa`
 - Nix binary cache proxy at `/nix`
+- Flatpak OSTree proxy at `/flatpak`
 - Cargo sparse registry proxy at `/crates-index`
 - pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
@@ -267,6 +268,10 @@ Use `http://127.0.0.1:3000/elpa/` as an Emacs package archive URL. The adapter s
 
 Use `http://127.0.0.1:3000/nix/` as a Nix substituter. `.narinfo` signatures and relative cache URLs remain unchanged, so Nix continues to verify cache signatures normally.
 
+## Flatpak OSTree Proxy
+
+Use `http://127.0.0.1:3000/flatpak/` as a Flatpak remote URL. OSTree summaries and GPG signatures are streamed unchanged, preserving client-side repository verification.
+
 ## Rust Crates Proxy
 
 Configure Cargo to use MirrorProxy as a sparse registry mirror:
@@ -348,7 +353,7 @@ Copy `config.example.toml` and adjust the public URL for your deployment:
 ```toml
 listen_addr = "127.0.0.1:3000"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "pub", "anaconda", "texlive", "elpa", "nix", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "pub", "anaconda", "texlive", "elpa", "nix", "flatpak", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -372,6 +377,7 @@ anaconda = "https://repo.anaconda.com/pkgs"
 texlive = "https://mirror.ctan.org/systems/texlive/tlnet"
 elpa = "https://elpa.gnu.org/packages"
 nix = "https://cache.nixos.org"
+flatpak = "https://dl.flathub.org/repo"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
@@ -387,7 +393,7 @@ MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
 MIRRORPROXY_DB=/var/lib/mirrorproxy/mirrorproxy.sqlite3
 MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
-MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,maven,rubygems,nuget,cpan,cran,hackage,clojars,pub,anaconda,texlive,elpa,nix,crates,pypi
+MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,maven,rubygems,nuget,cpan,cran,hackage,clojars,pub,anaconda,texlive,elpa,nix,flatpak,crates,pypi
 MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
 MIRRORPROXY_RATE_LIMIT_ENABLED=true
 MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
