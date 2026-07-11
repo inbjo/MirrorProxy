@@ -60,6 +60,9 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - uses: actions/setup-go@v6
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
