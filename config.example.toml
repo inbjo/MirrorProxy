@@ -41,6 +41,11 @@ request_secs = 60
 enabled = false
 requests_per_minute = 600
 
+[cache]
+enabled = false
+directory = "mirrorproxy-cache"
+max_entry_mb = 8
+
 [quota]
 enabled = false
 monthly_gb = 500

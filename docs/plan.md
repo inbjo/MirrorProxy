@@ -14,24 +14,24 @@
 - 已实现并注册的代理类型：GitHub、Composer/Packagist、Docker/OCI、npm、Go module、Cargo sparse registry、PyPI Simple API、Maven、RubyGems、NuGet v3、CPAN、CRAN、Hackage、Clojars、Pub/Flutter、Anaconda/Conda。
 - 已有运行时配置读取与持久化：`config.example.toml`、环境变量覆盖、SQLite 运行时配置、`/api/public-config` 公开摘要与受保护的管理配置 API。
 - 已有 Web 控制台：React + Vite 内嵌到 Rust 二进制，支持说明页、源目录、登录、代理/上游/配额配置、CLI 命令生成、统计与审计日志。
-- 已有请求限流、SQLite 流量统计和按月流量封停；代理响应保持流式计量，不整块读入内存。
+- 已有请求限流、SQLite 流量统计和按月流量封停；代理响应默认保持流式计量，并可选缓存有明确长度的小型公开 GET 响应到磁盘。
 
 未完成或需要重做的部分：
 
 - 仍缺少多个计划中的生态 adapter（Homebrew 与部分发行版静态目录等）。
 - chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚覆盖 npm、pip、cargo、go、composer、docker、apt、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Anaconda，其他登记目标明确标为仅配置/计划中。
-- 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip；Docker、cpan 等客户端仍待补齐，并需持续保留路由/单元测试。
-- 可选磁盘缓存、私有 registry 凭证和按用户配额仍属于后续增强；月配额已使用 SQLite 原子预留窗口控制并发超卖，超大单流仍按流式计量结算。
+- 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip、Docker；cpan 等客户端仍待补齐，并需持续保留路由/单元测试。
+- 小对象可选磁盘缓存已完成（默认关闭，跳过认证、Cookie 与 Range 请求）；缓存总量/LRU、私有 registry 凭证和按用户配额仍属于后续增强。月配额已使用 SQLite 原子预留窗口控制并发超卖，超大单流仍按流式计量结算。
 
 当前完成度估算：
 
-- 代理服务基础能力：约 88%（主流开发生态已覆盖，并已有主要客户端协议 smoke；缓存与部分客户端/adapter 尚缺）。
+- 代理服务基础能力：约 90%（主流开发生态已覆盖，并已有主要客户端协议 smoke 与小对象磁盘缓存；部分客户端/adapter 尚缺）。
 - Web 控制台：约 75%（公开说明、源目录、登录、设置、统计、审计已完成；自动化前端测试与更完整的交互仍缺）。
 - 配置持久化与管理后台：约 85%。
 - CLI 改源能力：约 65%（已覆盖计划中首批目标并具备回滚；尚未覆盖更多生态和跨平台细节）。
 - SQLite 统计与月流量限制：约 82%（持久统计、封停与并发原子预留已完成；按用户配额和可选明细保留策略仍待完善）。
 - 对齐 chsrc 支持源范围：约 72%，主要目标已登记且更多语言协议可代理，但 OS/软件仓库 adapter 仍有明显缺口。
-- 整体按本计划口径估算：约 88%。
+- 整体按本计划口径估算：约 90%。
 
 ## Key Changes
 

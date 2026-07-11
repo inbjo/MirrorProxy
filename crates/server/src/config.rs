@@ -21,6 +21,8 @@ pub struct Config {
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
     #[serde(default)]
+    pub cache: CacheConfig,
+    #[serde(default)]
     pub quota: QuotaConfig,
 }
 
@@ -101,6 +103,16 @@ pub struct RateLimitConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_cache_directory")]
+    pub directory: String,
+    #[serde(default = "default_cache_max_entry_mb")]
+    pub max_entry_mb: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -163,6 +175,20 @@ impl Config {
                 self.rate_limit.enabled = true;
             }
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_CACHE_ENABLED") {
+            self.cache.enabled = matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_CACHE_DIRECTORY") {
+            self.cache.directory = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_CACHE_MAX_ENTRY_MB") {
+            if let Ok(max_entry_mb) = value.parse() {
+                self.cache.max_entry_mb = max_entry_mb;
+            }
+        }
         if let Ok(value) = std::env::var("MIRRORPROXY_QUOTA_ENABLED") {
             self.quota.enabled = matches!(
                 value.to_ascii_lowercase().as_str(),
@@ -196,6 +222,12 @@ impl Config {
         }
         if self.rate_limit.enabled && self.rate_limit.requests_per_minute == 0 {
             anyhow::bail!("rate_limit.requests_per_minute must be greater than 0 when enabled");
+        }
+        if self.cache.enabled && self.cache.directory.trim().is_empty() {
+            anyhow::bail!("cache.directory cannot be empty when cache is enabled");
+        }
+        if self.cache.enabled && self.cache.max_entry_mb == 0 {
+            anyhow::bail!("cache.max_entry_mb must be greater than 0 when cache is enabled");
         }
         if self.quota.enabled && self.quota.timezone.trim().is_empty() {
             anyhow::bail!("quota.timezone cannot be empty when quota is enabled");
@@ -273,6 +305,7 @@ impl Default for Config {
             upstreams: Upstreams::default(),
             timeout: TimeoutConfig::default(),
             rate_limit: RateLimitConfig::default(),
+            cache: CacheConfig::default(),
             quota: QuotaConfig::default(),
         }
     }
@@ -331,6 +364,16 @@ impl Default for RateLimitConfig {
     }
 }
 
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: default_cache_directory(),
+            max_entry_mb: default_cache_max_entry_mb(),
+        }
+    }
+}
+
 impl Default for QuotaConfig {
     fn default() -> Self {
         Self {
@@ -348,6 +391,13 @@ fn default_listen_addr() -> String {
 
 fn default_database_path() -> String {
     "mirrorproxy.sqlite3".to_string()
+}
+
+fn default_cache_directory() -> String {
+    "mirrorproxy-cache".to_string()
+}
+fn default_cache_max_entry_mb() -> u64 {
+    8
 }
 
 fn default_public_base_url() -> String {
@@ -591,6 +641,29 @@ mod tests {
             ..Config::default()
         };
 
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_enabled_cache() {
+        let config = Config {
+            cache: CacheConfig {
+                enabled: true,
+                directory: String::new(),
+                ..CacheConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(config.validate().is_err());
+
+        let config = Config {
+            cache: CacheConfig {
+                enabled: true,
+                max_entry_mb: 0,
+                ..CacheConfig::default()
+            },
+            ..Config::default()
+        };
         assert!(config.validate().is_err());
     }
 

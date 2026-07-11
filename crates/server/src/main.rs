@@ -370,6 +370,17 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             "rate_limit.requests_per_minute",
             ConfigValueKind::PositiveU32,
         ),
+        "cache.enabled" => ("cache.enabled", "cache.enabled", ConfigValueKind::Bool),
+        "cache.directory" => (
+            "cache.directory",
+            "cache.directory",
+            ConfigValueKind::NonEmpty,
+        ),
+        "cache.max_entry_mb" => (
+            "cache.max_entry_mb",
+            "cache.max_entry_mb",
+            ConfigValueKind::PositiveU64,
+        ),
         "quota.enabled" => ("quota.enabled", "quota.enabled", ConfigValueKind::Bool),
         "quota.monthly_gb" => ("quota.monthly_gb", "quota.monthly_gb", ConfigValueKind::U64),
         "quota.timezone" => (
@@ -449,6 +460,9 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "timeout.request_secs" => Some(config.timeout.request_secs.to_string()),
         "rate_limit.enabled" => Some(config.rate_limit.enabled.to_string()),
         "rate_limit.requests_per_minute" => Some(config.rate_limit.requests_per_minute.to_string()),
+        "cache.enabled" => Some(config.cache.enabled.to_string()),
+        "cache.directory" => Some(config.cache.directory.clone()),
+        "cache.max_entry_mb" => Some(config.cache.max_entry_mb.to_string()),
         "quota.enabled" => Some(config.quota.enabled.to_string()),
         "quota.monthly_gb" => Some(config.quota.monthly_gb.to_string()),
         "quota.timezone" => Some(config.quota.timezone.clone()),
@@ -495,6 +509,9 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "timeout.request_secs",
         "rate_limit.enabled",
         "rate_limit.requests_per_minute",
+        "cache.enabled",
+        "cache.directory",
+        "cache.max_entry_mb",
         "quota.enabled",
         "quota.monthly_gb",
         "quota.timezone",
@@ -2216,6 +2233,7 @@ mod tests {
             "http://127.0.0.1:3000"
         );
         assert_eq!(config_value(&config, "quota.monthly_gb").unwrap(), "500");
+        assert_eq!(config_value(&config, "cache.max_entry_mb").unwrap(), "8");
         assert_eq!(
             config_value(&config, "upstreams.npm").unwrap(),
             "https://registry.npmjs.org"
@@ -2252,6 +2270,9 @@ mod tests {
             .any(|(key, value)| *key == "quota.on_exceeded" && value == "stop_proxy"));
         assert!(entries
             .iter()
+            .any(|(key, value)| *key == "cache.directory" && value == "mirrorproxy-cache"));
+        assert!(entries
+            .iter()
             .any(|(key, value)| *key == "upstreams.pypi_files"
                 && value == "https://files.pythonhosted.org"));
         assert!(entries.iter().any(|(key, value)| *key == "upstreams.maven"
@@ -2285,6 +2306,7 @@ mod tests {
         assert!(plan_config_set(&config, "missing.key", "value").is_err());
         assert!(plan_config_set(&config, "public_base_url", "file:///tmp").is_err());
         assert!(plan_config_set(&config, "quota.enabled", "yes").is_err());
+        assert!(plan_config_set(&config, "cache.max_entry_mb", "0").is_err());
         assert!(plan_config_set(&config, "quota.on_exceeded", "drop").is_err());
         assert!(plan_config_set(&config, "timeout.request_secs", "0").is_err());
         assert!(plan_config_set(&config, "quota.monthly_gb", "0").is_ok());
