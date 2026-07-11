@@ -22,6 +22,7 @@ jobs:
         working-directory: web
         run: |
           npm ci
+          npm test
           npm run build
       - name: Rust format
         run: cargo fmt --check

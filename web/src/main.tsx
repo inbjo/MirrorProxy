@@ -22,6 +22,7 @@ import {
   Sun,
 } from 'lucide-react'
 import './styles.css'
+import { readStoredPreference } from './preferences'
 
 type Locale = 'en' | 'zh'
 type Theme = 'light' | 'dark'
@@ -195,14 +196,9 @@ const messages = {
   },
 } satisfies Record<Locale, Record<string, string>>
 
-const useStoredState = <T extends string>(key: string, fallback: T) => {
-  const stored = localStorage.getItem(key) as T | null
-  return stored ?? fallback
-}
-
 function App() {
-  const [locale, setLocale] = React.useState<Locale>(() => useStoredState('mirrorproxy.locale', 'en'))
-  const [theme, setTheme] = React.useState<Theme>(() => useStoredState('mirrorproxy.theme', 'light'))
+  const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en'))
+  const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light'))
   const [config, setConfig] = React.useState<PublicConfig>({
     public_base_url: window.location.origin,
     enabled_proxies: ['github', 'composer'],
