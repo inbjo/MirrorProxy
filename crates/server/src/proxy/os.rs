@@ -47,6 +47,10 @@ pub async fn proxy(
         "ubuntu" => &c.upstreams.ubuntu,
         "fedora" => &c.upstreams.fedora,
         "archlinux" => &c.upstreams.archlinux,
+        "opensuse" => &c.upstreams.opensuse,
+        "void" => &c.upstreams.void,
+        "gentoo" => &c.upstreams.gentoo,
+        "freebsd" => &c.upstreams.freebsd,
         _ => return Err(ProxyError::UnsupportedTarget),
     };
     let mut u = reqwest::Url::parse(base).map_err(|_| ProxyError::InvalidUrl)?;
@@ -61,7 +65,17 @@ mod tests {
     fn documents_fixed_targets() {
         assert!(matches!(
             "alpine",
-            "alpine" | "openwrt" | "termux" | "debian" | "ubuntu" | "fedora" | "archlinux"
+            "alpine"
+                | "openwrt"
+                | "termux"
+                | "debian"
+                | "ubuntu"
+                | "fedora"
+                | "archlinux"
+                | "opensuse"
+                | "void"
+                | "gentoo"
+                | "freebsd"
         ));
     }
 }

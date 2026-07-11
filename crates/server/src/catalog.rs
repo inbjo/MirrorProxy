@@ -476,7 +476,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "openSUSE zypper",
         category: SourceCategory::OperatingSystem,
         aliases: &["opensuse"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -484,7 +484,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Void xbps",
         category: SourceCategory::OperatingSystem,
         aliases: &["void"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -492,7 +492,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Gentoo",
         category: SourceCategory::OperatingSystem,
         aliases: &[],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -500,7 +500,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "FreeBSD pkg",
         category: SourceCategory::OperatingSystem,
         aliases: &["pkg"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::System,
     },
     SourceTarget {

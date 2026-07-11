@@ -88,6 +88,14 @@ pub struct Upstreams {
     pub fedora: String,
     #[serde(default = "default_archlinux_repository")]
     pub archlinux: String,
+    #[serde(default = "default_opensuse_repository")]
+    pub opensuse: String,
+    #[serde(default = "default_void_repository")]
+    pub void: String,
+    #[serde(default = "default_gentoo_repository")]
+    pub gentoo: String,
+    #[serde(default = "default_freebsd_repository")]
+    pub freebsd: String,
     #[serde(default = "default_crates_index")]
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
@@ -297,6 +305,10 @@ impl Config {
         validate_http_url("upstreams.ubuntu", &self.upstreams.ubuntu)?;
         validate_http_url("upstreams.fedora", &self.upstreams.fedora)?;
         validate_http_url("upstreams.archlinux", &self.upstreams.archlinux)?;
+        validate_http_url("upstreams.opensuse", &self.upstreams.opensuse)?;
+        validate_http_url("upstreams.void", &self.upstreams.void)?;
+        validate_http_url("upstreams.gentoo", &self.upstreams.gentoo)?;
+        validate_http_url("upstreams.freebsd", &self.upstreams.freebsd)?;
         validate_http_url("upstreams.crates_index", &self.upstreams.crates_index)?;
         validate_http_url("upstreams.crates_api", &self.upstreams.crates_api)?;
         validate_http_url("upstreams.pypi_simple", &self.upstreams.pypi_simple)?;
@@ -359,6 +371,10 @@ impl Default for Upstreams {
             ubuntu: default_ubuntu_repository(),
             fedora: default_fedora_repository(),
             archlinux: default_archlinux_repository(),
+            opensuse: default_opensuse_repository(),
+            void: default_void_repository(),
+            gentoo: default_gentoo_repository(),
+            freebsd: default_freebsd_repository(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
             pypi_simple: default_pypi_simple(),
@@ -563,6 +579,18 @@ fn default_fedora_repository() -> String {
 }
 fn default_archlinux_repository() -> String {
     "https://geo.mirror.pkgbuild.com".to_string()
+}
+fn default_opensuse_repository() -> String {
+    "https://download.opensuse.org".to_string()
+}
+fn default_void_repository() -> String {
+    "https://repo-default.voidlinux.org".to_string()
+}
+fn default_gentoo_repository() -> String {
+    "https://distfiles.gentoo.org".to_string()
+}
+fn default_freebsd_repository() -> String {
+    "https://pkg.freebsd.org".to_string()
 }
 
 fn default_crates_index() -> String {

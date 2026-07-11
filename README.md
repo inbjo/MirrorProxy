@@ -28,7 +28,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - Nix binary cache proxy at `/nix`
 - Flatpak OSTree proxy at `/flatpak`
 - Homebrew bottle proxy at `/homebrew`
-- Debian / Ubuntu / Fedora / Arch Linux / Alpine / OpenWrt / Termux static proxy at `/os`
+- Debian / Ubuntu / Fedora / Arch Linux / openSUSE / Void / Gentoo / FreeBSD / Alpine / OpenWrt / Termux static proxy at `/os`
 - Cargo sparse registry proxy at `/crates-index`
 - pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
@@ -280,7 +280,7 @@ Set `HOMEBREW_BOTTLE_DOMAIN=http://127.0.0.1:3000/homebrew` before running `brew
 
 ## OS Static Repository Proxy
 
-Use fixed target paths such as `http://127.0.0.1:3000/os/debian/`, `/os/ubuntu/`, `/os/fedora/`, `/os/archlinux/`, `/os/alpine/`, `/os/openwrt/`, or `/os/termux/`. Only these targets are accepted; each has a separately configurable upstream. The CLI can generate system-scope APT, DNF, and pacman files using the `/os` base URL.
+Use fixed target paths such as `http://127.0.0.1:3000/os/debian/`, `/os/ubuntu/`, `/os/fedora/`, `/os/archlinux/`, `/os/opensuse/`, `/os/void/`, `/os/gentoo/`, `/os/freebsd/`, `/os/alpine/`, `/os/openwrt/`, or `/os/termux/`. Only these targets are accepted; each has a separately configurable upstream.
 
 ## Rust Crates Proxy
 
