@@ -55,7 +55,7 @@ try {
 listen_addr = "127.0.0.1:$Port"
 database_path = "$databaseToml"
 public_base_url = "$publicBaseUrl"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "pub", "anaconda", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "pub", "anaconda", "texlive", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -76,6 +76,7 @@ hackage = "https://hackage.haskell.org"
 clojars = "https://repo.clojars.org"
 pub_repository = "https://pub.dev"
 anaconda = "https://repo.anaconda.com/pkgs"
+texlive = "https://mirror.ctan.org/systems/texlive/tlnet"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
@@ -114,6 +115,7 @@ requests_per_minute = 600
     $null = Assert-Status "/clojars/"
     $null = Assert-Status "/pub/"
     $null = Assert-Status "/anaconda/"
+    $null = Assert-Status "/texlive/"
 
     $cratesConfig = Assert-Status "/crates-index/config.json"
     if ($cratesConfig.Content -notlike "*/crates/api/v1/crates*") {
