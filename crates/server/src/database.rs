@@ -655,6 +655,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reserves_monthly_capacity_atomically() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        assert!(database
+            .try_reserve_monthly_bytes("2026-07", 10, 6)
+            .await
+            .unwrap());
+        assert!(!database
+            .try_reserve_monthly_bytes("2026-07", 10, 6)
+            .await
+            .unwrap());
+        database
+            .record_proxy_response(ProxyTrafficRecord {
+                day: "2026-07-01",
+                month: "2026-07",
+                target_code: "npm",
+                method: "GET",
+                path: "/npm/pkg",
+                status_code: 200,
+                response_bytes: 4,
+                stream_error: false,
+                reserved_bytes: 6,
+            })
+            .await
+            .unwrap();
+        assert!(database
+            .try_reserve_monthly_bytes("2026-07", 10, 6)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
     async fn returns_recent_audit_log() {
         let (database, _) = Database::open(":memory:").await.unwrap();
         database
