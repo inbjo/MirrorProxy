@@ -22,7 +22,7 @@ cat >"${config}" <<EOF
 listen_addr = "127.0.0.1:${port}"
 database_path = "${work}/mirrorproxy.sqlite3"
 public_base_url = "${base}"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi", "cpan"]
 
 [upstreams]
 github = "https://github.com"
@@ -38,6 +38,7 @@ crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
 pypi_files = "https://files.pythonhosted.org"
+cpan = "https://cpan.metacpan.org"
 EOF
 
 cd "${root}"
@@ -79,6 +80,8 @@ registry = "sparse+${base}/crates-index/"
 EOF
 CARGO_HOME="${work}/cargo-home" cargo fetch --manifest-path "${work}/cargo/Cargo.toml" >/dev/null
 PIP_CACHE_DIR="${work}/pip-cache" pip download --no-deps --dest "${work}/pip" --index-url "${base}/pypi/simple/" idna==3.10 >/dev/null
+command -v cpanm >/dev/null
+cpanm --mirror "${base}/cpan/" --mirror-only --notest --local-lib-contained "${work}/cpan" Try::Tiny >/dev/null
 mkdir "${work}/composer"
 (
   cd "${work}/composer"
@@ -91,5 +94,5 @@ if [[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]]; then
   docker pull "127.0.0.1:${port}/library/busybox:1.36.1" >/dev/null
 fi
 
-printf 'client smoke passed: git npm yarn pnpm go cargo pip composer%s\n' \
+printf 'client smoke passed: git npm yarn pnpm go cargo pip cpanm composer%s\n' \
   "$([[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]] && printf ' docker' || true)"
