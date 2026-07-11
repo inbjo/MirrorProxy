@@ -10,6 +10,7 @@ pub mod maven;
 pub mod npm;
 pub mod nuget;
 pub mod oci;
+pub mod pub_repository;
 pub mod pypi;
 pub mod rubygems;
 

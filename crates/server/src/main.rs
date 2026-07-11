@@ -30,8 +30,8 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
-    clojars, composer, cpan, cran, cratesio, github, go, hackage, maven, npm, nuget, oci, pypi,
-    rubygems, ProxyError,
+    clojars, composer, cpan, cran, cratesio, github, go, hackage, maven, npm, nuget, oci,
+    pub_repository, pypi, rubygems, ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -467,6 +467,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.cran" => Some(config.upstreams.cran.clone()),
         "upstreams.hackage" => Some(config.upstreams.hackage.clone()),
         "upstreams.clojars" => Some(config.upstreams.clojars.clone()),
+        "upstreams.pub_repository" => Some(config.upstreams.pub_repository.clone()),
         "upstreams.crates_index" => Some(config.upstreams.crates_index.clone()),
         "upstreams.crates_api" => Some(config.upstreams.crates_api.clone()),
         "upstreams.pypi_simple" => Some(config.upstreams.pypi_simple.clone()),
@@ -504,6 +505,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.cran",
         "upstreams.hackage",
         "upstreams.clojars",
+        "upstreams.pub_repository",
         "upstreams.crates_index",
         "upstreams.crates_api",
         "upstreams.pypi_simple",
@@ -1229,6 +1231,15 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/clojars", get(clojars::root).head(clojars::root))
         .route("/clojars/", get(clojars::root).head(clojars::root))
         .route("/clojars/{*path}", get(clojars::proxy).head(clojars::proxy))
+        .route("/pub", get(pub_repository::root).head(pub_repository::root))
+        .route(
+            "/pub/",
+            get(pub_repository::root).head(pub_repository::root),
+        )
+        .route(
+            "/pub/{*path}",
+            get(pub_repository::proxy).head(pub_repository::proxy),
+        )
         .route(
             "/pypi/simple",
             get(pypi::simple_root).head(pypi::simple_root),
@@ -1426,6 +1437,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("hackage")
     } else if path == "/clojars" || path.starts_with("/clojars/") {
         Some("clojars")
+    } else if path == "/pub" || path.starts_with("/pub/") {
+        Some("pub")
     } else if path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -1571,6 +1584,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/hackage/")
         || path == "/clojars"
         || path.starts_with("/clojars/")
+        || path == "/pub"
+        || path.starts_with("/pub/")
         || path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")

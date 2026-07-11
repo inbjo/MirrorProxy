@@ -58,6 +58,8 @@ pub struct Upstreams {
     pub hackage: String,
     #[serde(default = "default_clojars_repository")]
     pub clojars: String,
+    #[serde(default = "default_pub_repository")]
+    pub pub_repository: String,
     #[serde(default = "default_crates_index")]
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
@@ -201,7 +203,7 @@ impl Config {
         for proxy in enabled.keys() {
             match *proxy {
                 "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "nuget"
-                | "cpan" | "cran" | "hackage" | "clojars" | "crates" | "pypi" => {}
+                | "cpan" | "cran" | "hackage" | "clojars" | "pub" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -222,6 +224,7 @@ impl Config {
         validate_http_url("upstreams.cran", &self.upstreams.cran)?;
         validate_http_url("upstreams.hackage", &self.upstreams.hackage)?;
         validate_http_url("upstreams.clojars", &self.upstreams.clojars)?;
+        validate_http_url("upstreams.pub_repository", &self.upstreams.pub_repository)?;
         validate_http_url("upstreams.crates_index", &self.upstreams.crates_index)?;
         validate_http_url("upstreams.crates_api", &self.upstreams.crates_api)?;
         validate_http_url("upstreams.pypi_simple", &self.upstreams.pypi_simple)?;
@@ -269,6 +272,7 @@ impl Default for Upstreams {
             cran: default_cran_repository(),
             hackage: default_hackage_repository(),
             clojars: default_clojars_repository(),
+            pub_repository: default_pub_repository(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
             pypi_simple: default_pypi_simple(),
@@ -331,6 +335,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "cran".to_string(),
         "hackage".to_string(),
         "clojars".to_string(),
+        "pub".to_string(),
         "crates".to_string(),
         "pypi".to_string(),
     ]
@@ -398,6 +403,10 @@ fn default_hackage_repository() -> String {
 
 fn default_clojars_repository() -> String {
     "https://repo.clojars.org".to_string()
+}
+
+fn default_pub_repository() -> String {
+    "https://pub.dev".to_string()
 }
 
 fn default_crates_index() -> String {

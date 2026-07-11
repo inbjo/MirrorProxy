@@ -358,6 +358,14 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         default_scope: SourceScope::User,
     },
     SourceTarget {
+        code: "pub",
+        name: "Dart / Flutter Pub",
+        category: SourceCategory::Language,
+        aliases: &["dart", "flutter"],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
         code: "anaconda",
         name: "Anaconda",
         category: SourceCategory::Repository,
@@ -449,6 +457,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "clojars",
         provider_code: "mirrorproxy",
         repo_url: "/clojars/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "pub",
+        provider_code: "mirrorproxy",
+        repo_url: "/pub/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -604,6 +619,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
     },
     SourceTemplate { target_code: "hackage", os_family: "any", scope: SourceScope::User, template: "repository hackage.haskell.org\n  url: {repo_url}\n  secure: True", requires_sudo: false },
     SourceTemplate { target_code: "clojars", os_family: "any", scope: SourceScope::User, template: "{:mvn/repos {\"clojars\" {:url \"{repo_url}\"}}}", requires_sudo: false },
+    SourceTemplate { target_code: "pub", os_family: "any", scope: SourceScope::User, template: "PUB_HOSTED_URL={repo_url} flutter pub get", requires_sudo: false },
     SourceTemplate {
         target_code: "docker",
         os_family: "any",
