@@ -94,8 +94,8 @@ requests_per_minute = 600
     $health = Wait-ForHealth
 
     $publicConfig = Assert-Status "/api/config"
-    if ($publicConfig.Content -notlike '*"nuget"*') {
-        throw "public config does not include enabled proxies"
+    if ($publicConfig.Content -notlike '*"nuget"*' -or $publicConfig.Content -notlike '*"pub"*' -or $publicConfig.Content -notlike '*"anaconda"*') {
+        throw "public config does not include all enabled proxy adapters"
     }
 
     $rootResponse = Assert-Status "/"
