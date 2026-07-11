@@ -373,6 +373,192 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         supported_modes: &[SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
+    // Registered chsrc targets which currently generate guidance only. Keep
+    // these visible so the catalog never advertises them as proxy adapters.
+    SourceTarget {
+        code: "poetry",
+        name: "Python Poetry",
+        category: SourceCategory::Language,
+        aliases: &["python-poetry"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "pdm",
+        name: "Python PDM",
+        category: SourceCategory::Language,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "uv",
+        name: "Python uv",
+        category: SourceCategory::Language,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "bun",
+        name: "Bun",
+        category: SourceCategory::Language,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "nvm",
+        name: "Node Version Manager",
+        category: SourceCategory::Language,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "lua",
+        name: "LuaRocks",
+        category: SourceCategory::Language,
+        aliases: &["luarocks"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "rustup",
+        name: "Rustup",
+        category: SourceCategory::Language,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "ocaml",
+        name: "OCaml opam",
+        category: SourceCategory::Language,
+        aliases: &["opam"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "julia",
+        name: "Julia",
+        category: SourceCategory::Language,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "alpine",
+        name: "Alpine apk",
+        category: SourceCategory::OperatingSystem,
+        aliases: &["apk"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::System,
+    },
+    SourceTarget {
+        code: "zypper",
+        name: "openSUSE zypper",
+        category: SourceCategory::OperatingSystem,
+        aliases: &["opensuse"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::System,
+    },
+    SourceTarget {
+        code: "xbps",
+        name: "Void xbps",
+        category: SourceCategory::OperatingSystem,
+        aliases: &["void"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::System,
+    },
+    SourceTarget {
+        code: "gentoo",
+        name: "Gentoo",
+        category: SourceCategory::OperatingSystem,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::System,
+    },
+    SourceTarget {
+        code: "freebsd",
+        name: "FreeBSD pkg",
+        category: SourceCategory::OperatingSystem,
+        aliases: &["pkg"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::System,
+    },
+    SourceTarget {
+        code: "openwrt",
+        name: "OpenWrt opkg",
+        category: SourceCategory::OperatingSystem,
+        aliases: &["opkg"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::System,
+    },
+    SourceTarget {
+        code: "termux",
+        name: "Termux",
+        category: SourceCategory::OperatingSystem,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "winget",
+        name: "WinGet",
+        category: SourceCategory::Repository,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "cocoapods",
+        name: "CocoaPods",
+        category: SourceCategory::Repository,
+        aliases: &["pods"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "flatpak",
+        name: "Flatpak",
+        category: SourceCategory::Repository,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "nix",
+        name: "Nix",
+        category: SourceCategory::Repository,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "guix",
+        name: "GNU Guix",
+        category: SourceCategory::Repository,
+        aliases: &[],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "elpa",
+        name: "Emacs ELPA",
+        category: SourceCategory::Repository,
+        aliases: &["emacs"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
+        code: "texlive",
+        name: "TeX Live",
+        category: SourceCategory::Repository,
+        aliases: &["tex"],
+        supported_modes: &[SourceMode::TemplateOnly],
+        default_scope: SourceScope::User,
+    },
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
@@ -712,7 +898,13 @@ mod tests {
             .map(|target| target.code)
             .collect::<Vec<_>>();
 
-        assert_eq!(os_targets, vec!["apt", "dnf", "pacman"]);
+        assert_eq!(
+            os_targets,
+            vec![
+                "apt", "dnf", "pacman", "alpine", "zypper", "xbps", "gentoo", "freebsd", "openwrt",
+                "termux"
+            ]
+        );
     }
 
     #[test]
