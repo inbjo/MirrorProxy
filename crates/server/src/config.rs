@@ -70,6 +70,12 @@ pub struct Upstreams {
     pub nix: String,
     #[serde(default = "default_flatpak_repository")]
     pub flatpak: String,
+    #[serde(default = "default_alpine_repository")]
+    pub alpine: String,
+    #[serde(default = "default_openwrt_repository")]
+    pub openwrt: String,
+    #[serde(default = "default_termux_repository")]
+    pub termux: String,
     #[serde(default = "default_crates_index")]
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
@@ -214,7 +220,7 @@ impl Config {
             match *proxy {
                 "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "nuget"
                 | "cpan" | "cran" | "hackage" | "clojars" | "pub" | "anaconda" | "texlive"
-                | "elpa" | "nix" | "flatpak" | "crates" | "pypi" => {}
+                | "elpa" | "nix" | "flatpak" | "os" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -241,6 +247,9 @@ impl Config {
         validate_http_url("upstreams.elpa", &self.upstreams.elpa)?;
         validate_http_url("upstreams.nix", &self.upstreams.nix)?;
         validate_http_url("upstreams.flatpak", &self.upstreams.flatpak)?;
+        validate_http_url("upstreams.alpine", &self.upstreams.alpine)?;
+        validate_http_url("upstreams.openwrt", &self.upstreams.openwrt)?;
+        validate_http_url("upstreams.termux", &self.upstreams.termux)?;
         validate_http_url("upstreams.crates_index", &self.upstreams.crates_index)?;
         validate_http_url("upstreams.crates_api", &self.upstreams.crates_api)?;
         validate_http_url("upstreams.pypi_simple", &self.upstreams.pypi_simple)?;
@@ -294,6 +303,9 @@ impl Default for Upstreams {
             elpa: default_elpa_repository(),
             nix: default_nix_repository(),
             flatpak: default_flatpak_repository(),
+            alpine: default_alpine_repository(),
+            openwrt: default_openwrt_repository(),
+            termux: default_termux_repository(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
             pypi_simple: default_pypi_simple(),
@@ -362,6 +374,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "elpa".to_string(),
         "nix".to_string(),
         "flatpak".to_string(),
+        "os".to_string(),
         "crates".to_string(),
         "pypi".to_string(),
     ]
@@ -453,6 +466,16 @@ fn default_nix_repository() -> String {
 
 fn default_flatpak_repository() -> String {
     "https://dl.flathub.org/repo".to_string()
+}
+
+fn default_alpine_repository() -> String {
+    "https://dl-cdn.alpinelinux.org/alpine".to_string()
+}
+fn default_openwrt_repository() -> String {
+    "https://downloads.openwrt.org".to_string()
+}
+fn default_termux_repository() -> String {
+    "https://packages.termux.dev/apt/termux-main".to_string()
 }
 
 fn default_crates_index() -> String {

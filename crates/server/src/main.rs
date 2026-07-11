@@ -31,7 +31,7 @@ use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
     anaconda, clojars, composer, cpan, cran, cratesio, elpa, flatpak, github, go, hackage, maven,
-    nix, npm, nuget, oci, pub_repository, pypi, rubygems, texlive, ProxyError,
+    nix, npm, nuget, oci, os, pub_repository, pypi, rubygems, texlive, ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -475,6 +475,9 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.elpa" => Some(config.upstreams.elpa.clone()),
         "upstreams.nix" => Some(config.upstreams.nix.clone()),
         "upstreams.flatpak" => Some(config.upstreams.flatpak.clone()),
+        "upstreams.alpine" => Some(config.upstreams.alpine.clone()),
+        "upstreams.openwrt" => Some(config.upstreams.openwrt.clone()),
+        "upstreams.termux" => Some(config.upstreams.termux.clone()),
         "upstreams.crates_index" => Some(config.upstreams.crates_index.clone()),
         "upstreams.crates_api" => Some(config.upstreams.crates_api.clone()),
         "upstreams.pypi_simple" => Some(config.upstreams.pypi_simple.clone()),
@@ -518,6 +521,9 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.elpa",
         "upstreams.nix",
         "upstreams.flatpak",
+        "upstreams.alpine",
+        "upstreams.openwrt",
+        "upstreams.termux",
         "upstreams.crates_index",
         "upstreams.crates_api",
         "upstreams.pypi_simple",
@@ -1275,6 +1281,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/flatpak", get(flatpak::root).head(flatpak::root))
         .route("/flatpak/", get(flatpak::root).head(flatpak::root))
         .route("/flatpak/{*path}", get(flatpak::proxy).head(flatpak::proxy))
+        .route("/os", get(os::root).head(os::root))
+        .route("/os/", get(os::root).head(os::root))
+        .route("/os/{*path}", get(os::proxy).head(os::proxy))
         .route(
             "/pypi/simple",
             get(pypi::simple_root).head(pypi::simple_root),
@@ -1509,6 +1518,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("nix")
     } else if path == "/flatpak" || path.starts_with("/flatpak/") {
         Some("flatpak")
+    } else if path == "/os" || path.starts_with("/os/") {
+        Some("os")
     } else if path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
@@ -1677,6 +1688,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/nix/")
         || path == "/flatpak"
         || path.starts_with("/flatpak/")
+        || path == "/os"
+        || path.starts_with("/os/")
         || path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")

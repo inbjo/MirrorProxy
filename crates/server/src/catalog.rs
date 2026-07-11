@@ -452,7 +452,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Alpine apk",
         category: SourceCategory::OperatingSystem,
         aliases: &["apk"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -492,7 +492,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "OpenWrt opkg",
         category: SourceCategory::OperatingSystem,
         aliases: &["opkg"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -500,7 +500,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Termux",
         category: SourceCategory::OperatingSystem,
         aliases: &[],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -562,6 +562,27 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "alpine",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/alpine/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "openwrt",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/openwrt/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "termux",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/termux/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
     TargetSource {
         target_code: "flatpak",
         provider_code: "mirrorproxy",
