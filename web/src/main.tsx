@@ -197,8 +197,8 @@ const messages = {
 } satisfies Record<Locale, Record<string, string>>
 
 function App() {
-  const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en'))
-  const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light'))
+  const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en', ['en', 'zh']))
+  const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light', ['light', 'dark']))
   const [config, setConfig] = React.useState<PublicConfig>({
     public_base_url: window.location.origin,
     enabled_proxies: ['github', 'composer'],
