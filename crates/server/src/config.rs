@@ -233,6 +233,8 @@ impl Config {
         validate_http_url("upstreams.clojars", &self.upstreams.clojars)?;
         validate_http_url("upstreams.pub_repository", &self.upstreams.pub_repository)?;
         validate_http_url("upstreams.anaconda", &self.upstreams.anaconda)?;
+        validate_http_url("upstreams.texlive", &self.upstreams.texlive)?;
+        validate_http_url("upstreams.elpa", &self.upstreams.elpa)?;
         validate_http_url("upstreams.crates_index", &self.upstreams.crates_index)?;
         validate_http_url("upstreams.crates_api", &self.upstreams.crates_api)?;
         validate_http_url("upstreams.pypi_simple", &self.upstreams.pypi_simple)?;
@@ -494,6 +496,27 @@ mod tests {
             ..Config::default()
         };
 
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_new_static_repository_upstreams() {
+        let config = Config {
+            upstreams: Upstreams {
+                texlive: "file:///tmp/tlnet".to_string(),
+                ..Upstreams::default()
+            },
+            ..Config::default()
+        };
+        assert!(config.validate().is_err());
+
+        let config = Config {
+            upstreams: Upstreams {
+                elpa: "file:///packages".to_string(),
+                ..Upstreams::default()
+            },
+            ..Config::default()
+        };
         assert!(config.validate().is_err());
     }
 
