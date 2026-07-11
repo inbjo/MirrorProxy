@@ -861,6 +861,7 @@ fn source_config_path(
             "cran" => ".Rprofile",
             "hackage" => ".cabal/config",
             "clojars" => ".clojure/deps.edn",
+            "anaconda" => ".condarc",
             "composer" => ".config/composer/config.json",
             other => anyhow::bail!("{other} does not support safe user-scope configuration writes"),
         },
@@ -920,6 +921,9 @@ fn source_config_content(
             "clojars" => source_config_command("clojars", repo_url)
                 .map(|content| format!(";; Managed by MirrorProxy\n{content}\n"))
                 .ok_or_else(|| anyhow::anyhow!("missing Clojars configuration template")),
+            "anaconda" => source_config_command("anaconda", repo_url)
+                .map(|content| format!("# Managed by MirrorProxy\n{content}\n"))
+                .ok_or_else(|| anyhow::anyhow!("missing Anaconda configuration template")),
             "composer" => Ok(serde_json::to_string_pretty(&serde_json::json!({
                 "repositories": {
                     "packagist": { "type": "composer", "url": repo_url }
@@ -1072,6 +1076,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         "cran" => Some("Restore the previous R ~/.Rprofile repository setting".to_string()),
         "hackage" => Some("Restore the previous Cabal ~/.cabal/config repository setting".to_string()),
         "clojars" => Some("Restore the previous Clojure ~/.clojure/deps.edn repository setting".to_string()),
+        "anaconda" => Some("Restore the previous Conda ~/.condarc channel setting".to_string()),
         "composer" => Some("composer config --unset repos.packagist".to_string()),
         "docker" => Some(
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"

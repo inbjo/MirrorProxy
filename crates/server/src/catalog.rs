@@ -370,7 +370,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Anaconda",
         category: SourceCategory::Repository,
         aliases: &["conda"],
-        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     // Registered chsrc targets which currently generate guidance only. Keep
@@ -813,6 +813,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
     SourceTemplate { target_code: "hackage", os_family: "any", scope: SourceScope::User, template: "repository hackage.haskell.org\n  url: {repo_url}\n  secure: True", requires_sudo: false },
     SourceTemplate { target_code: "clojars", os_family: "any", scope: SourceScope::User, template: "{:mvn/repos {\"clojars\" {:url \"{repo_url}\"}}}", requires_sudo: false },
     SourceTemplate { target_code: "pub", os_family: "any", scope: SourceScope::User, template: "PUB_HOSTED_URL={repo_url} flutter pub get", requires_sudo: false },
+    SourceTemplate { target_code: "anaconda", os_family: "any", scope: SourceScope::User, template: "channels:\n  - {repo_url}main\n  - defaults", requires_sudo: false },
     SourceTemplate {
         target_code: "docker",
         os_family: "any",
