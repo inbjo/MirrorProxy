@@ -22,7 +22,7 @@ cat >"${config}" <<EOF
 listen_addr = "127.0.0.1:${port}"
 database_path = "${work}/mirrorproxy.sqlite3"
 public_base_url = "${base}"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi", "cpan", "rubygems"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi", "cpan", "rubygems", "maven"]
 
 [upstreams]
 github = "https://github.com"
@@ -40,6 +40,7 @@ pypi_simple = "https://pypi.org/simple"
 pypi_files = "https://files.pythonhosted.org"
 cpan = "https://cpan.metacpan.org"
 rubygems = "https://rubygems.org"
+maven = "https://repo.maven.apache.org/maven2"
 EOF
 
 cd "${root}"
@@ -84,6 +85,11 @@ PIP_CACHE_DIR="${work}/pip-cache" pip download --no-deps --dest "${work}/pip" --
 command -v cpanm >/dev/null
 cpanm --mirror "${base}/cpan/" --mirror-only --notest --local-lib-contained "${work}/cpan" Try::Tiny >/dev/null
 gem install rake --version 13.2.1 --no-document --clear-sources --source "${base}/rubygems/" --install-dir "${work}/gems" >/dev/null
+mkdir -p "${work}/maven"
+cat >"${work}/maven/settings.xml" <<EOF
+<settings><mirrors><mirror><id>mirrorproxy</id><url>${base}/maven/</url><mirrorOf>central</mirrorOf></mirror></mirrors></settings>
+EOF
+mvn -s "${work}/maven/settings.xml" -Dmaven.repo.local="${work}/m2" dependency:get -Dartifact=org.apache.commons:commons-lang3:3.14.0 -q
 mkdir "${work}/composer"
 (
   cd "${work}/composer"
@@ -96,5 +102,5 @@ if [[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]]; then
   docker pull "127.0.0.1:${port}/library/busybox:1.36.1" >/dev/null
 fi
 
-printf 'client smoke passed: git npm yarn pnpm go cargo pip cpanm rubygems composer%s\n' \
+printf 'client smoke passed: git npm yarn pnpm go cargo pip cpanm rubygems maven composer%s\n' \
   "$([[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]] && printf ' docker' || true)"
