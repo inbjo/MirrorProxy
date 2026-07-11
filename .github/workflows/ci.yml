@@ -48,3 +48,26 @@ jobs:
       - name: Run local smoke test
         shell: pwsh
         run: .\scripts\smoke-local.ps1
+
+  client-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          tools: composer
+      - name: Build web console
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Run public client protocol smoke
+        run: ./scripts/smoke-clients.sh
