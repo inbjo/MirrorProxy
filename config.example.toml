@@ -1,7 +1,7 @@
 listen_addr = "127.0.0.1:3000"
 database_path = "mirrorproxy.sqlite3"
 public_base_url = "http://127.0.0.1:3000"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "pub", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "pub", "anaconda", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -21,6 +21,7 @@ cran = "https://cloud.r-project.org"
 hackage = "https://hackage.haskell.org"
 clojars = "https://repo.clojars.org"
 pub_repository = "https://pub.dev"
+anaconda = "https://repo.anaconda.com/pkgs"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"

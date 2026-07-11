@@ -370,7 +370,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Anaconda",
         category: SourceCategory::Repository,
         aliases: &["conda"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     // Registered chsrc targets which currently generate guidance only. Keep
@@ -562,6 +562,13 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "anaconda",
+        provider_code: "mirrorproxy",
+        repo_url: "/anaconda/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
     TargetSource {
         target_code: "npm",
         provider_code: "mirrorproxy",
