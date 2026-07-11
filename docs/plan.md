@@ -20,7 +20,7 @@
 
 - 仍缺少多个计划中的生态 adapter（Homebrew 与部分发行版静态目录等）。
 - chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚覆盖 npm、pip、cargo、go、composer、docker、apt、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Anaconda，其他登记目标明确标为仅配置/计划中。
-- 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm、Go、Cargo、pip；Docker、yarn/pnpm、cpan 等客户端仍待补齐，并需持续保留路由/单元测试。
+- 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip；Docker、cpan 等客户端仍待补齐，并需持续保留路由/单元测试。
 - 可选磁盘缓存、私有 registry 凭证和按用户配额仍属于后续增强；月配额已使用 SQLite 原子预留窗口控制并发超卖，超大单流仍按流式计量结算。
 
 当前完成度估算：

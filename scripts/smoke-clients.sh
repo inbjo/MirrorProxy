@@ -47,6 +47,16 @@ curl --fail --silent "${base}/healthz" >/dev/null
 
 git ls-remote "${base}/https://github.com/rust-lang/cargo.git" HEAD >/dev/null
 npm install --ignore-scripts --no-save --prefix "${work}/npm" --registry "${base}/npm/" is-number@7.0.0 >/dev/null
+mkdir "${work}/yarn"
+(
+  cd "${work}/yarn"
+  yarn add --ignore-scripts --registry "${base}/npm/" is-number@7.0.0 >/dev/null
+)
+mkdir "${work}/pnpm"
+(
+  cd "${work}/pnpm"
+  pnpm add --ignore-scripts --registry "${base}/npm/" is-number@7.0.0 >/dev/null
+)
 GOPROXY="${base}/goproxy,direct" GOMODCACHE="${work}/gomodcache" go list -m github.com/gorilla/mux@v1.8.1 >/dev/null
 mkdir -p "${work}/cargo/.cargo"
 cat >"${work}/cargo/Cargo.toml" <<EOF
@@ -73,4 +83,4 @@ mkdir "${work}/composer"
   COMPOSER_HOME="${work}/composer-home" composer require monolog/monolog:^3 --no-interaction --no-progress >/dev/null
 )
 
-printf 'client smoke passed: git npm go cargo pip composer\n'
+printf 'client smoke passed: git npm yarn pnpm go cargo pip composer\n'
