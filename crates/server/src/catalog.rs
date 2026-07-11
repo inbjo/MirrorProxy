@@ -350,6 +350,14 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         default_scope: SourceScope::User,
     },
     SourceTarget {
+        code: "clojars",
+        name: "Clojure Clojars",
+        category: SourceCategory::Language,
+        aliases: &["clojure", "leiningen"],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
+        default_scope: SourceScope::User,
+    },
+    SourceTarget {
         code: "anaconda",
         name: "Anaconda",
         category: SourceCategory::Repository,
@@ -434,6 +442,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "hackage",
         provider_code: "mirrorproxy",
         repo_url: "/hackage/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "clojars",
+        provider_code: "mirrorproxy",
+        repo_url: "/clojars/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -588,6 +603,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         requires_sudo: false,
     },
     SourceTemplate { target_code: "hackage", os_family: "any", scope: SourceScope::User, template: "repository hackage.haskell.org\n  url: {repo_url}\n  secure: True", requires_sudo: false },
+    SourceTemplate { target_code: "clojars", os_family: "any", scope: SourceScope::User, template: "{:mvn/repos {\"clojars\" {:url \"{repo_url}\"}}}", requires_sudo: false },
     SourceTemplate {
         target_code: "docker",
         os_family: "any",

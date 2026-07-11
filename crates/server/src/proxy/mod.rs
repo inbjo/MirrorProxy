@@ -1,3 +1,4 @@
+pub mod clojars;
 pub mod composer;
 pub mod cpan;
 pub mod cran;
