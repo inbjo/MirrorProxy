@@ -21,6 +21,7 @@ pub mod os;
 pub mod pub_repository;
 pub mod pypi;
 pub mod rubygems;
+pub mod rustup;
 pub mod texlive;
 
 use std::{

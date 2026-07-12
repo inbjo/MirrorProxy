@@ -444,7 +444,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Rustup",
         category: SourceCategory::Language,
         aliases: &[],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -578,6 +578,13 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "rustup",
+        provider_code: "mirrorproxy",
+        repo_url: "/rustup",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
     TargetSource {
         target_code: "cocoapods",
         provider_code: "mirrorproxy",
@@ -896,6 +903,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         template: "---\n:sources:\n- {repo_url}",
         requires_sudo: false,
     },
+    SourceTemplate { target_code: "rustup", os_family: "linux", scope: SourceScope::User, template: "export RUSTUP_DIST_SERVER={repo_url}\nexport RUSTUP_UPDATE_ROOT={repo_url}/rustup", requires_sudo: false },
     SourceTemplate {
         target_code: "nuget",
         os_family: "any",

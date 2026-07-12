@@ -50,6 +50,8 @@ pub struct Upstreams {
     pub maven: String,
     #[serde(default = "default_rubygems_repository")]
     pub rubygems: String,
+    #[serde(default = "default_rustup_repository")]
+    pub rustup: String,
     #[serde(default = "default_nuget_repository")]
     pub nuget: String,
     #[serde(default = "default_cpan_repository")]
@@ -282,10 +284,10 @@ impl Config {
             .collect();
         for proxy in enabled.keys() {
             match *proxy {
-                "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "nuget"
-                | "cpan" | "cran" | "hackage" | "clojars" | "cocoapods" | "pub" | "anaconda"
-                | "texlive" | "elpa" | "nix" | "guix" | "flatpak" | "homebrew" | "os"
-                | "crates" | "pypi" => {}
+                "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "rustup"
+                | "nuget" | "cpan" | "cran" | "hackage" | "clojars" | "cocoapods" | "pub"
+                | "anaconda" | "texlive" | "elpa" | "nix" | "guix" | "flatpak" | "homebrew"
+                | "os" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -301,6 +303,7 @@ impl Config {
         validate_http_url("upstreams.go_proxy", &self.upstreams.go_proxy)?;
         validate_http_url("upstreams.maven", &self.upstreams.maven)?;
         validate_http_url("upstreams.rubygems", &self.upstreams.rubygems)?;
+        validate_http_url("upstreams.rustup", &self.upstreams.rustup)?;
         validate_http_url("upstreams.nuget", &self.upstreams.nuget)?;
         validate_http_url("upstreams.cpan", &self.upstreams.cpan)?;
         validate_http_url("upstreams.cran", &self.upstreams.cran)?;
@@ -369,6 +372,7 @@ impl Default for Upstreams {
             go_proxy: default_go_proxy(),
             maven: default_maven_repository(),
             rubygems: default_rubygems_repository(),
+            rustup: default_rustup_repository(),
             nuget: default_nuget_repository(),
             cpan: default_cpan_repository(),
             cran: default_cran_repository(),
@@ -472,6 +476,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "go".to_string(),
         "maven".to_string(),
         "rubygems".to_string(),
+        "rustup".to_string(),
         "nuget".to_string(),
         "cpan".to_string(),
         "cran".to_string(),
@@ -533,6 +538,9 @@ fn default_maven_repository() -> String {
 
 fn default_rubygems_repository() -> String {
     "https://rubygems.org".to_string()
+}
+fn default_rustup_repository() -> String {
+    "https://static.rust-lang.org".to_string()
 }
 
 fn default_nuget_repository() -> String {

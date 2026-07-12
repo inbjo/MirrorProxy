@@ -31,8 +31,8 @@ use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
     anaconda, clojars, cocoapods, composer, cpan, cran, cratesio, elpa, flatpak, github, go, guix,
-    hackage, homebrew, maven, nix, npm, nuget, oci, os, pub_repository, pypi, rubygems, texlive,
-    ProxyError,
+    hackage, homebrew, maven, nix, npm, nuget, oci, os, pub_repository, pypi, rubygems, rustup,
+    texlive, ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -485,6 +485,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.go_proxy" => Some(config.upstreams.go_proxy.clone()),
         "upstreams.maven" => Some(config.upstreams.maven.clone()),
         "upstreams.rubygems" => Some(config.upstreams.rubygems.clone()),
+        "upstreams.rustup" => Some(config.upstreams.rustup.clone()),
         "upstreams.nuget" => Some(config.upstreams.nuget.clone()),
         "upstreams.cpan" => Some(config.upstreams.cpan.clone()),
         "upstreams.cran" => Some(config.upstreams.cran.clone()),
@@ -546,6 +547,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.go_proxy",
         "upstreams.maven",
         "upstreams.rubygems",
+        "upstreams.rustup",
         "upstreams.nuget",
         "upstreams.cpan",
         "upstreams.cran",
@@ -1282,6 +1284,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             "/rubygems/{*path}",
             get(rubygems::proxy).head(rubygems::proxy),
         )
+        .route("/rustup", get(rustup::root).head(rustup::root))
+        .route("/rustup/", get(rustup::root).head(rustup::root))
+        .route("/rustup/{*path}", get(rustup::proxy).head(rustup::proxy))
         .route("/nuget", get(nuget::root).head(nuget::root))
         .route("/nuget/", get(nuget::root).head(nuget::root))
         .route(
@@ -1558,6 +1563,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("maven")
     } else if path == "/rubygems" || path.starts_with("/rubygems/") {
         Some("rubygems")
+    } else if path == "/rustup" || path.starts_with("/rustup/") {
+        Some("rustup")
     } else if path == "/nuget" || path.starts_with("/nuget/") {
         Some("nuget")
     } else if path == "/cpan" || path.starts_with("/cpan/") {
@@ -1734,6 +1741,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/maven/")
         || path == "/rubygems"
         || path.starts_with("/rubygems/")
+        || path == "/rustup"
+        || path.starts_with("/rustup/")
         || path == "/nuget"
         || path.starts_with("/nuget/")
         || path == "/cpan"
