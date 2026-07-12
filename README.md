@@ -506,15 +506,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test
 ```
 
-Run the local smoke test on Windows PowerShell:
-
-```powershell
-.\scripts\smoke-local.ps1
-```
-
-The smoke test builds the debug binary, starts MirrorProxy on a temporary local port, checks the embedded web UI and key proxy endpoints, then stops the process.
-
-GitHub Actions runs formatting, clippy, Rust tests, the frontend production build, and the Windows smoke test on pushes and pull requests. Tagging `v*` builds Linux musl/ARM64, macOS ARM64, and Windows artifacts, then publishes a GitHub release with per-artifact checksums and `SHA256SUMS`.
+GitHub Actions runs formatting, clippy, Rust tests, the frontend production build, and browser end-to-end tests on pushes and pull requests. Tagging `v*` builds Linux musl/ARM64 artifacts and publishes a GitHub release with per-artifact checksums and `SHA256SUMS`.
 
 For a local real-client protocol check (Git, npm/yarn/pnpm, Go, Cargo, pip, CPAN cpanm, RubyGems, Maven, NuGet, CRAN, Cabal/Hackage, and Composer), run:
 

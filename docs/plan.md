@@ -328,7 +328,7 @@
 
 GitHub Actions：
 - PR/Push：fmt、clippy、test、frontend build。
-- Release：Linux x86_64 musl 静态二进制、Linux arm64、Windows、macOS。
+- Release：Linux x86_64 musl 静态二进制、Linux arm64。
 - 生成 checksums。
 - 上传 artifact。
 
@@ -433,7 +433,7 @@ mirrorproxy config set public_base_url http://127.0.0.1:3000
 - `set/reset` 需要分 target 实现，先覆盖 npm、pip、cargo、go、composer、docker、apt、yum/dnf、pacman。
 - 默认写用户级配置；需要系统级写入时必须显式 `--scope system`，并清楚提示需要权限。
 - 写配置前备份原文件，备份记录写入 SQLite 或本地状态文件，便于 rollback。
-- 对 Windows、macOS、Linux 分平台处理，不支持的平台返回明确错误。
+- v1 仅支持 Linux；其他平台不在实现或发布范围内。
 
 验收标准：
 
