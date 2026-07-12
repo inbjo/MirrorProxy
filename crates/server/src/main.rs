@@ -31,8 +31,8 @@ use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
     anaconda, clojars, cocoapods, composer, cpan, cran, cratesio, elpa, flatpak, github, go, guix,
-    hackage, homebrew, luarocks, maven, nix, npm, nuget, oci, os, pub_repository, pypi, rubygems,
-    rustup, texlive, ProxyError,
+    hackage, homebrew, luarocks, maven, nix, npm, nuget, oci, opam, os, pub_repository, pypi,
+    rubygems, rustup, texlive, ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -1274,6 +1274,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/npm", get(npm::root).head(npm::root))
         .route("/npm/", get(npm::root).head(npm::root))
         .route("/npm/{*path}", get(npm::proxy).head(npm::proxy))
+        .route("/opam", get(opam::root).head(opam::root))
+        .route("/opam/", get(opam::root).head(opam::root))
+        .route("/opam/{*path}", get(opam::proxy).head(opam::proxy))
         .route("/goproxy", get(go::root).head(go::root))
         .route("/goproxy/", get(go::root).head(go::root))
         .route("/goproxy/{*path}", get(go::proxy).head(go::proxy))
@@ -1565,6 +1568,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("composer")
     } else if path == "/npm" || path.starts_with("/npm/") {
         Some("npm")
+    } else if path == "/opam" || path.starts_with("/opam/") {
+        Some("opam")
     } else if path == "/goproxy" || path.starts_with("/goproxy/") {
         Some("go")
     } else if path == "/maven" || path.starts_with("/maven/") {
@@ -1745,6 +1750,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/composer/")
         || path == "/npm"
         || path.starts_with("/npm/")
+        || path == "/opam"
+        || path.starts_with("/opam/")
         || path == "/goproxy"
         || path.starts_with("/goproxy/")
         || path == "/maven"

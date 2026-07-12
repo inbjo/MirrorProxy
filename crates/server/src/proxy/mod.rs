@@ -18,6 +18,7 @@ pub mod nix;
 pub mod npm;
 pub mod nuget;
 pub mod oci;
+pub mod opam;
 pub mod os;
 pub mod pub_repository;
 pub mod pypi;
