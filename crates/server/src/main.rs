@@ -938,6 +938,7 @@ fn source_config_path(
             "docker" => "etc/docker/daemon.json",
             "apt" => "etc/apt/sources.list.d/mirrorproxy.list",
             "alpine" => "etc/apk/repositories",
+            "xbps" => "etc/xbps.d/00-mirrorproxy.conf",
             "dnf" => "etc/yum.repos.d/mirrorproxy.repo",
             "pacman" => "etc/pacman.d/mirrorproxy",
             other => {
@@ -1035,6 +1036,10 @@ fn source_config_content(
                     "# Managed by MirrorProxy\n{base}/{release}/main\n{base}/{release}/community\n"
                 ))
             }
+            "xbps" => Ok(format!(
+                "# Managed by MirrorProxy\nrepository={}/current\n",
+                repo_url.trim_end_matches('/')
+            )),
             "dnf" => Ok(format!("# Managed by MirrorProxy\n[mirrorproxy]\nname=MirrorProxy configured mirror\nbaseurl={}/fedora/releases/$releasever/Everything/$basearch/os/\nenabled=1\ngpgcheck=1\n", repo_url.trim_end_matches('/'))),
             "pacman" => Ok(format!("# Managed by MirrorProxy\nServer = {}/archlinux/$repo/os/$arch\n", repo_url.trim_end_matches('/'))),
             other => anyhow::bail!("no system-scope configuration writer for {other}"),
@@ -1176,7 +1181,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
                 .to_string(),
         ),
-        "apt" | "alpine" | "dnf" | "pacman" => Some(
+        "apt" | "alpine" | "dnf" | "pacman" | "xbps" => Some(
             "Remove the MirrorProxy-managed system source file and restore the rollback record"
                 .to_string(),
         ),
@@ -2741,6 +2746,25 @@ on_exceeded = "stop_proxy"
             "# Managed by MirrorProxy\nhttps://mirror.example/os/alpine/v3.21/main\nhttps://mirror.example/os/alpine/v3.21/community\n"
         );
         apply_source_reset("alpine", CliSourceScope::System, &directory, false).unwrap();
+        assert!(!applied.config_path.exists());
+
+        let xbps = PlannedSourceCommand {
+            target_code: "xbps",
+            provider_code: "mirrorproxy",
+            repo_url: "https://mirror.example/os/void/".to_string(),
+            command: String::new(),
+        };
+        let applied =
+            apply_source_set(&xbps, CliSourceScope::System, &directory, None, false).unwrap();
+        assert_eq!(
+            applied.config_path,
+            directory.join("etc/xbps.d/00-mirrorproxy.conf")
+        );
+        assert_eq!(
+            fs::read_to_string(&applied.config_path).unwrap(),
+            "# Managed by MirrorProxy\nrepository=https://mirror.example/os/void/current\n"
+        );
+        apply_source_reset("xbps", CliSourceScope::System, &directory, false).unwrap();
         assert!(!applied.config_path.exists());
 
         fs::remove_dir_all(directory).unwrap();

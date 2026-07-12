@@ -488,7 +488,11 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Void xbps",
         category: SourceCategory::OperatingSystem,
         aliases: &["void"],
-        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
+        supported_modes: &[
+            SourceMode::ProxyAdapter,
+            SourceMode::LocalConfig,
+            SourceMode::TemplateOnly,
+        ],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -684,6 +688,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "openwrt",
         provider_code: "mirrorproxy",
         repo_url: "/os/openwrt/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "xbps",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/void/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -1030,6 +1041,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         os_family: "alpine",
         scope: SourceScope::System,
         template: "Use {repo_url}<release>/main and {repo_url}<release>/community in /etc/apk/repositories.",
+        requires_sudo: true,
+    },
+    SourceTemplate {
+        target_code: "xbps",
+        os_family: "void",
+        scope: SourceScope::System,
+        template: "repository={repo_url}current",
         requires_sudo: true,
     },
     SourceTemplate {
