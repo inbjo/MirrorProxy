@@ -404,7 +404,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Python PDM",
         category: SourceCategory::Language,
         aliases: &[],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::LocalConfig, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -578,6 +578,13 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "pdm",
+        provider_code: "mirrorproxy",
+        repo_url: "/pypi/simple/",
+        speed_url: None,
+        capability: SourceMode::LocalConfig,
+    },
     TargetSource {
         target_code: "bun",
         provider_code: "mirrorproxy",
@@ -890,6 +897,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         template: "pip config set global.index-url {repo_url}",
         requires_sudo: false,
     },
+    SourceTemplate { target_code: "pdm", os_family: "linux", scope: SourceScope::User, template: "pdm config pypi.url {repo_url}", requires_sudo: false },
     SourceTemplate {
         target_code: "cargo",
         os_family: "any",

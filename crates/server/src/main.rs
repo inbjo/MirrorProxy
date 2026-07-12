@@ -917,6 +917,7 @@ fn source_config_path(
             "npm" => ".npmrc",
             "bun" => ".bunfig.toml",
             "pip" => ".config/pip/pip.conf",
+            "pdm" => ".config/pdm/config.toml",
             "cargo" => ".cargo/config.toml",
             "go" => ".config/go/env",
             "maven" => ".m2/settings.xml",
@@ -965,6 +966,7 @@ fn source_config_content(
             "npm" => Ok(format!("registry={repo_url}\n")),
             "bun" => Ok(format!("[install]\nregistry = \"{repo_url}\"\n")),
             "pip" => Ok(format!("[global]\nindex-url = {repo_url}\n")),
+            "pdm" => Ok(format!("[pypi]\nurl = \"{repo_url}\"\n")),
             "cargo" => source_config_command("cargo", repo_url)
                 .map(|content| format!("{content}\n"))
                 .ok_or_else(|| anyhow::anyhow!("missing Cargo configuration template")),
@@ -2569,7 +2571,8 @@ on_exceeded = "stop_proxy"
         fs::create_dir_all(&directory).unwrap();
 
         for target_code in [
-            "npm", "bun", "pip", "cargo", "go", "maven", "rubygems", "nuget", "cpan", "composer",
+            "npm", "bun", "pip", "pdm", "cargo", "go", "maven", "rubygems", "nuget", "cpan",
+            "composer",
         ] {
             let command = PlannedSourceCommand {
                 target_code,
