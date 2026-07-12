@@ -351,6 +351,7 @@ APT 必须提供发行版代号；系统级写入通常需要 root 权限。
 
 ```bash
 mirrorproxy sources set apt --mirror tuna --scope system --distribution jammy
+mirrorproxy sources set apt --mirror mirrorproxy --base-url https://mirror.example --scope system --distribution debian/bookworm
 mirrorproxy sources reset apt --scope system
 mirrorproxy sources set alpine --mirror mirrorproxy --base-url https://mirror.example --scope system --distribution v3.21
 mirrorproxy sources reset alpine --scope system

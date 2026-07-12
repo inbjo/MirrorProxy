@@ -93,7 +93,7 @@ enum SourcesCommand {
         /// Override the root used to locate scoped configuration files.
         #[arg(long)]
         config_root: Option<PathBuf>,
-        /// Distribution version required for selected system source generation, for example jammy, bookworm, or v3.21.
+        /// Distribution version required for selected system source generation, for example jammy, debian/bookworm, or v3.21.
         #[arg(long)]
         distribution: Option<String>,
         /// Replace a non-empty target configuration file after creating a rollback record.
@@ -1011,10 +1011,36 @@ fn source_config_content(
                 "registry-mirrors": [docker_registry_mirror_url(repo_url)?]
             }))? + "\n"),
             "apt" => {
-                let distribution = distribution.filter(|value| !value.trim().is_empty()).ok_or_else(|| {
-                    anyhow::anyhow!("APT system scope requires --distribution <codename>, for example jammy or bookworm")
-                })?;
-                Ok(format!("# Managed by MirrorProxy\ndeb {}/ubuntu/ {} main restricted universe multiverse\n", repo_url.trim_end_matches('/'), distribution))
+                let distribution = distribution
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "APT system scope requires --distribution <codename> or <target>/<codename>, for example jammy or debian/bookworm"
+                        )
+                    })?;
+                let (target, codename) = distribution
+                    .split_once('/')
+                    .map(|(target, codename)| (target, codename))
+                    .unwrap_or(("ubuntu", distribution));
+                if !matches!(target, "ubuntu" | "debian")
+                    || codename.is_empty()
+                    || !codename
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+                {
+                    anyhow::bail!(
+                        "APT --distribution must be a safe Ubuntu codename or ubuntu/<codename> or debian/<codename>, not '{distribution}'"
+                    );
+                }
+                let components = if target == "ubuntu" {
+                    "main restricted universe multiverse"
+                } else {
+                    "main"
+                };
+                Ok(format!(
+                    "# Managed by MirrorProxy\ndeb {}/{target}/ {codename} {components}\n",
+                    repo_url.trim_end_matches('/')
+                ))
             }
             "alpine" => {
                 let release = distribution
@@ -2742,6 +2768,24 @@ on_exceeded = "stop_proxy"
         assert!(fs::read_to_string(&applied.config_path)
             .unwrap()
             .contains("jammy"));
+        let debian = source_config_content(
+            "apt",
+            CliSourceScope::System,
+            "https://mirror.example/os",
+            Some("debian/bookworm"),
+        )
+        .unwrap();
+        assert_eq!(
+            debian,
+            "# Managed by MirrorProxy\ndeb https://mirror.example/os/debian/ bookworm main\n"
+        );
+        assert!(source_config_content(
+            "apt",
+            CliSourceScope::System,
+            "https://mirror.example/os",
+            Some("debian/../bookworm"),
+        )
+        .is_err());
         assert!(applied
             .rollback_path
             .starts_with(directory.join("var/lib/mirrorproxy/sources")));
