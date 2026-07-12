@@ -436,7 +436,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "LuaRocks",
         category: SourceCategory::Language,
         aliases: &["luarocks"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -578,6 +578,13 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "lua",
+        provider_code: "mirrorproxy",
+        repo_url: "/luarocks/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
     TargetSource {
         target_code: "rustup",
         provider_code: "mirrorproxy",
@@ -926,6 +933,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         requires_sudo: false,
     },
     SourceTemplate { target_code: "hackage", os_family: "any", scope: SourceScope::User, template: "repository hackage.haskell.org\n  url: {repo_url}\n  secure: True", requires_sudo: false },
+    SourceTemplate { target_code: "lua", os_family: "linux", scope: SourceScope::User, template: "luarocks install --server={repo_url} <module>", requires_sudo: false },
     SourceTemplate { target_code: "clojars", os_family: "any", scope: SourceScope::User, template: "{:mvn/repos {\"clojars\" {:url \"{repo_url}\"}}}", requires_sudo: false },
     SourceTemplate { target_code: "pub", os_family: "any", scope: SourceScope::User, template: "PUB_HOSTED_URL={repo_url} flutter pub get", requires_sudo: false },
     SourceTemplate { target_code: "anaconda", os_family: "any", scope: SourceScope::User, template: "channels:\n  - {repo_url}main\n  - defaults", requires_sudo: false },

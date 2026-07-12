@@ -31,8 +31,8 @@ use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
     anaconda, clojars, cocoapods, composer, cpan, cran, cratesio, elpa, flatpak, github, go, guix,
-    hackage, homebrew, maven, nix, npm, nuget, oci, os, pub_repository, pypi, rubygems, rustup,
-    texlive, ProxyError,
+    hackage, homebrew, luarocks, maven, nix, npm, nuget, oci, os, pub_repository, pypi, rubygems,
+    rustup, texlive, ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -490,6 +490,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.cpan" => Some(config.upstreams.cpan.clone()),
         "upstreams.cran" => Some(config.upstreams.cran.clone()),
         "upstreams.hackage" => Some(config.upstreams.hackage.clone()),
+        "upstreams.luarocks" => Some(config.upstreams.luarocks.clone()),
         "upstreams.clojars" => Some(config.upstreams.clojars.clone()),
         "upstreams.cocoapods" => Some(config.upstreams.cocoapods.clone()),
         "upstreams.pub_repository" => Some(config.upstreams.pub_repository.clone()),
@@ -552,6 +553,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.cpan",
         "upstreams.cran",
         "upstreams.hackage",
+        "upstreams.luarocks",
         "upstreams.clojars",
         "upstreams.cocoapods",
         "upstreams.pub_repository",
@@ -1287,6 +1289,12 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/rustup", get(rustup::root).head(rustup::root))
         .route("/rustup/", get(rustup::root).head(rustup::root))
         .route("/rustup/{*path}", get(rustup::proxy).head(rustup::proxy))
+        .route("/luarocks", get(luarocks::root).head(luarocks::root))
+        .route("/luarocks/", get(luarocks::root).head(luarocks::root))
+        .route(
+            "/luarocks/{*path}",
+            get(luarocks::proxy).head(luarocks::proxy),
+        )
         .route("/nuget", get(nuget::root).head(nuget::root))
         .route("/nuget/", get(nuget::root).head(nuget::root))
         .route(
@@ -1565,6 +1573,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("rubygems")
     } else if path == "/rustup" || path.starts_with("/rustup/") {
         Some("rustup")
+    } else if path == "/luarocks" || path.starts_with("/luarocks/") {
+        Some("luarocks")
     } else if path == "/nuget" || path.starts_with("/nuget/") {
         Some("nuget")
     } else if path == "/cpan" || path.starts_with("/cpan/") {
@@ -1743,6 +1753,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/rubygems/")
         || path == "/rustup"
         || path.starts_with("/rustup/")
+        || path == "/luarocks"
+        || path.starts_with("/luarocks/")
         || path == "/nuget"
         || path.starts_with("/nuget/")
         || path == "/cpan"

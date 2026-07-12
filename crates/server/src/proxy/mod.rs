@@ -12,6 +12,7 @@ pub mod go;
 pub mod guix;
 pub mod hackage;
 pub mod homebrew;
+pub mod luarocks;
 pub mod maven;
 pub mod nix;
 pub mod npm;

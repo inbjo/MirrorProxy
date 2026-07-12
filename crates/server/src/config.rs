@@ -60,6 +60,8 @@ pub struct Upstreams {
     pub cran: String,
     #[serde(default = "default_hackage_repository")]
     pub hackage: String,
+    #[serde(default = "default_luarocks_repository")]
+    pub luarocks: String,
     #[serde(default = "default_clojars_repository")]
     pub clojars: String,
     #[serde(default = "default_cocoapods_repository")]
@@ -285,9 +287,9 @@ impl Config {
         for proxy in enabled.keys() {
             match *proxy {
                 "github" | "composer" | "oci" | "npm" | "go" | "maven" | "rubygems" | "rustup"
-                | "nuget" | "cpan" | "cran" | "hackage" | "clojars" | "cocoapods" | "pub"
-                | "anaconda" | "texlive" | "elpa" | "nix" | "guix" | "flatpak" | "homebrew"
-                | "os" | "crates" | "pypi" => {}
+                | "nuget" | "cpan" | "cran" | "hackage" | "luarocks" | "clojars" | "cocoapods"
+                | "pub" | "anaconda" | "texlive" | "elpa" | "nix" | "guix" | "flatpak"
+                | "homebrew" | "os" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -308,6 +310,7 @@ impl Config {
         validate_http_url("upstreams.cpan", &self.upstreams.cpan)?;
         validate_http_url("upstreams.cran", &self.upstreams.cran)?;
         validate_http_url("upstreams.hackage", &self.upstreams.hackage)?;
+        validate_http_url("upstreams.luarocks", &self.upstreams.luarocks)?;
         validate_http_url("upstreams.clojars", &self.upstreams.clojars)?;
         validate_http_url("upstreams.cocoapods", &self.upstreams.cocoapods)?;
         validate_http_url("upstreams.pub_repository", &self.upstreams.pub_repository)?;
@@ -377,6 +380,7 @@ impl Default for Upstreams {
             cpan: default_cpan_repository(),
             cran: default_cran_repository(),
             hackage: default_hackage_repository(),
+            luarocks: default_luarocks_repository(),
             clojars: default_clojars_repository(),
             cocoapods: default_cocoapods_repository(),
             pub_repository: default_pub_repository(),
@@ -481,6 +485,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "cpan".to_string(),
         "cran".to_string(),
         "hackage".to_string(),
+        "luarocks".to_string(),
         "clojars".to_string(),
         "pub".to_string(),
         "anaconda".to_string(),
@@ -557,6 +562,9 @@ fn default_cran_repository() -> String {
 
 fn default_hackage_repository() -> String {
     "https://hackage.haskell.org".to_string()
+}
+fn default_luarocks_repository() -> String {
+    "https://luarocks.org".to_string()
 }
 
 fn default_clojars_repository() -> String {
