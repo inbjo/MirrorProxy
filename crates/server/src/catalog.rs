@@ -579,6 +579,13 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
     TargetSource {
+        target_code: "poetry",
+        provider_code: "mirrorproxy",
+        repo_url: "/pypi/simple/",
+        speed_url: None,
+        capability: SourceMode::TemplateOnly,
+    },
+    TargetSource {
         target_code: "uv",
         provider_code: "mirrorproxy",
         repo_url: "/pypi/simple/",
@@ -906,6 +913,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
     },
     SourceTemplate { target_code: "pdm", os_family: "linux", scope: SourceScope::User, template: "pdm config pypi.url {repo_url}", requires_sudo: false },
     SourceTemplate { target_code: "uv", os_family: "linux", scope: SourceScope::User, template: "UV_DEFAULT_INDEX={repo_url} uv pip install <package>", requires_sudo: false },
+    SourceTemplate { target_code: "poetry", os_family: "linux", scope: SourceScope::User, template: "poetry source add --priority=primary mirrorproxy {repo_url}", requires_sudo: false },
     SourceTemplate {
         target_code: "cargo",
         os_family: "any",
