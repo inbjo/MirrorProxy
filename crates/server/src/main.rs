@@ -915,6 +915,7 @@ fn source_config_path(
     let relative_path = match scope {
         CliSourceScope::User => match target_code {
             "npm" => ".npmrc",
+            "bun" => ".bunfig.toml",
             "pip" => ".config/pip/pip.conf",
             "cargo" => ".cargo/config.toml",
             "go" => ".config/go/env",
@@ -962,6 +963,7 @@ fn source_config_content(
     match scope {
         CliSourceScope::User => match target_code {
             "npm" => Ok(format!("registry={repo_url}\n")),
+            "bun" => Ok(format!("[install]\nregistry = \"{repo_url}\"\n")),
             "pip" => Ok(format!("[global]\nindex-url = {repo_url}\n")),
             "cargo" => source_config_command("cargo", repo_url)
                 .map(|content| format!("{content}\n"))
@@ -2567,7 +2569,7 @@ on_exceeded = "stop_proxy"
         fs::create_dir_all(&directory).unwrap();
 
         for target_code in [
-            "npm", "pip", "cargo", "go", "maven", "rubygems", "nuget", "cpan", "composer",
+            "npm", "bun", "pip", "cargo", "go", "maven", "rubygems", "nuget", "cpan", "composer",
         ] {
             let command = PlannedSourceCommand {
                 target_code,

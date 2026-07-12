@@ -420,7 +420,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Bun",
         category: SourceCategory::Language,
         aliases: &[],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::LocalConfig, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -578,6 +578,13 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "bun",
+        provider_code: "mirrorproxy",
+        repo_url: "/npm/",
+        speed_url: None,
+        capability: SourceMode::LocalConfig,
+    },
     TargetSource {
         target_code: "ocaml",
         provider_code: "mirrorproxy",
@@ -875,6 +882,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         template: "npm config set registry {repo_url}",
         requires_sudo: false,
     },
+    SourceTemplate { target_code: "bun", os_family: "linux", scope: SourceScope::User, template: "[install]\nregistry = \"{repo_url}\"", requires_sudo: false },
     SourceTemplate {
         target_code: "pip",
         os_family: "any",
