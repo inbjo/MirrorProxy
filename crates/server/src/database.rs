@@ -45,6 +45,7 @@ pub struct ProxyTrafficRecord<'a> {
     pub response_bytes: u64,
     pub stream_error: bool,
     pub reserved_bytes: u64,
+    pub request_event_retention_days: u32,
 }
 
 #[derive(Serialize)]
@@ -368,6 +369,13 @@ impl Database {
         .bind(bytes)
         .execute(&mut *transaction)
         .await?;
+        let cutoff = now.saturating_sub(
+            i64::from(record.request_event_retention_days).saturating_mul(24 * 60 * 60),
+        );
+        sqlx::query("DELETE FROM request_events WHERE created_at < ?")
+            .bind(cutoff)
+            .execute(&mut *transaction)
+            .await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -623,6 +631,7 @@ mod tests {
                 response_bytes: 1024,
                 stream_error: false,
                 reserved_bytes: 0,
+                request_event_retention_days: 30,
             })
             .await
             .unwrap();
@@ -637,6 +646,7 @@ mod tests {
                 response_bytes: 12,
                 stream_error: false,
                 reserved_bytes: 0,
+                request_event_retention_days: 30,
             })
             .await
             .unwrap();
@@ -652,6 +662,38 @@ mod tests {
         assert_eq!(overview.error_count, 1);
         assert!(overview.quota_exceeded);
         assert_eq!(overview.targets[0].target_code, "npm");
+    }
+
+    #[tokio::test]
+    async fn prunes_expired_request_events_when_recording_traffic() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        sqlx::query("INSERT INTO request_events (created_at, method, path, status_code, response_bytes) VALUES (?, 'GET', '/old', 200, 1)")
+            .bind(unix_timestamp() - 2 * 24 * 60 * 60)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        database
+            .record_proxy_response(ProxyTrafficRecord {
+                day: "2026-07-10",
+                month: "2026-07",
+                target_code: "npm",
+                method: "GET",
+                path: "/npm/react",
+                status_code: 200,
+                response_bytes: 1,
+                stream_error: false,
+                reserved_bytes: 0,
+                request_event_retention_days: 1,
+            })
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query("SELECT COUNT(*) AS count FROM request_events")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap()
+            .try_get("count")
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[tokio::test]
@@ -676,6 +718,7 @@ mod tests {
                 response_bytes: 4,
                 stream_error: false,
                 reserved_bytes: 6,
+                request_event_retention_days: 30,
             })
             .await
             .unwrap();

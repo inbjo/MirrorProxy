@@ -105,6 +105,17 @@ pub async fn forward(
             request = request.header(name.as_str(), value.as_bytes());
         }
     }
+    if let Some(auth) = config.upstream_auth_for(&url) {
+        request = match (&auth.username, &auth.password, &auth.bearer_token) {
+            (Some(username), Some(password), None) => request.basic_auth(username, Some(password)),
+            (None, None, Some(token)) => request.bearer_auth(token),
+            _ => unreachable!("validated upstream authentication configuration"),
+        };
+    } else if config.forward_client_authorization {
+        if let Some(value) = incoming_headers.get("authorization") {
+            request = request.header("authorization", value);
+        }
+    }
 
     let upstream = request.send().await?;
     let status = upstream.status();
@@ -283,6 +294,8 @@ fn should_forward_request_header(name: &HeaderName) -> bool {
     !matches!(
         name.as_str().to_ascii_lowercase().as_str(),
         "host"
+            | "authorization"
+            | "cookie"
             | "connection"
             | "keep-alive"
             | "proxy-authenticate"
@@ -313,6 +326,65 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
     use axum::http::header;
+    use axum::{routing::get, Router};
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex, RwLock};
+
+    #[tokio::test]
+    async fn injects_configured_upstream_credentials_without_forwarding_client_credentials() {
+        async fn echo_authorization(headers: HeaderMap) -> String {
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("missing")
+                .to_string()
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/package", get(echo_authorization)),
+            )
+            .await
+            .unwrap();
+        });
+        let mut config = crate::config::Config::default();
+        config.upstreams.npm = format!("http://{address}");
+        config.upstream_auth = BTreeMap::from([(
+            "npm".to_string(),
+            crate::config::UpstreamAuth {
+                username: Some("mirror".to_string()),
+                password: Some("secret".to_string()),
+                bearer_token: None,
+            },
+        )]);
+        let (database, _) = crate::database::Database::open(":memory:").await.unwrap();
+        let state = AppState {
+            config: Arc::new(RwLock::new(config)),
+            database: Arc::new(database),
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            rate_limiter: Arc::new(crate::RateLimiter {
+                window: Mutex::new(Default::default()),
+            }),
+        };
+        let mut incoming = HeaderMap::new();
+        incoming.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer client-secret"),
+        );
+        let response = forward(
+            &state,
+            Method::GET,
+            Url::parse(&format!("http://{address}/package")).unwrap(),
+            &incoming,
+        )
+        .await
+        .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], b"Basic bWlycm9yOnNlY3JldA==");
+    }
 
     #[tokio::test]
     async fn disk_cache_round_trip_preserves_response_headers() {
@@ -355,6 +427,20 @@ mod tests {
         headers.clear();
         headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-99"));
         assert!(!cacheable_request(Method::GET, &headers));
+    }
+
+    #[test]
+    fn never_forwards_client_credentials_or_cookies() {
+        assert!(!should_forward_request_header(&header::AUTHORIZATION));
+        assert!(!should_forward_request_header(&header::COOKIE));
+        assert!(!should_forward_request_header(&header::PROXY_AUTHORIZATION));
+        assert!(should_forward_request_header(&header::ACCEPT));
+    }
+
+    #[test]
+    fn client_authorization_requires_explicit_opt_in() {
+        let config = crate::config::Config::default();
+        assert!(!config.forward_client_authorization);
     }
 
     #[test]

@@ -22,7 +22,7 @@ cat >"${config}" <<EOF
 listen_addr = "127.0.0.1:${port}"
 database_path = "${work}/mirrorproxy.sqlite3"
 public_base_url = "${base}"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi", "cpan", "rubygems", "maven", "nuget", "cran", "hackage"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi", "cpan", "rubygems", "maven", "nuget", "cran", "hackage", "luarocks"]
 
 [upstreams]
 github = "https://github.com"
@@ -44,6 +44,7 @@ maven = "https://repo.maven.apache.org/maven2"
 nuget = "https://api.nuget.org"
 cran = "https://cloud.r-project.org"
 hackage = "https://hackage.haskell.org"
+luarocks = "https://luarocks.org"
 EOF
 
 cd "${root}"
@@ -107,6 +108,7 @@ repository mirrorproxy
 EOF
 CABAL_CONFIG="${work}/hackage/config" cabal update mirrorproxy >/dev/null
 CABAL_CONFIG="${work}/hackage/config" cabal get --destdir="${work}/hackage/source" base-orphans >/dev/null
+luarocks --server "${base}/luarocks/" --tree "${work}/luarocks" install luafilesystem 1.8.0-1 >/dev/null
 mkdir "${work}/composer"
 (
   cd "${work}/composer"
@@ -119,5 +121,5 @@ if [[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]]; then
   docker pull "127.0.0.1:${port}/library/busybox:1.36.1" >/dev/null
 fi
 
-printf 'client smoke passed: git npm yarn pnpm go cargo pip cpanm rubygems maven nuget cran cabal composer%s\n' \
+printf 'client smoke passed: git npm yarn pnpm go cargo pip cpanm rubygems maven nuget cran cabal luarocks composer%s\n' \
   "$([[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]] && printf ' docker' || true)"

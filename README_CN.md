@@ -102,7 +102,7 @@ docker pull 127.0.0.1:3000/registry.k8s.io/pause:3.8
 - `quay.io/org/image` 映射到 Quay
 - `registry.k8s.io/name` 映射到 Kubernetes registry
 
-当前第一版处理公开镜像拉取和上游 Bearer token challenge。私有 registry 凭证会作为后续 adapter 扩展。
+代理支持公开镜像拉取和上游 Bearer token challenge；私有上游凭据的配置方式见[安全说明](#安全说明)。
 
 ## npm / yarn / pnpm 代理
 
@@ -576,7 +576,9 @@ Docker/OCI blob 和 GitHub release 大文件建议关闭反向代理请求缓冲
 - MirrorProxy 不是开放代理。
 - GitHub 绝对 URL 代理限制在少量 GitHub 相关 host 白名单内。
 - 会过滤 hop-by-hop headers。
-- 当前切片尚未实现私有 registry 凭证。
+- 私有上游 registry 可在服务 TOML 的 `upstream_auth` 中配置静态 Basic 或 Bearer 凭据。凭据仅注入到完全匹配的已配置上游主机，不会通过管理 API 返回或写入 SQLite；客户端请求中的 `Authorization` 和 `Cookie` 也不会被转发。
+- 如需让 GitHub、npm 或 PyPI 客户端使用自己的 Token，可设置 `forward_client_authorization = true`。该选项默认关闭；已配置的静态 `upstream_auth` 凭据始终优先。
+- 请求级诊断明细默认保留 30 天；可通过 `quota.request_event_retention_days` 或环境变量 `MIRRORPROXY_REQUEST_EVENT_RETENTION_DAYS` 调整。
 
 ## 路线图
 

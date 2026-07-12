@@ -24,6 +24,22 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(default)]
     pub quota: QuotaConfig,
+    #[serde(default)]
+    pub forward_client_authorization: bool,
+    /// Credentials are deliberately excluded from API responses and SQLite runtime
+    /// snapshots. They must remain in the service TOML, not in the admin console.
+    #[serde(default, skip_serializing)]
+    pub upstream_auth: BTreeMap<String, UpstreamAuth>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpstreamAuth {
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub bearer_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +172,8 @@ pub struct QuotaConfig {
     pub timezone: String,
     #[serde(default = "default_quota_on_exceeded")]
     pub on_exceeded: String,
+    #[serde(default = "default_request_event_retention_days")]
+    pub request_event_retention_days: u32,
 }
 
 impl Config {
@@ -246,6 +264,17 @@ impl Config {
         if let Ok(value) = std::env::var("MIRRORPROXY_QUOTA_ON_EXCEEDED") {
             self.quota.on_exceeded = value;
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_FORWARD_CLIENT_AUTHORIZATION") {
+            self.forward_client_authorization = matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_REQUEST_EVENT_RETENTION_DAYS") {
+            if let Ok(days) = value.parse() {
+                self.quota.request_event_retention_days = days;
+            }
+        }
     }
 
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
@@ -274,6 +303,9 @@ impl Config {
         if self.quota.enabled && self.quota.timezone.trim().is_empty() {
             anyhow::bail!("quota.timezone cannot be empty when quota is enabled");
         }
+        if self.quota.request_event_retention_days == 0 {
+            anyhow::bail!("quota.request_event_retention_days must be greater than 0");
+        }
         if self.quota.timezone != "local" && self.quota.timezone.parse::<Tz>().is_err() {
             anyhow::bail!(
                 "quota.timezone must be local or a valid IANA timezone, got {}",
@@ -283,6 +315,23 @@ impl Config {
         match self.quota.on_exceeded.as_str() {
             "stop_proxy" | "throttle" => {}
             other => anyhow::bail!("quota.on_exceeded must be stop_proxy or throttle, got {other}"),
+        }
+        for (name, auth) in &self.upstream_auth {
+            if self.upstream_url(name).is_none() {
+                anyhow::bail!("upstream_auth contains unknown upstream: {name}");
+            }
+            let basic = auth.username.is_some() || auth.password.is_some();
+            let bearer = auth.bearer_token.is_some();
+            if basic == bearer
+                || (basic
+                    && (auth.username.as_deref().unwrap_or_default().is_empty()
+                        || auth.password.as_deref().unwrap_or_default().is_empty()))
+                || (bearer && auth.bearer_token.as_deref().unwrap_or_default().is_empty())
+            {
+                anyhow::bail!(
+                    "upstream_auth.{name} must contain either username/password or bearer_token"
+                );
+            }
         }
 
         let enabled: BTreeMap<_, _> = self
@@ -352,6 +401,69 @@ impl Config {
     pub fn is_enabled(&self, proxy: &str) -> bool {
         self.enabled_proxies.iter().any(|item| item == proxy)
     }
+
+    pub fn upstream_auth_for(&self, url: &reqwest::Url) -> Option<&UpstreamAuth> {
+        self.upstream_auth.iter().find_map(|(name, auth)| {
+            let upstream = self.upstream_url(name)?;
+            let configured = reqwest::Url::parse(upstream).ok()?;
+            (configured.scheme() == url.scheme()
+                && configured.host_str() == url.host_str()
+                && configured.port_or_known_default() == url.port_or_known_default())
+            .then_some(auth)
+        })
+    }
+
+    fn upstream_url(&self, name: &str) -> Option<&str> {
+        let upstreams = &self.upstreams;
+        Some(match name {
+            "github" => &upstreams.github,
+            "github_raw" => &upstreams.github_raw,
+            "packagist" => &upstreams.packagist,
+            "docker_hub" => &upstreams.docker_hub,
+            "ghcr" => &upstreams.ghcr,
+            "quay" => &upstreams.quay,
+            "kubernetes" => &upstreams.kubernetes,
+            "npm" => &upstreams.npm,
+            "nvm" => &upstreams.nvm,
+            "opam" => &upstreams.opam,
+            "go_proxy" => &upstreams.go_proxy,
+            "maven" => &upstreams.maven,
+            "rubygems" => &upstreams.rubygems,
+            "rustup" => &upstreams.rustup,
+            "nuget" => &upstreams.nuget,
+            "cpan" => &upstreams.cpan,
+            "cran" => &upstreams.cran,
+            "hackage" => &upstreams.hackage,
+            "julia" => &upstreams.julia,
+            "luarocks" => &upstreams.luarocks,
+            "clojars" => &upstreams.clojars,
+            "cocoapods" => &upstreams.cocoapods,
+            "pub_repository" => &upstreams.pub_repository,
+            "anaconda" => &upstreams.anaconda,
+            "texlive" => &upstreams.texlive,
+            "elpa" => &upstreams.elpa,
+            "nix" => &upstreams.nix,
+            "guix" => &upstreams.guix,
+            "flatpak" => &upstreams.flatpak,
+            "homebrew" => &upstreams.homebrew,
+            "alpine" => &upstreams.alpine,
+            "openwrt" => &upstreams.openwrt,
+            "termux" => &upstreams.termux,
+            "debian" => &upstreams.debian,
+            "ubuntu" => &upstreams.ubuntu,
+            "fedora" => &upstreams.fedora,
+            "archlinux" => &upstreams.archlinux,
+            "opensuse" => &upstreams.opensuse,
+            "void" => &upstreams.void,
+            "gentoo" => &upstreams.gentoo,
+            "freebsd" => &upstreams.freebsd,
+            "crates_index" => &upstreams.crates_index,
+            "crates_api" => &upstreams.crates_api,
+            "pypi_simple" => &upstreams.pypi_simple,
+            "pypi_files" => &upstreams.pypi_files,
+            _ => return None,
+        })
+    }
 }
 
 impl Default for Config {
@@ -366,6 +478,8 @@ impl Default for Config {
             rate_limit: RateLimitConfig::default(),
             cache: CacheConfig::default(),
             quota: QuotaConfig::default(),
+            forward_client_authorization: false,
+            upstream_auth: BTreeMap::new(),
         }
     }
 }
@@ -457,6 +571,7 @@ impl Default for QuotaConfig {
             monthly_gb: default_quota_monthly_gb(),
             timezone: default_quota_timezone(),
             on_exceeded: default_quota_on_exceeded(),
+            request_event_retention_days: default_request_event_retention_days(),
         }
     }
 }
@@ -700,6 +815,10 @@ fn default_quota_on_exceeded() -> String {
     "stop_proxy".to_string()
 }
 
+fn default_request_event_retention_days() -> u32 {
+    30
+}
+
 fn validate_http_url(field: &str, value: &str) -> anyhow::Result<()> {
     let url = Url::parse(value).map_err(|error| anyhow::anyhow!("{field} is invalid: {error}"))?;
     match url.scheme() {
@@ -768,6 +887,53 @@ mod tests {
     }
 
     #[test]
+    fn validates_and_hides_private_upstream_credentials() {
+        let mut config = Config::default();
+        config.upstream_auth.insert(
+            "npm".to_string(),
+            UpstreamAuth {
+                username: Some("mirror".to_string()),
+                password: Some("secret".to_string()),
+                bearer_token: None,
+            },
+        );
+        assert!(config.validate().is_ok());
+        assert!(config
+            .upstream_auth_for(&reqwest::Url::parse("https://registry.npmjs.org/react").unwrap())
+            .is_some());
+        assert!(config
+            .upstream_auth_for(&reqwest::Url::parse("https://example.com/react").unwrap())
+            .is_none());
+        let rendered = serde_json::to_string(&config).unwrap();
+        assert!(!rendered.contains("secret"));
+        assert!(!rendered.contains("upstream_auth"));
+    }
+
+    #[test]
+    fn rejects_incomplete_or_unknown_private_upstream_credentials() {
+        let mut config = Config::default();
+        config.upstream_auth.insert(
+            "npm".to_string(),
+            UpstreamAuth {
+                username: Some("mirror".to_string()),
+                password: None,
+                bearer_token: None,
+            },
+        );
+        assert!(config.validate().is_err());
+        config.upstream_auth.clear();
+        config.upstream_auth.insert(
+            "unknown".to_string(),
+            UpstreamAuth {
+                username: None,
+                password: None,
+                bearer_token: Some("secret".to_string()),
+            },
+        );
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
     fn rejects_enabled_zero_rate_limit() {
         let config = Config {
             rate_limit: RateLimitConfig {
@@ -815,6 +981,18 @@ mod tests {
         };
 
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_zero_request_event_retention_days() {
+        let config = Config {
+            quota: QuotaConfig {
+                request_event_retention_days: 0,
+                ..QuotaConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(config.validate().is_err());
     }
 
     #[test]

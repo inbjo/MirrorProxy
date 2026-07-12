@@ -48,3 +48,24 @@ fn sanitize(path: &str) -> Result<&str, ProxyError> {
     }
     Ok(path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_manifest_and_rock_paths() {
+        assert_eq!(sanitize("/manifest-5.1").unwrap(), "manifest-5.1");
+        assert_eq!(
+            sanitize("/foo/bar-1.0-1.src.rock").unwrap(),
+            "foo/bar-1.0-1.src.rock"
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_paths() {
+        for path in ["", "../manifest", "foo//bar", "foo\\bar", "foo/./bar"] {
+            assert!(sanitize(path).is_err());
+        }
+    }
+}

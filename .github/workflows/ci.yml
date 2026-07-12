@@ -64,7 +64,7 @@ jobs:
           php-version: "8.3"
           tools: composer
       - name: Install repository clients
-        run: sudo apt-get update && sudo apt-get install -y cabal-install cpanminus maven r-base
+        run: sudo apt-get update && sudo apt-get install -y cabal-install cpanminus luarocks maven r-base
       - name: Build web console
         working-directory: web
         run: |

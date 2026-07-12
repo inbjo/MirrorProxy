@@ -412,7 +412,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Python uv",
         category: SourceCategory::Language,
         aliases: &[],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::LocalConfig, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -613,7 +613,7 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         provider_code: "mirrorproxy",
         repo_url: "/pypi/simple/",
         speed_url: None,
-        capability: SourceMode::TemplateOnly,
+        capability: SourceMode::LocalConfig,
     },
     TargetSource {
         target_code: "pdm",

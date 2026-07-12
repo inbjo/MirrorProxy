@@ -20,16 +20,16 @@
 
 - 仍缺少部分计划中的生态 adapter；主流 Linux 发行版（含 Debian、Ubuntu、Fedora、Arch、openSUSE、Void、Gentoo、FreeBSD）已加入受限 OS 静态目录代理，Homebrew bottles 已通过 `/homebrew` 提供 GHCR OCI bottle 流式代理，GNU Guix substitute cache 已通过 `/guix` 提供受限流式代理，Rustup、NVM/Node.js 发行包、LuaRocks 与 opam 已提供受限流式代理。
 - chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚覆盖 npm、pip、cargo、go、composer、docker、APT（Ubuntu/Debian）、Alpine apk、Void xbps、openSUSE zypper、Gentoo、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Anaconda；Guix 会生成官方 `--substitute-urls` 单次命令，其他登记目标明确标为仅配置/计划中。
-- 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip、Docker、CPAN cpanm、RubyGems、Maven、NuGet、CRAN 和 Cabal/Hackage；其余生态客户端仍待补齐，并需持续保留路由/单元测试。
-- 小对象可选磁盘缓存已完成（默认关闭，跳过认证、Cookie 与 Range 请求），并具备总容量限制与 LRU 淘汰；私有 registry 凭证和按用户配额仍属于后续增强。月配额已使用 SQLite 原子预留窗口控制并发超卖，超大单流仍按流式计量结算。
+- 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip、Docker、CPAN cpanm、RubyGems、Maven、NuGet、CRAN、Cabal/Hackage 和 LuaRocks；其余生态客户端仍待补齐，并需持续保留路由/单元测试。
+- 小对象可选磁盘缓存已完成（默认关闭，跳过认证、Cookie 与 Range 请求），并具备总容量限制与 LRU 淘汰；私有 registry 已支持服务 TOML 中的静态 Basic/Bearer 凭据并且不会写入 SQLite 或管理 API。当前版本采用全站月度总流量闸；后续如需用户配额，以“分配用户子域名（如 `user-id.abc.com`）→ 按 Host 归属流量和配额”的模型扩展。月配额已使用 SQLite 原子预留窗口控制并发超卖，超大单流仍按流式计量结算。
 
 当前完成度估算：
 
 - 代理服务基础能力：约 98%（主流开发生态、LuaRocks、Rustup、NVM/Node.js 发行包、CocoaPods CDN、GNU Guix substitute cache 与主要 Linux 静态仓库已覆盖，Homebrew bottles 已接入；其余生态 adapter 尚缺）。
-- Web 控制台：约 90%（公开说明、源目录、登录、设置、统计、审计已完成；已覆盖语言/主题偏好、命令复制及管理控制台登录、配置加载与保存的 Chromium 浏览器端到端测试，密码更新和统计刷新等边缘流程仍待补齐）。
+- Web 控制台：约 94%（公开说明、源目录、登录、设置、统计、审计已完成；已覆盖语言/主题偏好、命令复制及管理控制台登录、配置加载与保存、密码更新和统计刷新的 Chromium 浏览器端到端测试）。
 - 配置持久化与管理后台：约 85%。
-- CLI 改源能力：约 71%（已覆盖计划中首批目标、Bun、Alpine apk、Void xbps、openSUSE zypper、Gentoo 与常用 Linux 配置并具备回滚；尚未覆盖更多生态细节）。
-- SQLite 统计与月流量限制：约 86%（持久统计、封停、并发原子预留及缓存容量控制已完成；按用户配额和可选明细保留策略仍待完善）。
+- CLI 改源能力：约 73%（已覆盖计划中首批目标、Bun、uv、Alpine apk、Void xbps、openSUSE zypper、Gentoo 与常用 Linux 配置并具备回滚；尚未覆盖更多生态细节）。
+- SQLite 统计与月流量限制：约 95%（持久统计、全站月度封停、并发原子预留、可配置请求明细保留和缓存容量控制已完成；用户子域名配额作为后续独立扩展）。
 - 对齐 chsrc 支持源范围：约 86%，主要目标已登记且更多语言协议可代理，但 OS/软件仓库 adapter 仍有明显缺口。
 - 整体按本计划口径估算：约 98%。
 
@@ -130,7 +130,7 @@
 - 透传 manifest、blob、tag list。
 - 支持 Bearer token challenge 流程。
 - 对 blob 使用 redirect 或流式代理，优先保证 Docker 客户端兼容。
-- 预留私有 registry 凭证配置，但 v1 默认只支持公开镜像。
+- 支持按已配置上游主机注入静态 Basic/Bearer 私有 registry 凭据；客户端自带认证头不会透传。
 
 验收标准：
 - Docker 官方镜像、Docker Hub 用户镜像、GHCR、Quay、Kubernetes 镜像均能 pull。
@@ -567,6 +567,6 @@ on_exceeded = "stop_proxy"
 - 当前仓库为空目录，计划从零初始化项目。
 - 默认服务域名示例统一使用 `https://abc.com`，实现中通过 `public_base_url` 配置生成真实命令。
 - Vite 8 使用当前官方 Vite 8 系列；Node.js 版本按 Vite 8 要求使用 20.19+ 或 22.12+。
-- v1 默认只代理公开资源；私有 registry、GitHub token、npm token、PyPI token 作为后续增强，不阻塞首版。
+- v1 默认代理公开资源，也支持在服务 TOML 中为已配置上游设置静态私有 registry 凭据；如需 GitHub/npm/PyPI 客户端 Token，可显式启用 `forward_client_authorization`，且静态上游凭据始终优先。
 - v1 默认不启用持久缓存；先保证协议兼容、安全和可观测性，再增加缓存策略。
 - Docker/OCI 兼容性优先级最高，其次是 GitHub、npm、pip、Rust、Go、Composer。

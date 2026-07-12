@@ -103,7 +103,7 @@ Mapping rules:
 - `quay.io/org/image` maps to Quay
 - `registry.k8s.io/name` maps to the Kubernetes registry
 
-The first implementation handles public pull-through requests and upstream Bearer token challenges. Private registry credentials are intentionally left for a later adapter extension.
+The proxy handles public pull-through requests and upstream Bearer token challenges. Private upstream credentials can be configured as described in [Security](#security).
 
 ## npm / yarn / pnpm Proxy
 
@@ -598,7 +598,16 @@ For Docker/OCI and large release files, keep request buffering disabled in the r
 - MirrorProxy is not an open proxy.
 - GitHub absolute URL proxying is restricted to a small allowlist of GitHub-related hosts.
 - Hop-by-hop headers are filtered.
-- Private registry credentials are not implemented in this first slice.
+- Private upstream registries can use static Basic or Bearer credentials from
+  `upstream_auth` in the service TOML. Credentials are matched only to the
+  configured upstream host, are never exposed through the admin API or SQLite,
+  and client-supplied `Authorization` and `Cookie` headers are never forwarded.
+- To use a client's own GitHub, npm, or PyPI token with its matching upstream,
+  set `forward_client_authorization = true`. This is disabled by default; a
+  configured static `upstream_auth` credential always takes precedence.
+- Request-level diagnostic events are retained for 30 days by default; set
+  `quota.request_event_retention_days` (or `MIRRORPROXY_REQUEST_EVENT_RETENTION_DAYS`)
+  to tune the retention window.
 
 ## Roadmap
 

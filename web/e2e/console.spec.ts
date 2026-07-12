@@ -15,6 +15,8 @@ const sources = {
 
 const adminConfig = {
   ...publicConfig,
+  forward_client_authorization: false,
+  quota: { ...publicConfig.quota, request_event_retention_days: 30 },
   database_path: 'mirrorproxy.sqlite3',
   listen_addr: '127.0.0.1:3000',
   upstreams: { npm: 'https://registry.npmjs.org' },
@@ -93,4 +95,52 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await page.getByRole('button', { name: 'Save configuration' }).click()
   await expect.poll(() => savedConfig?.public_base_url).toBe('https://updated.example')
   await expect(page.getByText('These fields apply after restart: listen_addr')).toBeVisible()
+})
+
+test('refreshes statistics from the admin console', async ({ page }) => {
+  let statsRequests = 0
+  await page.route('**/api/admin/login', route => route.fulfill({ json: { token: 'test-session' } }))
+  await page.route('**/api/admin/config', route => route.fulfill({ json: adminConfig }))
+  await page.route('**/api/admin/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/api/admin/stats', route => {
+    statsRequests += 1
+    return route.fulfill({ json: { ...adminStats, request_count: statsRequests } })
+  })
+
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Admin console' }).click()
+  await page.getByLabel('Administrator password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await expect(page.locator('.console-metrics').getByText('1', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Refresh stats' }).click()
+  await expect(page.locator('.console-metrics').getByText('2', { exact: true })).toBeVisible()
+})
+
+test('changes the administrator password and revokes the active session', async ({ page }) => {
+  let passwordRequest: unknown
+  let loggedOut = false
+  await page.route('**/api/admin/login', route => route.fulfill({ json: { token: 'test-session' } }))
+  await page.route('**/api/admin/config', route => route.fulfill({ json: adminConfig }))
+  await page.route('**/api/admin/stats', route => route.fulfill({ json: adminStats }))
+  await page.route('**/api/admin/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/api/admin/password', async route => {
+    passwordRequest = route.request().postDataJSON()
+    await route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/admin/logout', async route => {
+    loggedOut = true
+    await route.fulfill({ status: 204 })
+  })
+
+  await page.goto('/')
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Admin console' }).click()
+  await page.getByLabel('Administrator password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await page.getByLabel('Current password').fill('correct-password')
+  await page.getByLabel('New password (12 characters minimum)').fill('replacement-password')
+  await page.getByRole('button', { name: 'Change password and revoke all sessions' }).click()
+  await expect.poll(() => passwordRequest).toEqual({ current_password: 'correct-password', new_password: 'replacement-password' })
+  await expect.poll(() => loggedOut).toBe(true)
+  await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
 })

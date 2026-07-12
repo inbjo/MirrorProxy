@@ -356,6 +356,11 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             "public_base_url",
             ConfigValueKind::HttpUrl,
         ),
+        "forward_client_authorization" => (
+            "forward_client_authorization",
+            "forward_client_authorization",
+            ConfigValueKind::Bool,
+        ),
         "timeout.request_secs" => (
             "timeout.request_secs",
             "timeout.request_secs",
@@ -398,6 +403,11 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             "quota.on_exceeded",
             "quota.on_exceeded",
             ConfigValueKind::QuotaAction,
+        ),
+        "quota.request_event_retention_days" => (
+            "quota.request_event_retention_days",
+            "quota.request_event_retention_days",
+            ConfigValueKind::PositiveU32,
         ),
         _ => return None,
     };
@@ -462,6 +472,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "database_path" => Some(config.database_path.clone()),
         "listen_addr" => Some(config.listen_addr.clone()),
         "public_base_url" => Some(config.public_base_url.clone()),
+        "forward_client_authorization" => Some(config.forward_client_authorization.to_string()),
         "enabled_proxies" => Some(config.enabled_proxies.join(",")),
         "timeout.request_secs" => Some(config.timeout.request_secs.to_string()),
         "rate_limit.enabled" => Some(config.rate_limit.enabled.to_string()),
@@ -474,6 +485,9 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "quota.monthly_gb" => Some(config.quota.monthly_gb.to_string()),
         "quota.timezone" => Some(config.quota.timezone.clone()),
         "quota.on_exceeded" => Some(config.quota.on_exceeded.clone()),
+        "quota.request_event_retention_days" => {
+            Some(config.quota.request_event_retention_days.to_string())
+        }
         "upstreams.github" => Some(config.upstreams.github.clone()),
         "upstreams.github_raw" => Some(config.upstreams.github_raw.clone()),
         "upstreams.packagist" => Some(config.upstreams.packagist.clone()),
@@ -526,6 +540,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "database_path",
         "listen_addr",
         "public_base_url",
+        "forward_client_authorization",
         "enabled_proxies",
         "timeout.request_secs",
         "rate_limit.enabled",
@@ -538,6 +553,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "quota.monthly_gb",
         "quota.timezone",
         "quota.on_exceeded",
+        "quota.request_event_retention_days",
         "upstreams.github",
         "upstreams.github_raw",
         "upstreams.packagist",
@@ -920,6 +936,7 @@ fn source_config_path(
             "bun" => ".bunfig.toml",
             "pip" => ".config/pip/pip.conf",
             "pdm" => ".config/pdm/config.toml",
+            "uv" => ".config/uv/uv.toml",
             "cargo" => ".cargo/config.toml",
             "go" => ".config/go/env",
             "maven" => ".m2/settings.xml",
@@ -973,6 +990,7 @@ fn source_config_content(
             "bun" => Ok(format!("[install]\nregistry = \"{repo_url}\"\n")),
             "pip" => Ok(format!("[global]\nindex-url = {repo_url}\n")),
             "pdm" => Ok(format!("[pypi]\nurl = \"{repo_url}\"\n")),
+            "uv" => Ok(format!("index-url = \"{repo_url}\"\n")),
             "cargo" => source_config_command("cargo", repo_url)
                 .map(|content| format!("{content}\n"))
                 .ok_or_else(|| anyhow::anyhow!("missing Cargo configuration template")),
@@ -1020,7 +1038,6 @@ fn source_config_content(
                     })?;
                 let (target, codename) = distribution
                     .split_once('/')
-                    .map(|(target, codename)| (target, codename))
                     .unwrap_or(("ubuntu", distribution));
                 if !matches!(target, "ubuntu" | "debian")
                     || codename.is_empty()
@@ -1236,6 +1253,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         "clojars" => Some("Restore the previous Clojure ~/.clojure/deps.edn repository setting".to_string()),
         "anaconda" => Some("Restore the previous Conda ~/.condarc channel setting".to_string()),
         "composer" => Some("composer config --unset repos.packagist".to_string()),
+        "uv" => Some("Restore the previous uv ~/.config/uv/uv.toml index-url".to_string()),
         "docker" => Some(
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
                 .to_string(),
@@ -1320,7 +1338,11 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         &config.database_path
     };
     let (database, initial_admin) = Database::open(database_path).await?;
-    let config = database.load_or_seed_runtime_config(config).await?;
+    let service_config = config.clone();
+    let mut config = database.load_or_seed_runtime_config(config).await?;
+    // Secrets are not persisted to SQLite, so retain the service-owned values
+    // after loading the mutable runtime configuration snapshot.
+    config.upstream_auth = service_config.upstream_auth;
     let request_timeout = Duration::from_secs(config.timeout.request_secs);
     let client = Client::builder()
         .user_agent(format!("MirrorProxy/{}", env!("CARGO_PKG_VERSION")))
@@ -1611,6 +1633,7 @@ async fn rate_limit_middleware(
             method,
             path,
             reserved_bytes,
+            config.quota.request_event_retention_days,
         );
     }
 
@@ -1742,6 +1765,7 @@ fn track_proxy_response(
     method: String,
     path: String,
     reserved_bytes: u64,
+    request_event_retention_days: u32,
 ) -> Response {
     let status_code = response.status().as_u16();
     let (parts, body) = response.into_parts();
@@ -1758,6 +1782,7 @@ fn track_proxy_response(
             method,
             path,
             reserved_bytes,
+            request_event_retention_days,
         ),
         move |(
             mut stream,
@@ -1770,6 +1795,7 @@ fn track_proxy_response(
             method,
             path,
             reserved_bytes,
+            request_event_retention_days,
         )| async move {
             match futures_util::StreamExt::next(&mut stream).await {
                 Some(Ok(chunk)) => Some((
@@ -1785,6 +1811,7 @@ fn track_proxy_response(
                         method,
                         path,
                         reserved_bytes,
+                        request_event_retention_days,
                     ),
                 )),
                 Some(Err(error)) => {
@@ -1799,6 +1826,7 @@ fn track_proxy_response(
                             response_bytes,
                             stream_error: true,
                             reserved_bytes,
+                            request_event_retention_days,
                         })
                         .await
                     {
@@ -1817,6 +1845,7 @@ fn track_proxy_response(
                             method,
                             path,
                             reserved_bytes,
+                            request_event_retention_days,
                         ),
                     ))
                 }
@@ -1835,6 +1864,7 @@ fn track_proxy_response(
                             response_bytes,
                             stream_error,
                             reserved_bytes,
+                            request_event_retention_days,
                         })
                         .await
                     {
@@ -2169,7 +2199,7 @@ async fn admin_audit_log(headers: HeaderMap, State(state): State<AppState>) -> R
 async fn update_admin_config(
     headers: HeaderMap,
     State(state): State<AppState>,
-    Json(next_config): Json<Config>,
+    Json(mut next_config): Json<Config>,
 ) -> Response {
     let Some(token) = bearer_token(&headers) else {
         return unauthorized_response();
@@ -2193,6 +2223,9 @@ async fn update_admin_config(
             .into_response();
     }
     let current = state.config();
+    // The management API intentionally never receives secret credentials. Keep
+    // the service-owned credentials while applying other runtime settings.
+    next_config.upstream_auth = current.upstream_auth.clone();
     if next_config.listen_addr != current.listen_addr
         || next_config.database_path != current.database_path
     {
@@ -2678,7 +2711,7 @@ on_exceeded = "stop_proxy"
         fs::create_dir_all(&directory).unwrap();
 
         for target_code in [
-            "npm", "bun", "pip", "pdm", "cargo", "go", "maven", "rubygems", "nuget", "cpan",
+            "npm", "bun", "pip", "pdm", "uv", "cargo", "go", "maven", "rubygems", "nuget", "cpan",
             "composer",
         ] {
             let command = PlannedSourceCommand {
@@ -3166,6 +3199,7 @@ on_exceeded = "stop_proxy"
                 response_bytes: 256,
                 stream_error: false,
                 reserved_bytes: 0,
+                request_event_retention_days: 30,
             })
             .await
             .unwrap();
@@ -3286,6 +3320,7 @@ on_exceeded = "stop_proxy"
             "GET".to_string(),
             "/npm/react".to_string(),
             0,
+            30,
         );
 
         assert_eq!(
