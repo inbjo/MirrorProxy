@@ -18,20 +18,20 @@
 
 未完成或需要重做的部分：
 
-- 仍缺少部分计划中的生态 adapter；主流 Linux 发行版（含 Debian、Ubuntu、Fedora、Arch、openSUSE、Void、Gentoo、FreeBSD）已加入受限 OS 静态目录代理，Homebrew bottles 已通过 `/homebrew` 提供 GHCR OCI bottle 流式代理。
+- 仍缺少部分计划中的生态 adapter；主流 Linux 发行版（含 Debian、Ubuntu、Fedora、Arch、openSUSE、Void、Gentoo、FreeBSD）已加入受限 OS 静态目录代理，Homebrew bottles 已通过 `/homebrew` 提供 GHCR OCI bottle 流式代理，GNU Guix substitute cache 已通过 `/guix` 提供受限流式代理。
 - chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚覆盖 npm、pip、cargo、go、composer、docker、apt、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Anaconda，其他登记目标明确标为仅配置/计划中。
 - 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip、Docker、CPAN cpanm、RubyGems、Maven、NuGet 和 CRAN；其余生态客户端仍待补齐，并需持续保留路由/单元测试。
 - 小对象可选磁盘缓存已完成（默认关闭，跳过认证、Cookie 与 Range 请求），并具备总容量限制与 LRU 淘汰；私有 registry 凭证和按用户配额仍属于后续增强。月配额已使用 SQLite 原子预留窗口控制并发超卖，超大单流仍按流式计量结算。
 
 当前完成度估算：
 
-- 代理服务基础能力：约 94%（主流开发生态、CocoaPods CDN 与主要 Linux 静态仓库已覆盖，Homebrew bottles 已接入，并已有主要客户端协议 smoke 与小对象磁盘缓存；部分客户端/adapter 尚缺）。
+- 代理服务基础能力：约 95%（主流开发生态、CocoaPods CDN、GNU Guix substitute cache 与主要 Linux 静态仓库已覆盖，Homebrew bottles 已接入，并已有主要客户端协议 smoke 与小对象磁盘缓存；部分客户端/adapter 尚缺）。
 - Web 控制台：约 82%（公开说明、源目录、登录、设置、统计、审计已完成；已覆盖语言/主题偏好及 DOM 切换交互测试，完整浏览器端到端测试仍缺）。
 - 配置持久化与管理后台：约 85%。
 - CLI 改源能力：约 65%（已覆盖计划中首批目标并具备回滚；尚未覆盖更多生态和跨平台细节）。
 - SQLite 统计与月流量限制：约 86%（持久统计、封停、并发原子预留及缓存容量控制已完成；按用户配额和可选明细保留策略仍待完善）。
-- 对齐 chsrc 支持源范围：约 80%，主要目标已登记且更多语言协议可代理，但 OS/软件仓库 adapter 仍有明显缺口。
-- 整体按本计划口径估算：约 95%。
+- 对齐 chsrc 支持源范围：约 82%，主要目标已登记且更多语言协议可代理，但 OS/软件仓库 adapter 仍有明显缺口。
+- 整体按本计划口径估算：约 96%。
 
 ## Key Changes
 

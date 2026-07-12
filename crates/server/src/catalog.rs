@@ -556,7 +556,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "GNU Guix",
         category: SourceCategory::Repository,
         aliases: &[],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -638,6 +638,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "nix",
         provider_code: "mirrorproxy",
         repo_url: "/nix/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "guix",
+        provider_code: "mirrorproxy",
+        repo_url: "/guix/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },

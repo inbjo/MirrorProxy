@@ -30,7 +30,7 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
-    anaconda, clojars, cocoapods, composer, cpan, cran, cratesio, elpa, flatpak, github, go,
+    anaconda, clojars, cocoapods, composer, cpan, cran, cratesio, elpa, flatpak, github, go, guix,
     hackage, homebrew, maven, nix, npm, nuget, oci, os, pub_repository, pypi, rubygems, texlive,
     ProxyError,
 };
@@ -496,6 +496,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.texlive" => Some(config.upstreams.texlive.clone()),
         "upstreams.elpa" => Some(config.upstreams.elpa.clone()),
         "upstreams.nix" => Some(config.upstreams.nix.clone()),
+        "upstreams.guix" => Some(config.upstreams.guix.clone()),
         "upstreams.flatpak" => Some(config.upstreams.flatpak.clone()),
         "upstreams.homebrew" => Some(config.upstreams.homebrew.clone()),
         "upstreams.alpine" => Some(config.upstreams.alpine.clone()),
@@ -556,6 +557,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.texlive",
         "upstreams.elpa",
         "upstreams.nix",
+        "upstreams.guix",
         "upstreams.flatpak",
         "upstreams.homebrew",
         "upstreams.alpine",
@@ -1329,6 +1331,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/nix", get(nix::root).head(nix::root))
         .route("/nix/", get(nix::root).head(nix::root))
         .route("/nix/{*path}", get(nix::proxy).head(nix::proxy))
+        .route("/guix", get(guix::root).head(guix::root))
+        .route("/guix/", get(guix::root).head(guix::root))
+        .route("/guix/{*path}", get(guix::proxy).head(guix::proxy))
         .route("/flatpak", get(flatpak::root).head(flatpak::root))
         .route("/flatpak/", get(flatpak::root).head(flatpak::root))
         .route("/flatpak/{*path}", get(flatpak::proxy).head(flatpak::proxy))
@@ -1575,6 +1580,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("elpa")
     } else if path == "/nix" || path.starts_with("/nix/") {
         Some("nix")
+    } else if path == "/guix" || path.starts_with("/guix/") {
+        Some("guix")
     } else if path == "/flatpak" || path.starts_with("/flatpak/") {
         Some("flatpak")
     } else if path == "/homebrew" || path.starts_with("/homebrew/") {
@@ -1749,6 +1756,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/elpa/")
         || path == "/nix"
         || path.starts_with("/nix/")
+        || path == "/guix"
+        || path.starts_with("/guix/")
         || path == "/flatpak"
         || path.starts_with("/flatpak/")
         || path == "/homebrew"
@@ -3258,6 +3267,24 @@ on_exceeded = "stop_proxy"
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("CPAN repository proxy"));
+    }
+
+    #[tokio::test]
+    async fn guix_root_returns_proxy_info() {
+        let app = build_router(Config::default()).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/guix/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("GNU Guix substitute cache"));
     }
 
     #[tokio::test]

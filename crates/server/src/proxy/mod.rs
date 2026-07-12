@@ -9,6 +9,7 @@ pub mod elpa;
 pub mod flatpak;
 pub mod github;
 pub mod go;
+pub mod guix;
 pub mod hackage;
 pub mod homebrew;
 pub mod maven;

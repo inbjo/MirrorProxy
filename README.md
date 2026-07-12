@@ -27,6 +27,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - TeX Live proxy at `/texlive`
 - GNU ELPA proxy at `/elpa`
 - Nix binary cache proxy at `/nix`
+- GNU Guix substitute cache proxy at `/guix`
 - Flatpak OSTree proxy at `/flatpak`
 - Homebrew bottle proxy at `/homebrew`
 - Debian / Ubuntu / Fedora / Arch Linux / openSUSE / Void / Gentoo / FreeBSD / Alpine / OpenWrt / Termux static proxy at `/os`
@@ -271,6 +272,10 @@ Use `http://127.0.0.1:3000/elpa/` as an Emacs package archive URL. The adapter s
 
 Use `http://127.0.0.1:3000/nix/` as a Nix substituter. `.narinfo` signatures and relative cache URLs remain unchanged, so Nix continues to verify cache signatures normally.
 
+## GNU Guix Substitute Cache Proxy
+
+Use `http://127.0.0.1:3000/guix/` as a Guix substitute URL. Narinfo signatures and substitute payloads are streamed unchanged, so Guix continues to verify authorized cache keys.
+
 ## Flatpak OSTree Proxy
 
 Use `http://127.0.0.1:3000/flatpak/` as a Flatpak remote URL. OSTree summaries and GPG signatures are streamed unchanged, preserving client-side repository verification.
@@ -364,7 +369,7 @@ Copy `config.example.toml` and adjust the public URL for your deployment:
 ```toml
 listen_addr = "127.0.0.1:3000"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "pub", "anaconda", "texlive", "elpa", "nix", "flatpak", "homebrew", "os", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "go", "maven", "rubygems", "nuget", "cpan", "cran", "hackage", "clojars", "pub", "anaconda", "texlive", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -388,6 +393,7 @@ anaconda = "https://repo.anaconda.com/pkgs"
 texlive = "https://mirror.ctan.org/systems/texlive/tlnet"
 elpa = "https://elpa.gnu.org/packages"
 nix = "https://cache.nixos.org"
+guix = "https://ci.guix.gnu.org"
 flatpak = "https://dl.flathub.org/repo"
 homebrew = "https://ghcr.io/v2/homebrew/core"
 alpine = "https://dl-cdn.alpinelinux.org/alpine"
@@ -412,7 +418,7 @@ MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
 MIRRORPROXY_DB=/var/lib/mirrorproxy/mirrorproxy.sqlite3
 MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
-MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,maven,rubygems,nuget,cpan,cran,hackage,clojars,pub,anaconda,texlive,elpa,nix,flatpak,homebrew,os,crates,pypi
+MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,maven,rubygems,nuget,cpan,cran,hackage,clojars,pub,anaconda,texlive,elpa,nix,guix,flatpak,homebrew,os,crates,pypi
 MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
 MIRRORPROXY_RATE_LIMIT_ENABLED=true
 MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
