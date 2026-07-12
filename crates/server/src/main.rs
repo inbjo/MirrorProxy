@@ -939,6 +939,7 @@ fn source_config_path(
             "apt" => "etc/apt/sources.list.d/mirrorproxy.list",
             "alpine" => "etc/apk/repositories",
             "xbps" => "etc/xbps.d/00-mirrorproxy.conf",
+            "zypper" => "etc/zypp/repos.d/mirrorproxy.repo",
             "dnf" => "etc/yum.repos.d/mirrorproxy.repo",
             "pacman" => "etc/pacman.d/mirrorproxy",
             other => {
@@ -1040,6 +1041,33 @@ fn source_config_content(
                 "# Managed by MirrorProxy\nrepository={}/current\n",
                 repo_url.trim_end_matches('/')
             )),
+            "zypper" => {
+                let repository = distribution
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "zypper system scope requires --distribution <repository-path>, for example distribution/leap/15.6 or tumbleweed"
+                        )
+                    })?;
+                if repository.contains('\\')
+                    || repository.contains('\0')
+                    || repository.split('/').any(|part| {
+                        part.is_empty()
+                            || matches!(part, "." | "..")
+                            || !part
+                                .chars()
+                                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+                    })
+                {
+                    anyhow::bail!(
+                        "zypper --distribution must be a safe repository path, not '{repository}'"
+                    );
+                }
+                Ok(format!(
+                    "# Managed by MirrorProxy\n[mirrorproxy-oss]\nname=MirrorProxy openSUSE OSS\nbaseurl={}/{repository}/repo/oss/\nenabled=1\nautorefresh=1\ngpgcheck=1\n",
+                    repo_url.trim_end_matches('/')
+                ))
+            }
             "dnf" => Ok(format!("# Managed by MirrorProxy\n[mirrorproxy]\nname=MirrorProxy configured mirror\nbaseurl={}/fedora/releases/$releasever/Everything/$basearch/os/\nenabled=1\ngpgcheck=1\n", repo_url.trim_end_matches('/'))),
             "pacman" => Ok(format!("# Managed by MirrorProxy\nServer = {}/archlinux/$repo/os/$arch\n", repo_url.trim_end_matches('/'))),
             other => anyhow::bail!("no system-scope configuration writer for {other}"),
@@ -1181,7 +1209,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
                 .to_string(),
         ),
-        "apt" | "alpine" | "dnf" | "pacman" | "xbps" => Some(
+        "apt" | "alpine" | "dnf" | "pacman" | "xbps" | "zypper" => Some(
             "Remove the MirrorProxy-managed system source file and restore the rollback record"
                 .to_string(),
         ),
@@ -2765,6 +2793,38 @@ on_exceeded = "stop_proxy"
             "# Managed by MirrorProxy\nrepository=https://mirror.example/os/void/current\n"
         );
         apply_source_reset("xbps", CliSourceScope::System, &directory, false).unwrap();
+        assert!(!applied.config_path.exists());
+
+        let zypper = PlannedSourceCommand {
+            target_code: "zypper",
+            provider_code: "mirrorproxy",
+            repo_url: "https://mirror.example/os/opensuse/".to_string(),
+            command: String::new(),
+        };
+        assert!(apply_source_set(
+            &zypper,
+            CliSourceScope::System,
+            &directory,
+            Some("distribution/../leap"),
+            false
+        )
+        .is_err());
+        let applied = apply_source_set(
+            &zypper,
+            CliSourceScope::System,
+            &directory,
+            Some("distribution/leap/15.6"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            applied.config_path,
+            directory.join("etc/zypp/repos.d/mirrorproxy.repo")
+        );
+        assert!(fs::read_to_string(&applied.config_path).unwrap().contains(
+            "baseurl=https://mirror.example/os/opensuse/distribution/leap/15.6/repo/oss/"
+        ));
+        apply_source_reset("zypper", CliSourceScope::System, &directory, false).unwrap();
         assert!(!applied.config_path.exists());
 
         fs::remove_dir_all(directory).unwrap();
