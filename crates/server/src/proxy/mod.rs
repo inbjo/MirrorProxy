@@ -18,6 +18,7 @@ pub mod maven;
 pub mod nix;
 pub mod npm;
 pub mod nuget;
+pub mod nvm;
 pub mod oci;
 pub mod opam;
 pub mod os;

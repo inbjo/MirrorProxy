@@ -44,6 +44,8 @@ pub struct Upstreams {
     pub kubernetes: String,
     #[serde(default = "default_npm_registry")]
     pub npm: String,
+    #[serde(default = "default_nvm_repository")]
+    pub nvm: String,
     #[serde(default = "default_opam_repository")]
     pub opam: String,
     #[serde(default = "default_go_proxy")]
@@ -290,10 +292,10 @@ impl Config {
             .collect();
         for proxy in enabled.keys() {
             match *proxy {
-                "github" | "composer" | "oci" | "npm" | "opam" | "go" | "maven" | "rubygems"
-                | "rustup" | "nuget" | "cpan" | "cran" | "hackage" | "julia" | "luarocks"
-                | "clojars" | "cocoapods" | "pub" | "anaconda" | "texlive" | "elpa" | "nix"
-                | "guix" | "flatpak" | "homebrew" | "os" | "crates" | "pypi" => {}
+                "github" | "composer" | "oci" | "npm" | "nvm" | "opam" | "go" | "maven"
+                | "rubygems" | "rustup" | "nuget" | "cpan" | "cran" | "hackage" | "julia"
+                | "luarocks" | "clojars" | "cocoapods" | "pub" | "anaconda" | "texlive"
+                | "elpa" | "nix" | "guix" | "flatpak" | "homebrew" | "os" | "crates" | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -306,6 +308,7 @@ impl Config {
         validate_http_url("upstreams.quay", &self.upstreams.quay)?;
         validate_http_url("upstreams.kubernetes", &self.upstreams.kubernetes)?;
         validate_http_url("upstreams.npm", &self.upstreams.npm)?;
+        validate_http_url("upstreams.nvm", &self.upstreams.nvm)?;
         validate_http_url("upstreams.opam", &self.upstreams.opam)?;
         validate_http_url("upstreams.go_proxy", &self.upstreams.go_proxy)?;
         validate_http_url("upstreams.maven", &self.upstreams.maven)?;
@@ -378,6 +381,7 @@ impl Default for Upstreams {
             quay: default_quay_registry(),
             kubernetes: default_kubernetes_registry(),
             npm: default_npm_registry(),
+            nvm: default_nvm_repository(),
             opam: default_opam_repository(),
             go_proxy: default_go_proxy(),
             maven: default_maven_repository(),
@@ -485,6 +489,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "composer".to_string(),
         "oci".to_string(),
         "npm".to_string(),
+        "nvm".to_string(),
         "opam".to_string(),
         "go".to_string(),
         "maven".to_string(),
@@ -541,6 +546,9 @@ fn default_kubernetes_registry() -> String {
 
 fn default_npm_registry() -> String {
     "https://registry.npmjs.org".to_string()
+}
+fn default_nvm_repository() -> String {
+    "https://nodejs.org/dist".to_string()
 }
 fn default_opam_repository() -> String {
     "https://opam.ocaml.org".to_string()

@@ -13,6 +13,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 - Composer proxy at `/composer`
 - Docker/OCI proxy at `/v2/*` for Docker Hub, GHCR, Quay, and Kubernetes public images
 - npm/yarn/pnpm proxy at `/npm`
+- Node.js distribution proxy for NVM at `/nvm`
 - Go module proxy at `/goproxy`
 - Maven Central proxy at `/maven`
 - RubyGems proxy at `/rubygems`
@@ -242,6 +243,15 @@ repository hackage.haskell.org
 
 On Linux, install from MirrorProxy with `luarocks install --server=http://127.0.0.1:3000/luarocks/ <module>`.
 
+## NVM / Node.js Distribution Proxy
+
+On Linux, point NVM at the proxied Node.js release files before installing a version:
+
+```bash
+export NVM_NODEJS_ORG_MIRROR=http://127.0.0.1:3000/nvm/
+nvm install --lts
+```
+
 ## opam Proxy
 
 On Linux, configure `opam repository set-url default http://127.0.0.1:3000/opam/`.
@@ -377,7 +387,7 @@ Copy `config.example.toml` and adjust the public URL for your deployment:
 ```toml
 listen_addr = "127.0.0.1:3000"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci", "npm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "luarocks", "clojars", "pub", "anaconda", "texlive", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "luarocks", "clojars", "pub", "anaconda", "texlive", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -388,6 +398,7 @@ ghcr = "https://ghcr.io"
 quay = "https://quay.io"
 kubernetes = "https://registry.k8s.io"
 npm = "https://registry.npmjs.org"
+nvm = "https://nodejs.org/dist"
 go_proxy = "https://proxy.golang.org"
 maven = "https://repo.maven.apache.org/maven2"
 rubygems = "https://rubygems.org"

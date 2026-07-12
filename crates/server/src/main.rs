@@ -31,7 +31,7 @@ use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
     anaconda, clojars, cocoapods, composer, cpan, cran, cratesio, elpa, flatpak, github, go, guix,
-    hackage, homebrew, julia, luarocks, maven, nix, npm, nuget, oci, opam, os, pub_repository,
+    hackage, homebrew, julia, luarocks, maven, nix, npm, nuget, nvm, oci, opam, os, pub_repository,
     pypi, rubygems, rustup, texlive, ProxyError,
 };
 use reqwest::Client;
@@ -482,6 +482,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.quay" => Some(config.upstreams.quay.clone()),
         "upstreams.kubernetes" => Some(config.upstreams.kubernetes.clone()),
         "upstreams.npm" => Some(config.upstreams.npm.clone()),
+        "upstreams.nvm" => Some(config.upstreams.nvm.clone()),
         "upstreams.go_proxy" => Some(config.upstreams.go_proxy.clone()),
         "upstreams.maven" => Some(config.upstreams.maven.clone()),
         "upstreams.rubygems" => Some(config.upstreams.rubygems.clone()),
@@ -545,6 +546,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.quay",
         "upstreams.kubernetes",
         "upstreams.npm",
+        "upstreams.nvm",
         "upstreams.go_proxy",
         "upstreams.maven",
         "upstreams.rubygems",
@@ -1278,6 +1280,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/npm", get(npm::root).head(npm::root))
         .route("/npm/", get(npm::root).head(npm::root))
         .route("/npm/{*path}", get(npm::proxy).head(npm::proxy))
+        .route("/nvm", get(nvm::root).head(nvm::root))
+        .route("/nvm/", get(nvm::root).head(nvm::root))
+        .route("/nvm/{*path}", get(nvm::proxy).head(nvm::proxy))
         .route("/opam", get(opam::root).head(opam::root))
         .route("/opam/", get(opam::root).head(opam::root))
         .route("/opam/{*path}", get(opam::proxy).head(opam::proxy))
@@ -1575,6 +1580,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("composer")
     } else if path == "/npm" || path.starts_with("/npm/") {
         Some("npm")
+    } else if path == "/nvm" || path.starts_with("/nvm/") {
+        Some("nvm")
     } else if path == "/opam" || path.starts_with("/opam/") {
         Some("opam")
     } else if path == "/goproxy" || path.starts_with("/goproxy/") {
@@ -1759,6 +1766,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/composer/")
         || path == "/npm"
         || path.starts_with("/npm/")
+        || path == "/nvm"
+        || path.starts_with("/nvm/")
         || path == "/opam"
         || path.starts_with("/opam/")
         || path == "/goproxy"
@@ -2333,6 +2342,10 @@ mod tests {
         assert_eq!(
             config_value(&config, "upstreams.npm").unwrap(),
             "https://registry.npmjs.org"
+        );
+        assert_eq!(
+            config_value(&config, "upstreams.nvm").unwrap(),
+            "https://nodejs.org/dist"
         );
         assert_eq!(
             config_value(&config, "upstreams.maven").unwrap(),
