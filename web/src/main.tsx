@@ -104,7 +104,26 @@ type SourceTemplate = {
 }
 
 const copy = async (value: string) => {
-  await navigator.clipboard.writeText(value)
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+      return
+    }
+  } catch {
+    // The Clipboard API requires a secure context and may be denied by an
+    // embedded browser. Fall back to the broadly supported selection API.
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.append(textarea)
+  textarea.select()
+  const copied = document.execCommand('copy')
+  textarea.remove()
+  if (!copied) throw new Error('clipboard unavailable')
 }
 
 const messages = {

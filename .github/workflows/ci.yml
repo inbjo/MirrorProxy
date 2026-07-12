@@ -24,6 +24,12 @@ jobs:
           npm ci
           npm test
           npm run build
+      - name: Install Chromium for browser tests
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Run browser end-to-end tests
+        working-directory: web
+        run: npm run test:e2e
       - name: Rust format
         run: cargo fmt --check
       - name: Rust clippy
