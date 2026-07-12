@@ -380,6 +380,8 @@ mirrorproxy sources set xbps --mirror mirrorproxy --base-url https://mirror.exam
 mirrorproxy sources reset xbps --scope system
 mirrorproxy sources set zypper --mirror mirrorproxy --base-url https://mirror.example --scope system --distribution distribution/leap/15.6
 mirrorproxy sources reset zypper --scope system
+mirrorproxy sources set gentoo --mirror mirrorproxy --base-url https://mirror.example --scope system
+mirrorproxy sources reset gentoo --scope system
 mirrorproxy sources set docker --mirror mirrorproxy --base-url https://mirror.example --scope system
 mirrorproxy sources reset docker --scope system
 ```

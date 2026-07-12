@@ -504,7 +504,11 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Gentoo",
         category: SourceCategory::OperatingSystem,
         aliases: &[],
-        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
+        supported_modes: &[
+            SourceMode::ProxyAdapter,
+            SourceMode::LocalConfig,
+            SourceMode::TemplateOnly,
+        ],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -706,6 +710,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "zypper",
         provider_code: "mirrorproxy",
         repo_url: "/os/opensuse/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "gentoo",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/gentoo/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -1066,6 +1077,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         os_family: "opensuse",
         scope: SourceScope::System,
         template: "Use {repo_url}<repository-path>/repo/oss/ as a zypper baseurl; repository paths include distribution/leap/15.6 or tumbleweed.",
+        requires_sudo: true,
+    },
+    SourceTemplate {
+        target_code: "gentoo",
+        os_family: "gentoo",
+        scope: SourceScope::System,
+        template: "GENTOO_MIRRORS=\"{repo_url}\"",
         requires_sudo: true,
     },
     SourceTemplate {
