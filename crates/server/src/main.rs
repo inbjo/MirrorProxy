@@ -31,8 +31,8 @@ use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use proxy::{
     anaconda, clojars, cocoapods, composer, cpan, cran, cratesio, elpa, flatpak, github, go, guix,
-    hackage, homebrew, luarocks, maven, nix, npm, nuget, oci, opam, os, pub_repository, pypi,
-    rubygems, rustup, texlive, ProxyError,
+    hackage, homebrew, julia, luarocks, maven, nix, npm, nuget, oci, opam, os, pub_repository,
+    pypi, rubygems, rustup, texlive, ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -1318,6 +1318,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/hackage", get(hackage::root).head(hackage::root))
         .route("/hackage/", get(hackage::root).head(hackage::root))
         .route("/hackage/{*path}", get(hackage::proxy).head(hackage::proxy))
+        .route("/julia", get(julia::root).head(julia::root))
+        .route("/julia/", get(julia::root).head(julia::root))
+        .route("/julia/{*path}", get(julia::proxy).head(julia::proxy))
         .route("/clojars", get(clojars::root).head(clojars::root))
         .route("/clojars/", get(clojars::root).head(clojars::root))
         .route("/clojars/{*path}", get(clojars::proxy).head(clojars::proxy))
@@ -1592,6 +1595,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("cran")
     } else if path == "/hackage" || path.starts_with("/hackage/") {
         Some("hackage")
+    } else if path == "/julia" || path.starts_with("/julia/") {
+        Some("julia")
     } else if path == "/clojars" || path.starts_with("/clojars/") {
         Some("clojars")
     } else if path == "/cocoapods" || path.starts_with("/cocoapods/") {
@@ -1774,6 +1779,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/cran/")
         || path == "/hackage"
         || path.starts_with("/hackage/")
+        || path == "/julia"
+        || path.starts_with("/julia/")
         || path == "/clojars"
         || path.starts_with("/clojars/")
         || path == "/cocoapods"

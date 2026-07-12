@@ -1,7 +1,7 @@
 listen_addr = "127.0.0.1:3000"
 database_path = "mirrorproxy.sqlite3"
 public_base_url = "http://127.0.0.1:3000"
-enabled_proxies = ["github", "composer", "oci", "npm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "luarocks", "clojars", "cocoapods", "pub", "anaconda", "texlive", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "julia", "luarocks", "clojars", "cocoapods", "pub", "anaconda", "texlive", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -21,6 +21,7 @@ nuget = "https://api.nuget.org"
 cpan = "https://cpan.metacpan.org"
 cran = "https://cloud.r-project.org"
 hackage = "https://hackage.haskell.org"
+julia = "https://pkg.julialang.org"
 luarocks = "https://luarocks.org"
 clojars = "https://repo.clojars.org"
 cocoapods = "https://cdn.cocoapods.org"

@@ -460,7 +460,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Julia",
         category: SourceCategory::Language,
         aliases: &[],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -578,6 +578,13 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
 ];
 
 pub const TARGET_SOURCES: &[TargetSource] = &[
+    TargetSource {
+        target_code: "julia",
+        provider_code: "mirrorproxy",
+        repo_url: "/julia/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
     TargetSource {
         target_code: "poetry",
         provider_code: "mirrorproxy",
@@ -913,6 +920,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
     },
     SourceTemplate { target_code: "pdm", os_family: "linux", scope: SourceScope::User, template: "pdm config pypi.url {repo_url}", requires_sudo: false },
     SourceTemplate { target_code: "uv", os_family: "linux", scope: SourceScope::User, template: "UV_DEFAULT_INDEX={repo_url} uv pip install <package>", requires_sudo: false },
+    SourceTemplate { target_code: "julia", os_family: "linux", scope: SourceScope::User, template: "export JULIA_PKG_SERVER={repo_url}", requires_sudo: false },
     SourceTemplate { target_code: "poetry", os_family: "linux", scope: SourceScope::User, template: "poetry source add --priority=primary mirrorproxy {repo_url}", requires_sudo: false },
     SourceTemplate {
         target_code: "cargo",
