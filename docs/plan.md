@@ -322,7 +322,7 @@
 ### 12. CI、发布与文档
 
 目标：
-- GitHub Actions 自动完成测试、构建、release artifact。
+- GitHub Actions 自动完成测试、构建、Linux release artifact。
 - 提供静态编译 `build.sh`。
 - 提供完整英文 README 和中文 README_CN。
 
