@@ -468,7 +468,11 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Alpine apk",
         category: SourceCategory::OperatingSystem,
         aliases: &["apk"],
-        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
+        supported_modes: &[
+            SourceMode::ProxyAdapter,
+            SourceMode::LocalConfig,
+            SourceMode::TemplateOnly,
+        ],
         default_scope: SourceScope::System,
     },
     SourceTarget {
@@ -1019,6 +1023,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         os_family: "debian",
         scope: SourceScope::System,
         template: "Use {repo_url} as the base URL in /etc/apt/sources.list for the current distribution codename.",
+        requires_sudo: true,
+    },
+    SourceTemplate {
+        target_code: "alpine",
+        os_family: "alpine",
+        scope: SourceScope::System,
+        template: "Use {repo_url}<release>/main and {repo_url}<release>/community in /etc/apk/repositories.",
         requires_sudo: true,
     },
     SourceTemplate {

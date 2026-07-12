@@ -93,7 +93,7 @@ enum SourcesCommand {
         /// Override the root used to locate scoped configuration files.
         #[arg(long)]
         config_root: Option<PathBuf>,
-        /// Distribution codename required for APT source generation, for example jammy or bookworm.
+        /// Distribution version required for selected system source generation, for example jammy, bookworm, or v3.21.
         #[arg(long)]
         distribution: Option<String>,
         /// Replace a non-empty target configuration file after creating a rollback record.
@@ -937,6 +937,7 @@ fn source_config_path(
         CliSourceScope::System => match target_code {
             "docker" => "etc/docker/daemon.json",
             "apt" => "etc/apt/sources.list.d/mirrorproxy.list",
+            "alpine" => "etc/apk/repositories",
             "dnf" => "etc/yum.repos.d/mirrorproxy.repo",
             "pacman" => "etc/pacman.d/mirrorproxy",
             other => {
@@ -1011,6 +1012,28 @@ fn source_config_content(
                     anyhow::anyhow!("APT system scope requires --distribution <codename>, for example jammy or bookworm")
                 })?;
                 Ok(format!("# Managed by MirrorProxy\ndeb {}/ubuntu/ {} main restricted universe multiverse\n", repo_url.trim_end_matches('/'), distribution))
+            }
+            "alpine" => {
+                let release = distribution
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Alpine system scope requires --distribution <release>, for example v3.21"
+                        )
+                    })?;
+                if !release.starts_with('v')
+                    || !release[1..]
+                        .split('.')
+                        .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
+                {
+                    anyhow::bail!(
+                        "Alpine --distribution must be a release such as v3.21, not '{release}'"
+                    );
+                }
+                let base = repo_url.trim_end_matches('/');
+                Ok(format!(
+                    "# Managed by MirrorProxy\n{base}/{release}/main\n{base}/{release}/community\n"
+                ))
             }
             "dnf" => Ok(format!("# Managed by MirrorProxy\n[mirrorproxy]\nname=MirrorProxy configured mirror\nbaseurl={}/fedora/releases/$releasever/Everything/$basearch/os/\nenabled=1\ngpgcheck=1\n", repo_url.trim_end_matches('/'))),
             "pacman" => Ok(format!("# Managed by MirrorProxy\nServer = {}/archlinux/$repo/os/$arch\n", repo_url.trim_end_matches('/'))),
@@ -1153,7 +1176,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
                 .to_string(),
         ),
-        "apt" | "dnf" | "pacman" => Some(
+        "apt" | "alpine" | "dnf" | "pacman" => Some(
             "Remove the MirrorProxy-managed system source file and restore the rollback record"
                 .to_string(),
         ),
@@ -2685,6 +2708,39 @@ on_exceeded = "stop_proxy"
             .rollback_path
             .starts_with(directory.join("var/lib/mirrorproxy/sources")));
         apply_source_reset("apt", CliSourceScope::System, &directory, false).unwrap();
+        assert!(!applied.config_path.exists());
+
+        let alpine = PlannedSourceCommand {
+            target_code: "alpine",
+            provider_code: "mirrorproxy",
+            repo_url: "https://mirror.example/os/alpine/".to_string(),
+            command: String::new(),
+        };
+        assert!(
+            apply_source_set(&alpine, CliSourceScope::System, &directory, None, false).is_err()
+        );
+        assert!(apply_source_set(
+            &alpine,
+            CliSourceScope::System,
+            &directory,
+            Some("3.21"),
+            false
+        )
+        .is_err());
+        let applied = apply_source_set(
+            &alpine,
+            CliSourceScope::System,
+            &directory,
+            Some("v3.21"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(applied.config_path, directory.join("etc/apk/repositories"));
+        assert_eq!(
+            fs::read_to_string(&applied.config_path).unwrap(),
+            "# Managed by MirrorProxy\nhttps://mirror.example/os/alpine/v3.21/main\nhttps://mirror.example/os/alpine/v3.21/community\n"
+        );
+        apply_source_reset("alpine", CliSourceScope::System, &directory, false).unwrap();
         assert!(!applied.config_path.exists());
 
         fs::remove_dir_all(directory).unwrap();
