@@ -28,17 +28,35 @@ pub async fn proxy(
     if !c.is_enabled("nvm") {
         return Err(ProxyError::Disabled("nvm"));
     }
-    let p = path.trim_start_matches('/');
-    if p.is_empty()
-        || p.contains('\\')
-        || p.split('/')
-            .any(|v| v.is_empty() || matches!(v, "." | "..") || v.contains('\0'))
-    {
-        return Err(ProxyError::InvalidUrl);
-    }
+    let p = sanitize(&path)?;
     let mut u = reqwest::Url::parse(&c.upstreams.nvm).map_err(|_| ProxyError::InvalidUrl)?;
     let b = u.path().trim_end_matches('/');
     u.set_path(&format!("{b}/{p}"));
     u.set_query(request.uri().query());
     proxy::forward(&state, request.method().clone(), u, request.headers()).await
+}
+
+fn sanitize(path: &str) -> Result<&str, ProxyError> {
+    let path = path.trim_start_matches('/');
+    if path.is_empty()
+        || path.contains('\\')
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | "..") || part.contains('\0'))
+    {
+        return Err(ProxyError::InvalidUrl);
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_node_release_paths_and_rejects_traversal() {
+        assert!(sanitize("v22.14.0/node-v22.14.0-linux-x64.tar.xz").is_ok());
+        assert!(sanitize("v22.14.0/../index.json").is_err());
+        assert!(sanitize("v22.14.0\\node.exe").is_err());
+    }
 }
