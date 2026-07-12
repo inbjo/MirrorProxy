@@ -13,6 +13,22 @@ const sources = {
   templates: [{ target_code: 'npm', os_family: 'any', scope: 'user', template: 'npm config set registry {repo_url}', requires_sudo: false }],
 }
 
+const adminConfig = {
+  ...publicConfig,
+  database_path: 'mirrorproxy.sqlite3',
+  listen_addr: '127.0.0.1:3000',
+  upstreams: { npm: 'https://registry.npmjs.org' },
+  timeout: { request_secs: 30 },
+  rate_limit: { enabled: true, requests_per_minute: 120 },
+  cache: { enabled: false, directory: 'cache', max_entry_mb: 8, max_total_mb: 256 },
+}
+
+const adminStats = {
+  month: '2026-07', request_count: 12, response_bytes: 2048, error_count: 0,
+  quota: { enabled: true, monthly_limit_bytes: 536870912000, remaining_bytes: 536870910000, exceeded: false, timezone: 'Asia/Shanghai', on_exceeded: 'stop_proxy' },
+  daily: [], targets: [{ target_code: 'npm', request_count: 12, response_bytes: 2048, error_count: 0 }],
+}
+
 test.beforeEach(async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.route('**/api/public-config', route => route.fulfill({ json: publicConfig }))
@@ -48,4 +64,33 @@ test('copies a generated proxy command', async ({ page }) => {
   const copyButton = page.locator('.command button').first()
   await copyButton.click()
   await expect(copyButton).toContainText('Copied')
+})
+
+test('signs in and saves an updated runtime configuration', async ({ page }) => {
+  let savedConfig: typeof adminConfig | undefined
+  await page.route('**/api/admin/login', async route => {
+    expect(route.request().postDataJSON()).toEqual({ password: 'correct-password' })
+    await route.fulfill({ json: { token: 'test-session' } })
+  })
+  await page.route('**/api/admin/stats', route => route.fulfill({ json: adminStats }))
+  await page.route('**/api/admin/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/api/admin/config', async route => {
+    if (route.request().method() === 'PUT') {
+      savedConfig = route.request().postDataJSON() as typeof adminConfig
+      await route.fulfill({ json: { config: savedConfig, restart_required: ['listen_addr'] } })
+      return
+    }
+    await route.fulfill({ json: savedConfig ?? adminConfig })
+  })
+
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Admin console' }).click()
+  await page.getByLabel('Administrator password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await expect(page.getByRole('heading', { name: 'Runtime configuration' })).toBeVisible()
+
+  await page.getByLabel('Public URL').fill('https://updated.example')
+  await page.getByRole('button', { name: 'Save configuration' }).click()
+  await expect.poll(() => savedConfig?.public_base_url).toBe('https://updated.example')
+  await expect(page.getByText('These fields apply after restart: listen_addr')).toBeVisible()
 })
