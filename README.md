@@ -238,6 +238,14 @@ repository hackage.haskell.org
 
 `mirrorproxy sources set hackage --mirror mirrorproxy --base-url http://127.0.0.1:3000` writes and can restore `~/.cabal/config`. The adapter streams the package index and package tarballs while rejecting traversal paths.
 
+## LuaRocks Proxy
+
+On Linux, install from MirrorProxy with `luarocks install --server=http://127.0.0.1:3000/luarocks/ <module>`.
+
+## opam Proxy
+
+On Linux, configure `opam repository set-url default http://127.0.0.1:3000/opam/`.
+
 ## Clojars Proxy
 
 Configure the Clojure CLI user `deps.edn` to route Clojars through MirrorProxy:
