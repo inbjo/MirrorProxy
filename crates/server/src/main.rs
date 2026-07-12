@@ -2489,6 +2489,10 @@ on_exceeded = "stop_proxy"
             source_config_command("homebrew", "https://mirror.example/homebrew").unwrap(),
             "export HOMEBREW_BOTTLE_DOMAIN=https://mirror.example/homebrew"
         );
+        assert_eq!(
+            source_config_command("guix", "https://mirror.example/guix/").unwrap(),
+            "guix build --substitute-urls=https://mirror.example/guix/ <package>"
+        );
     }
 
     #[test]

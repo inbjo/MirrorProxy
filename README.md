@@ -274,7 +274,7 @@ Use `http://127.0.0.1:3000/nix/` as a Nix substituter. `.narinfo` signatures and
 
 ## GNU Guix Substitute Cache Proxy
 
-Use `http://127.0.0.1:3000/guix/` as a Guix substitute URL. Narinfo signatures and substitute payloads are streamed unchanged, so Guix continues to verify authorized cache keys.
+Use `http://127.0.0.1:3000/guix/` as a Guix substitute URL, for example `guix build --substitute-urls=http://127.0.0.1:3000/guix/ hello`. Narinfo signatures and substitute payloads are streamed unchanged, so Guix continues to verify authorized cache keys.
 
 ## Flatpak OSTree Proxy
 

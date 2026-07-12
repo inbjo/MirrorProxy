@@ -274,7 +274,7 @@ Pub 元数据和官方 archive 下载都会留在 MirrorProxy；仅重写官方 
 
 ## GNU Guix Substitute Cache 代理
 
-将 `http://127.0.0.1:3000/guix/` 用作 Guix substitute URL。Narinfo 签名与 substitute payload 会原样流式转发，Guix 仍会验证已授权的缓存密钥。
+将 `http://127.0.0.1:3000/guix/` 用作 Guix substitute URL，例如 `guix build --substitute-urls=http://127.0.0.1:3000/guix/ hello`。Narinfo 签名与 substitute payload 会原样流式转发，Guix 仍会验证已授权的缓存密钥。
 
 ## Flatpak OSTree 代理
 

@@ -936,6 +936,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         requires_sudo: false,
     },
     SourceTemplate {
+        target_code: "guix",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "guix build --substitute-urls={repo_url} <package>",
+        requires_sudo: false,
+    },
+    SourceTemplate {
         target_code: "apt",
         os_family: "debian",
         scope: SourceScope::System,
