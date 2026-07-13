@@ -618,7 +618,6 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         [],
         &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
     ),
-    template_only_os_target!("openkylin", "openKylin", []),
     template_only_os_target!(
         "openeuler",
         "openEuler",
@@ -1441,7 +1440,6 @@ mod tests {
                 "ros",
                 "raspios",
                 "armbian",
-                "openkylin",
                 "openeuler",
                 "anolis",
                 "deepin",

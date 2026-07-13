@@ -369,7 +369,7 @@ README 内容：
 chsrc 的目标分三大类：
 
 - 语言和开发生态：Ruby、Python/pip/Poetry/PDM/Rye/uv、JavaScript/npm/pnpm/Yarn/Bun/nvm、Perl、PHP/Composer、Lua、Go、Rust Cargo/rustup、Java/Maven、Clojure、Dart/Pub/Flutter、NuGet、Haskell、OCaml、R、Julia。
-- 操作系统源：Ubuntu、Linux Mint、Debian、Fedora、openSUSE、Kali、MSYS2、Arch/ArchLinuxCN、Manjaro、Gentoo、RockyLinux、AlmaLinux、Alpine、Void、Solus、Trisquel、Linux Lite、ROS、Raspberry Pi OS、Armbian、OpenWrt、Termux、openKylin、openEuler、Anolis、deepin、FreeBSD、NetBSD、OpenBSD。
+- 操作系统源：Ubuntu、Linux Mint、Debian、Fedora、openSUSE、Kali、MSYS2、Arch/ArchLinuxCN、Manjaro、Gentoo、RockyLinux、AlmaLinux、Alpine、Void、Solus、Trisquel、Linux Lite、ROS、Raspberry Pi OS、Armbian、OpenWrt、Termux、openEuler、Anolis、deepin、FreeBSD、NetBSD、OpenBSD。
 - 软件仓库：WinGet、Homebrew、CocoaPods、Docker、Flatpak、Nix、Guix、Emacs、TeX Live、Anaconda。
 
 chsrc 的镜像站集合包括：

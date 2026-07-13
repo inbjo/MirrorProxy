@@ -16,6 +16,7 @@ import {
   LogOut,
   KeyRound,
   Save,
+  Search,
   ServerCog,
   ShieldCheck,
   Terminal,
@@ -177,6 +178,10 @@ const messages = {
     pullCommand: 'Pull command',
     sourceCatalogHeading: 'Choose a source configuration',
     sourceCatalogHint: 'Select a source to open its MirrorProxy endpoint and manual setup instructions.',
+    sourceFilterAll: 'All sources',
+    sourceSearch: 'Search sources',
+    sourceSearchPlaceholder: 'Search by name, type, or alias',
+    sourceNoResults: 'No sources match the current filters.',
     mirrorproxyAddress: 'MirrorProxy address',
     mirrorproxyAddressHint: 'Use this endpoint when your client accepts a mirror URL directly.',
     mirrorproxyCli: 'MirrorProxy CLI setup',
@@ -244,6 +249,10 @@ const messages = {
     pullCommand: '拉取命令',
     sourceCatalogHeading: '按类型选择配置',
     sourceCatalogHint: '选择一个镜像源，打开其 MirrorProxy 地址和手动配置说明。',
+    sourceFilterAll: '全部',
+    sourceSearch: '搜索镜像源',
+    sourceSearchPlaceholder: '按名称、类型或别名搜索',
+    sourceNoResults: '没有符合当前筛选条件的镜像源。',
     mirrorproxyAddress: 'MirrorProxy 地址',
     mirrorproxyAddressHint: '客户端可直接填写镜像 URL 时，使用此地址。',
     mirrorproxyCli: 'MirrorProxy CLI 配置',
@@ -493,9 +502,29 @@ function AccelerationWorkbench({ baseUrl, config, catalog, labels, onCopy, copie
   const [githubInput, setGithubInput] = React.useState('')
   const [dockerInput, setDockerInput] = React.useState('')
   const [selectedTarget, setSelectedTarget] = React.useState<SourceTarget | null>(null)
+  const [showAllSources, setShowAllSources] = React.useState(true)
+  const [selectedCategories, setSelectedCategories] = React.useState<Record<SourceTarget['category'], boolean>>({ lang: false, os: false, repo: false })
+  const [sourceQuery, setSourceQuery] = React.useState('')
   const githubLink = githubInput.trim() ? `${baseUrl}/${githubInput.trim().replace(/^\/+/, '')}` : ''
   const dockerImage = dockerInput.trim().replace(/^docker:\/\//, '').replace(/^https?:\/\//, '')
   const dockerCommand = dockerImage ? `docker pull ${new URL(baseUrl).host}/${dockerImage}` : ''
+  const filteredTargets = React.useMemo(() => {
+    if (!catalog) return []
+    const query = sourceQuery.trim().toLocaleLowerCase()
+    return catalog.targets.filter((item) => {
+      const inCategory = showAllSources || selectedCategories[item.category]
+      const searchable = [item.name, item.code, item.category, ...item.aliases].join(' ').toLocaleLowerCase()
+      return inCategory && (!query || searchable.includes(query))
+    })
+  }, [catalog, selectedCategories, showAllSources, sourceQuery])
+  const toggleCategory = (category: SourceTarget['category']) => {
+    setShowAllSources(false)
+    setSelectedCategories((current) => ({ ...current, [category]: !current[category] }))
+  }
+  const showAll = () => {
+    setShowAllSources(true)
+    setSelectedCategories({ lang: false, os: false, repo: false })
+  }
   return <section className="accelerator-shell">
     <div className="accelerator-hero">
       <div><span className="eyebrow">MIRRORPROXY / ACCELERATION DESK</span><h1>{labels.accelerationTitle}</h1><p>{labels.subtitle}</p></div>
@@ -507,7 +536,14 @@ function AccelerationWorkbench({ baseUrl, config, catalog, labels, onCopy, copie
     </div>
     {catalog ? <div className="source-workbench">
       <div className="source-workbench-head"><div><span className="eyebrow">SOURCE CATALOG</span><h2>{labels.sourceCatalogHeading}</h2><p>{labels.sourceCatalogHint}</p></div><code>{baseUrl}</code></div>
-      <div className="source-card-grid">{catalog.targets.map((item) => <button className={item.code === selectedTarget?.code ? 'source-tile selected' : 'source-tile'} onClick={() => setSelectedTarget(item)} key={item.code}>{sourceCategoryIcon(item.category)}<span><strong>{item.name}</strong><small>{sourceCategoryLabel(item.category, labels)}</small></span><em>{item.supported_modes.includes('proxy') ? labels.proxyReady : labels.configOnly}</em></button>)}</div>
+      <div className="source-toolbar">
+        <div className="source-filters" role="group" aria-label={labels.sourceCatalogHeading}>
+          <label className={showAllSources ? 'source-filter active' : 'source-filter'}><input type="checkbox" checked={showAllSources} onChange={showAll} />{labels.sourceFilterAll}</label>
+          {(['lang', 'os', 'repo'] as const).map((category) => <label className={selectedCategories[category] ? 'source-filter active' : 'source-filter'} key={category}><input type="checkbox" checked={selectedCategories[category]} onChange={() => toggleCategory(category)} />{sourceCategoryLabel(category, labels)}</label>)}
+        </div>
+        <label className="source-search"><Search size={16} /><span className="sr-only">{labels.sourceSearch}</span><input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder={labels.sourceSearchPlaceholder} type="search" /></label>
+      </div>
+      {filteredTargets.length ? <div className="source-card-grid">{filteredTargets.map((item) => <button className={item.code === selectedTarget?.code ? 'source-tile selected' : 'source-tile'} onClick={() => setSelectedTarget(item)} key={item.code}>{sourceCategoryIcon(item.category)}<span><strong>{item.name}</strong><small>{sourceCategoryLabel(item.category, labels)}</small></span><em>{item.supported_modes.includes('proxy') ? labels.proxyReady : labels.configOnly}</em></button>)}</div> : <p className="source-no-results">{labels.sourceNoResults}</p>}
     </div> : null}
     {selectedTarget && catalog ? <SourceConfigModal target={selectedTarget} baseUrl={baseUrl} catalog={catalog} labels={labels} copied={copied} onCopy={onCopy} onClose={() => setSelectedTarget(null)} /> : null}
   </section>
