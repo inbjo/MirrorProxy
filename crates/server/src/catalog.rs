@@ -113,6 +113,19 @@ pub struct SourceTemplate {
     pub requires_sudo: bool,
 }
 
+macro_rules! template_only_os_target {
+    ($code:literal, $name:literal, [$($alias:literal),* $(,)?]) => {
+        SourceTarget {
+            code: $code,
+            name: $name,
+            category: SourceCategory::OperatingSystem,
+            aliases: &[$($alias),*],
+            supported_modes: &[SourceMode::TemplateOnly],
+            default_scope: SourceScope::System,
+        }
+    };
+}
+
 pub const MIRROR_PROVIDERS: &[MirrorProvider] = &[
     MirrorProvider {
         code: "mirrorproxy",
@@ -535,6 +548,27 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
+    // chsrc operating-system targets that are catalogued for guided external
+    // configuration. They intentionally remain template-only until a fixed,
+    // separately configurable server-side adapter is implemented.
+    template_only_os_target!("linuxmint", "Linux Mint", ["mint"]),
+    template_only_os_target!("kali", "Kali Linux", []),
+    template_only_os_target!("msys2", "MSYS2", []),
+    template_only_os_target!("manjaro", "Manjaro", []),
+    template_only_os_target!("rocky", "Rocky Linux", ["rockylinux"]),
+    template_only_os_target!("alma", "AlmaLinux", ["almalinux"]),
+    template_only_os_target!("solus", "Solus", []),
+    template_only_os_target!("trisquel", "Trisquel", []),
+    template_only_os_target!("linuxlite", "Linux Lite", []),
+    template_only_os_target!("ros", "ROS", []),
+    template_only_os_target!("raspios", "Raspberry Pi OS", ["raspberrypi"]),
+    template_only_os_target!("armbian", "Armbian", []),
+    template_only_os_target!("openkylin", "openKylin", []),
+    template_only_os_target!("openeuler", "openEuler", []),
+    template_only_os_target!("anolis", "Anolis OS", []),
+    template_only_os_target!("deepin", "deepin", []),
+    template_only_os_target!("netbsd", "NetBSD", []),
+    template_only_os_target!("openbsd", "OpenBSD", []),
     SourceTarget {
         code: "winget",
         name: "WinGet",
@@ -1167,9 +1201,41 @@ mod tests {
         assert_eq!(
             os_targets,
             vec![
-                "apt", "dnf", "pacman", "alpine", "zypper", "xbps", "gentoo", "freebsd", "openwrt",
-                "termux"
+                "apt",
+                "dnf",
+                "pacman",
+                "alpine",
+                "zypper",
+                "xbps",
+                "gentoo",
+                "freebsd",
+                "openwrt",
+                "termux",
+                "linuxmint",
+                "kali",
+                "msys2",
+                "manjaro",
+                "rocky",
+                "alma",
+                "solus",
+                "trisquel",
+                "linuxlite",
+                "ros",
+                "raspios",
+                "armbian",
+                "openkylin",
+                "openeuler",
+                "anolis",
+                "deepin",
+                "netbsd",
+                "openbsd"
             ]
+        );
+        assert_eq!(find_target("mint").unwrap().code, "linuxmint");
+        assert_eq!(find_target("almalinux").unwrap().code, "alma");
+        assert_eq!(
+            find_target("openbsd").unwrap().supported_modes,
+            &[SourceMode::TemplateOnly]
         );
     }
 
