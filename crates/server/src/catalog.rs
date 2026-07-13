@@ -398,14 +398,14 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
-    // Registered chsrc targets which currently generate guidance only. Keep
-    // these visible so the catalog never advertises them as proxy adapters.
+    // These clients use the standard PyPI/npm protocols, so they reuse the
+    // matching MirrorProxy endpoint instead of requiring a new HTTP adapter.
     SourceTarget {
         code: "poetry",
         name: "Python Poetry",
         category: SourceCategory::Language,
         aliases: &["python-poetry"],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -413,7 +413,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Python PDM",
         category: SourceCategory::Language,
         aliases: &[],
-        supported_modes: &[SourceMode::LocalConfig, SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -421,7 +421,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Python uv",
         category: SourceCategory::Language,
         aliases: &[],
-        supported_modes: &[SourceMode::LocalConfig, SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -429,7 +429,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Bun",
         category: SourceCategory::Language,
         aliases: &[],
-        supported_modes: &[SourceMode::LocalConfig, SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -701,28 +701,28 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         provider_code: "mirrorproxy",
         repo_url: "/pypi/simple/",
         speed_url: None,
-        capability: SourceMode::TemplateOnly,
+        capability: SourceMode::ProxyAdapter,
     },
     TargetSource {
         target_code: "uv",
         provider_code: "mirrorproxy",
         repo_url: "/pypi/simple/",
         speed_url: None,
-        capability: SourceMode::LocalConfig,
+        capability: SourceMode::ProxyAdapter,
     },
     TargetSource {
         target_code: "pdm",
         provider_code: "mirrorproxy",
         repo_url: "/pypi/simple/",
         speed_url: None,
-        capability: SourceMode::LocalConfig,
+        capability: SourceMode::ProxyAdapter,
     },
     TargetSource {
         target_code: "bun",
         provider_code: "mirrorproxy",
         repo_url: "/npm/",
         speed_url: None,
-        capability: SourceMode::LocalConfig,
+        capability: SourceMode::ProxyAdapter,
     },
     TargetSource {
         target_code: "nvm",
@@ -1411,6 +1411,20 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(target_codes.contains(&("mirrorproxy", SourceMode::ProxyAdapter)));
+    }
+
+    #[test]
+    fn pypi_and_npm_clients_reuse_direct_proxy_endpoints() {
+        for target_code in ["poetry", "pdm", "uv", "bun"] {
+            let target = find_target(target_code).unwrap();
+            assert!(target.supported_modes.contains(&SourceMode::ProxyAdapter));
+            assert!(sources_for_target(target_code).iter().any(|source| {
+                source.provider_code == "mirrorproxy"
+                    && source.capability == SourceMode::ProxyAdapter
+            }));
+        }
+        assert_eq!(sources_for_target("poetry")[0].repo_url, "/pypi/simple/");
+        assert_eq!(sources_for_target("bun")[0].repo_url, "/npm/");
     }
 
     #[test]

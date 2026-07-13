@@ -3514,6 +3514,15 @@ on_exceeded = "stop_proxy"
             .any(
                 |source| source["target_code"] == "npm" && source["provider_code"] == "mirrorproxy"
             ));
+        for target_code in ["poetry", "pdm", "uv", "bun"] {
+            assert!(value["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|source| source["target_code"] == target_code
+                    && source["provider_code"] == "mirrorproxy"
+                    && source["capability"] == "proxy"));
+        }
         assert!(value["sources"]
             .as_array()
             .unwrap()
