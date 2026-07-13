@@ -1133,6 +1133,11 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
 ];
 
 pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
+    SourceTemplate { target_code: "solus", os_family: "solus", scope: SourceScope::System, template: "No MirrorProxy server adapter is available yet. Configure a compatible external Solus mirror for this release.", requires_sudo: true },
+    SourceTemplate { target_code: "trisquel", os_family: "debian", scope: SourceScope::System, template: "No MirrorProxy server adapter is available yet. Configure a compatible external Trisquel mirror for this release.", requires_sudo: true },
+    SourceTemplate { target_code: "linuxlite", os_family: "ubuntu", scope: SourceScope::System, template: "No MirrorProxy server adapter is available yet. Configure a compatible external Linux Lite mirror for this release.", requires_sudo: true },
+    SourceTemplate { target_code: "ros", os_family: "linux", scope: SourceScope::System, template: "No MirrorProxy server adapter is available yet. Configure the ROS apt repository with a compatible external mirror.", requires_sudo: true },
+    SourceTemplate { target_code: "winget", os_family: "windows", scope: SourceScope::User, template: "No MirrorProxy server adapter is available yet. Configure a compatible external WinGet source where supported.", requires_sudo: false },
     SourceTemplate {
         target_code: "linuxmint",
         os_family: "linux",
@@ -1419,5 +1424,11 @@ mod tests {
         );
         assert!(cargo_templates[0].template.contains("[source.crates-io]"));
         assert!(templates_for_target("kali").is_empty());
+        assert!(templates_for_target("solus")[0]
+            .template
+            .contains("No MirrorProxy server adapter"));
+        assert!(templates_for_target("winget")[0]
+            .template
+            .contains("external WinGet source"));
     }
 }
