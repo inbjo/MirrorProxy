@@ -232,7 +232,7 @@ fn persist_config_set(path: &Path, change: &PlannedConfigChange) -> anyhow::Resu
         .with_context(|| format!("failed to read config file {}", path.display()))?;
     let mut document: toml::Value = toml::from_str(&raw)
         .with_context(|| format!("failed to parse config file {}", path.display()))?;
-    set_toml_value(&mut document, change.toml_path, &change.next_value)?;
+    set_toml_value(&mut document, &change.toml_path, &change.next_value)?;
 
     let rendered =
         toml::to_string_pretty(&document).context("failed to serialize updated config")?;
@@ -309,8 +309,8 @@ fn set_toml_value(document: &mut toml::Value, key: &str, value: &str) -> anyhow:
 }
 
 struct PlannedConfigChange {
-    key: &'static str,
-    toml_path: &'static str,
+    key: String,
+    toml_path: String,
     current_value: String,
     next_value: String,
 }
@@ -318,8 +318,8 @@ struct PlannedConfigChange {
 fn plan_config_set(config: &Config, key: &str, value: &str) -> anyhow::Result<PlannedConfigChange> {
     let spec = config_set_spec(key)
         .ok_or_else(|| anyhow::anyhow!("config key '{key}' is not settable"))?;
-    validate_config_set_value(spec.key, value)?;
-    let current_value = config_value(config, spec.key)
+    validate_config_set_value(&spec.key, value)?;
+    let current_value = config_value(config, &spec.key)
         .ok_or_else(|| anyhow::anyhow!("config key '{}' cannot be read", spec.key))?;
 
     Ok(PlannedConfigChange {
@@ -331,8 +331,8 @@ fn plan_config_set(config: &Config, key: &str, value: &str) -> anyhow::Result<Pl
 }
 
 struct ConfigSetSpec {
-    key: &'static str,
-    toml_path: &'static str,
+    key: String,
+    toml_path: String,
     value_kind: ConfigValueKind,
 }
 
@@ -348,6 +348,14 @@ enum ConfigValueKind {
 }
 
 fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
+    if key.starts_with("upstreams.") && config_value(&Config::default(), key).is_some() {
+        return Some(ConfigSetSpec {
+            key: key.to_string(),
+            toml_path: key.to_string(),
+            value_kind: ConfigValueKind::HttpUrl,
+        });
+    }
+
     let (key, toml_path, value_kind) = match key {
         "database_path" => ("database_path", "database_path", ConfigValueKind::NonEmpty),
         "listen_addr" => ("listen_addr", "listen_addr", ConfigValueKind::NonEmpty),
@@ -413,8 +421,8 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
     };
 
     Some(ConfigSetSpec {
-        key,
-        toml_path,
+        key: key.to_string(),
+        toml_path: toml_path.to_string(),
         value_kind,
     })
 }
@@ -497,6 +505,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.kubernetes" => Some(config.upstreams.kubernetes.clone()),
         "upstreams.npm" => Some(config.upstreams.npm.clone()),
         "upstreams.nvm" => Some(config.upstreams.nvm.clone()),
+        "upstreams.opam" => Some(config.upstreams.opam.clone()),
         "upstreams.go_proxy" => Some(config.upstreams.go_proxy.clone()),
         "upstreams.maven" => Some(config.upstreams.maven.clone()),
         "upstreams.rubygems" => Some(config.upstreams.rubygems.clone()),
@@ -505,6 +514,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.cpan" => Some(config.upstreams.cpan.clone()),
         "upstreams.cran" => Some(config.upstreams.cran.clone()),
         "upstreams.hackage" => Some(config.upstreams.hackage.clone()),
+        "upstreams.julia" => Some(config.upstreams.julia.clone()),
         "upstreams.luarocks" => Some(config.upstreams.luarocks.clone()),
         "upstreams.clojars" => Some(config.upstreams.clojars.clone()),
         "upstreams.cocoapods" => Some(config.upstreams.cocoapods.clone()),
@@ -563,6 +573,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.kubernetes",
         "upstreams.npm",
         "upstreams.nvm",
+        "upstreams.opam",
         "upstreams.go_proxy",
         "upstreams.maven",
         "upstreams.rubygems",
@@ -571,6 +582,7 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
         "upstreams.cpan",
         "upstreams.cran",
         "upstreams.hackage",
+        "upstreams.julia",
         "upstreams.luarocks",
         "upstreams.clojars",
         "upstreams.cocoapods",
@@ -2468,6 +2480,14 @@ mod tests {
             "https://nodejs.org/dist"
         );
         assert_eq!(
+            config_value(&config, "upstreams.opam").unwrap(),
+            "https://opam.ocaml.org"
+        );
+        assert_eq!(
+            config_value(&config, "upstreams.julia").unwrap(),
+            "https://pkg.julialang.org"
+        );
+        assert_eq!(
             config_value(&config, "upstreams.maven").unwrap(),
             "https://repo.maven.apache.org/maven2"
         );
@@ -2515,6 +2535,12 @@ mod tests {
         assert!(entries
             .iter()
             .any(|(key, value)| *key == "upstreams.cpan" && value == "https://cpan.metacpan.org"));
+        assert!(entries
+            .iter()
+            .any(|(key, value)| *key == "upstreams.opam" && value == "https://opam.ocaml.org"));
+        assert!(entries
+            .iter()
+            .any(|(key, value)| *key == "upstreams.julia" && value == "https://pkg.julialang.org"));
     }
 
     #[test]
@@ -2526,6 +2552,11 @@ mod tests {
         assert_eq!(change.toml_path, "public_base_url");
         assert_eq!(change.current_value, "http://127.0.0.1:3000");
         assert_eq!(change.next_value, "https://mirror.example");
+
+        let upstream =
+            plan_config_set(&config, "upstreams.opam", "https://mirror.example/opam").unwrap();
+        assert_eq!(upstream.toml_path, "upstreams.opam");
+        assert_eq!(upstream.current_value, "https://opam.ocaml.org");
     }
 
     #[test]
