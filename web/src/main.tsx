@@ -42,7 +42,7 @@ type AdminConfig = Omit<PublicConfig, 'quota'> & {
   forward_client_authorization: boolean
   database_path: string
   listen_addr: string
-  upstreams: Record<string, string>
+  upstreams: Record<string, string | Record<string, string>>
   timeout: { request_secs: number }
   rate_limit: { enabled: boolean; requests_per_minute: number }
   cache: { enabled: boolean; directory: string; max_entry_mb: number }
@@ -567,6 +567,17 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     return { ...current, enabled_proxies: enabled ? current.enabled_proxies.filter((item) => item !== adapter) : [...current.enabled_proxies, adapter] }
   })
   const updateUpstream = (key: string, value: string) => setDraft((current) => current ? { ...current, upstreams: { ...current.upstreams, [key]: value } } : current)
+  const updateAdditionalOsUpstream = (target: string, value: string) => setDraft((current) => {
+    if (!current) return current
+    const additionalOs = current.upstreams.additional_os
+    return {
+      ...current,
+      upstreams: {
+        ...current.upstreams,
+        additional_os: { ...(typeof additionalOs === 'object' ? additionalOs : {}), [target]: value },
+      },
+    }
+  })
 
   return (
     <section className="admin-console" aria-label={text.title}>
@@ -582,7 +593,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
           {error ? <p className="form-error">{error}</p> : null}{restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
           <div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label>{text.quotaGb}<input min="0" type="number" value={draft.quota.monthly_gb} onChange={(event) => updateQuota('monthly_gb', Number(event.target.value))} /></label><label>{text.retentionDays}<input min="1" type="number" value={draft.quota.request_event_retention_days} onChange={(event) => updateQuota('request_event_retention_days', Number(event.target.value))} /></label><label>{text.timezone}<input value={draft.quota.timezone} onChange={(event) => updateQuota('timezone', event.target.value)} /></label><label>{text.action}<select value={draft.quota.on_exceeded} onChange={(event) => updateQuota('on_exceeded', event.target.value)}><option value="stop_proxy">stop_proxy · 503</option><option value="throttle">throttle · 429</option></select></label><label className="toggle-field"><input type="checkbox" checked={draft.quota.enabled} onChange={(event) => updateQuota('enabled', event.target.checked)} />{text.quota}</label><label className="toggle-field"><input type="checkbox" checked={draft.forward_client_authorization} onChange={(event) => update('forward_client_authorization', event.target.checked)} />{text.forwardAuth}</label><label className="toggle-field"><input type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<input min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label><label>{text.cacheDirectory}<input value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><label>{text.cacheMaxEntry}<input min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label className="toggle-field"><input type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label></div>
           <h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><input type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div>
-          <h4>{text.upstreams}</h4><div className="upstream-fields">{Object.entries(draft.upstreams).map(([key, value]) => <label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>)}</div>
+          <h4>{text.upstreams}</h4><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : Object.entries(value).map(([target, url]) => <label key={`${key}.${target}`}><span>{key}.{target}</span><input value={url} onChange={(event) => updateAdditionalOsUpstream(target, event.target.value)} /></label>))}</div>
           {catalog ? <SourceCommandGenerator catalog={catalog} baseUrl={draft.public_base_url} text={text} /> : null}
           <form className="security-form" onSubmit={changePassword}><div><h4><KeyRound size={14} /> {text.security}</h4><p>{text.passwordHint}</p></div><label>{text.currentPassword}<input required autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>{text.newPassword}<input required minLength={12} autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label><button className="danger-button" disabled={passwordBusy} type="submit"><KeyRound size={16} /> {text.changePassword}</button></form>
           <section className="audit-log"><h4>{'auditLog' in text ? text.auditLog : 'Audit log'}</h4>{auditLog.length ? auditLog.slice(0, 8).map((entry) => <div className="audit-row" key={`${entry.created_at}-${entry.username}-${entry.action}`}><span>{new Date(entry.created_at * 1000).toLocaleString()}</span><strong>{entry.action}</strong><small>{entry.username} / {entry.detail}</small></div>) : <p className="empty-stat">{'noAudit' in text ? text.noAudit : 'No audit entries yet.'}</p>}</section>
