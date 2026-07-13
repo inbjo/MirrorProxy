@@ -644,6 +644,9 @@ function SourceCatalogPanel({ catalog, labels }: { catalog: SourceCatalog; label
   const hasProxyAdapter = (targetCode: string) => (
     catalog.sources.some((source) => source.target_code === targetCode && source.capability === 'proxy')
   )
+  const guidance = (targetCode: string) => (
+    catalog.templates.find((template) => template.target_code === targetCode)?.template
+  )
 
   return (
     <section id="sources" className="proxy-panel catalog-panel">
@@ -666,6 +669,7 @@ function SourceCatalogPanel({ catalog, labels }: { catalog: SourceCatalog; label
                     <div>
                       <strong>{target.name}</strong>
                       <small>{target.code} · {target.supported_modes.join(', ')}</small>
+                      {!hasProxyAdapter(target.code) && guidance(target.code) ? <small>{guidance(target.code)}</small> : null}
                     </div>
                     <span className={hasProxyAdapter(target.code) ? 'mini-status ready' : 'mini-status'}>
                       {hasProxyAdapter(target.code) ? labels.proxyReady : labels.configOnly}
