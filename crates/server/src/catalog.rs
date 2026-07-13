@@ -982,6 +982,34 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
 
 pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
     SourceTemplate {
+        target_code: "linuxmint",
+        os_family: "linux",
+        scope: SourceScope::System,
+        template: "No MirrorProxy server adapter is available yet. Configure a compatible external Linux Mint mirror for this release.",
+        requires_sudo: true,
+    },
+    SourceTemplate {
+        target_code: "kali",
+        os_family: "debian",
+        scope: SourceScope::System,
+        template: "No MirrorProxy server adapter is available yet. Configure a compatible external Kali mirror for this release.",
+        requires_sudo: true,
+    },
+    SourceTemplate {
+        target_code: "msys2",
+        os_family: "windows",
+        scope: SourceScope::System,
+        template: "No MirrorProxy server adapter is available yet. Configure a compatible external MSYS2 mirror.",
+        requires_sudo: false,
+    },
+    SourceTemplate {
+        target_code: "manjaro",
+        os_family: "arch",
+        scope: SourceScope::System,
+        template: "No MirrorProxy server adapter is available yet. Configure a compatible external Manjaro mirror.",
+        requires_sudo: true,
+    },
+    SourceTemplate {
         target_code: "npm",
         os_family: "any",
         scope: SourceScope::User,
@@ -1259,5 +1287,10 @@ mod tests {
             "npm config set registry {repo_url}"
         );
         assert!(cargo_templates[0].template.contains("[source.crates-io]"));
+        let kali_templates = templates_for_target("kali");
+        assert_eq!(kali_templates.len(), 1);
+        assert!(kali_templates[0]
+            .template
+            .contains("No MirrorProxy server adapter"));
     }
 }
