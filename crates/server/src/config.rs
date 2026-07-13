@@ -818,6 +818,12 @@ fn default_os_repositories() -> BTreeMap<String, String> {
             "deepin".to_string(),
             "https://community-packages.deepin.com/deepin".to_string(),
         ),
+        (
+            "linuxmint".to_string(),
+            "https://packages.linuxmint.com".to_string(),
+        ),
+        ("netbsd".to_string(), "https://cdn.netbsd.org".to_string()),
+        ("openbsd".to_string(), "https://cdn.openbsd.org".to_string()),
     ])
 }
 

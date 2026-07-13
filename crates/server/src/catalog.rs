@@ -547,7 +547,12 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
     // chsrc operating-system targets that are catalogued for guided external
     // configuration. They intentionally remain template-only until a fixed,
     // separately configurable server-side adapter is implemented.
-    template_only_os_target!("linuxmint", "Linux Mint", ["mint"]),
+    template_only_os_target!(
+        "linuxmint",
+        "Linux Mint",
+        ["mint"],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
     template_only_os_target!(
         "kali",
         "Kali Linux",
@@ -613,8 +618,18 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         [],
         &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
     ),
-    template_only_os_target!("netbsd", "NetBSD", []),
-    template_only_os_target!("openbsd", "OpenBSD", []),
+    template_only_os_target!(
+        "netbsd",
+        "NetBSD",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
+    template_only_os_target!(
+        "openbsd",
+        "OpenBSD",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
     SourceTarget {
         code: "winget",
         name: "WinGet",
@@ -832,6 +847,27 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "deepin",
         provider_code: "mirrorproxy",
         repo_url: "/os/deepin/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "linuxmint",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/linuxmint/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "netbsd",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/netbsd/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "openbsd",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/openbsd/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -1379,7 +1415,7 @@ mod tests {
         assert_eq!(find_target("almalinux").unwrap().code, "alma");
         assert_eq!(
             find_target("openbsd").unwrap().supported_modes,
-            &[SourceMode::TemplateOnly]
+            &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
         );
     }
 
