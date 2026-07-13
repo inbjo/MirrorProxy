@@ -114,15 +114,11 @@ pub struct SourceTemplate {
 }
 
 macro_rules! template_only_os_target {
+    ($code:literal, $name:literal, [$($alias:literal),* $(,)?], $modes:expr) => {
+        SourceTarget { code: $code, name: $name, category: SourceCategory::OperatingSystem, aliases: &[$($alias),*], supported_modes: $modes, default_scope: SourceScope::System }
+    };
     ($code:literal, $name:literal, [$($alias:literal),* $(,)?]) => {
-        SourceTarget {
-            code: $code,
-            name: $name,
-            category: SourceCategory::OperatingSystem,
-            aliases: &[$($alias),*],
-            supported_modes: &[SourceMode::TemplateOnly],
-            default_scope: SourceScope::System,
-        }
+        template_only_os_target!($code, $name, [$($alias),*], &[SourceMode::TemplateOnly])
     };
 }
 
@@ -552,11 +548,36 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
     // configuration. They intentionally remain template-only until a fixed,
     // separately configurable server-side adapter is implemented.
     template_only_os_target!("linuxmint", "Linux Mint", ["mint"]),
-    template_only_os_target!("kali", "Kali Linux", []),
-    template_only_os_target!("msys2", "MSYS2", []),
-    template_only_os_target!("manjaro", "Manjaro", []),
-    template_only_os_target!("rocky", "Rocky Linux", ["rockylinux"]),
-    template_only_os_target!("alma", "AlmaLinux", ["almalinux"]),
+    template_only_os_target!(
+        "kali",
+        "Kali Linux",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
+    template_only_os_target!(
+        "msys2",
+        "MSYS2",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
+    template_only_os_target!(
+        "manjaro",
+        "Manjaro",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
+    template_only_os_target!(
+        "rocky",
+        "Rocky Linux",
+        ["rockylinux"],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
+    template_only_os_target!(
+        "alma",
+        "AlmaLinux",
+        ["almalinux"],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
     template_only_os_target!("solus", "Solus", []),
     template_only_os_target!("trisquel", "Trisquel", []),
     template_only_os_target!("linuxlite", "Linux Lite", []),
@@ -716,6 +737,41 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "pacman",
         provider_code: "mirrorproxy",
         repo_url: "/os",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "kali",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/kali/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "rocky",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/rocky/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "alma",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/alma/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "manjaro",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/manjaro/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "msys2",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/msys2/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
