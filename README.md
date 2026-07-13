@@ -46,13 +46,13 @@ cargo run -- --config config.example.toml
 Open:
 
 ```text
-http://127.0.0.1:3000
+http://selfhost.com
 ```
 
 Check health:
 
 ```bash
-curl http://127.0.0.1:3000/healthz
+curl http://selfhost.com/healthz
 ```
 
 ## GitHub Proxy
@@ -60,8 +60,8 @@ curl http://127.0.0.1:3000/healthz
 MirrorProxy accepts supported GitHub absolute URLs under your own domain:
 
 ```text
-http://127.0.0.1:3000/https://github.com/inbjo/Conductor
-http://127.0.0.1:3000/https://github.com/inbjo/Conductor/releases/download/nightly/conductor-client-linux-amd64.deb
+http://selfhost.com/https://github.com/inbjo/Conductor
+http://selfhost.com/https://github.com/inbjo/Conductor/releases/download/nightly/conductor-client-linux-amd64.deb
 ```
 
 Allowed GitHub-related hosts in this slice:
@@ -77,7 +77,7 @@ Allowed GitHub-related hosts in this slice:
 Configure Composer to use MirrorProxy:
 
 ```bash
-composer config repo.packagist composer http://127.0.0.1:3000/composer
+composer config repo.packagist composer http://selfhost.com/composer
 composer require monolog/monolog
 ```
 
@@ -88,11 +88,11 @@ MirrorProxy proxies Packagist metadata and rewrites common GitHub/Packagist down
 Use your MirrorProxy host as the Docker registry:
 
 ```bash
-docker pull 127.0.0.1:3000/nginx
-docker pull 127.0.0.1:3000/user/image
-docker pull 127.0.0.1:3000/ghcr.io/user/image
-docker pull 127.0.0.1:3000/quay.io/org/image
-docker pull 127.0.0.1:3000/registry.k8s.io/pause:3.8
+docker pull selfhost.com/nginx
+docker pull selfhost.com/user/image
+docker pull selfhost.com/ghcr.io/user/image
+docker pull selfhost.com/quay.io/org/image
+docker pull selfhost.com/registry.k8s.io/pause:3.8
 ```
 
 Mapping rules:
@@ -110,13 +110,13 @@ The proxy handles public pull-through requests and upstream Bearer token challen
 Configure your package manager to use MirrorProxy:
 
 ```bash
-npm config set registry http://127.0.0.1:3000/npm
+npm config set registry http://selfhost.com/npm
 npm install react
 
-yarn config set npmRegistryServer http://127.0.0.1:3000/npm
+yarn config set npmRegistryServer http://selfhost.com/npm
 yarn add react
 
-pnpm config set registry http://127.0.0.1:3000/npm
+pnpm config set registry http://selfhost.com/npm
 pnpm add react
 ```
 
@@ -127,7 +127,7 @@ MirrorProxy proxies npm package metadata and rewrites `dist.tarball` URLs to kee
 Use MirrorProxy as `GOPROXY`:
 
 ```bash
-go env -w GOPROXY=http://127.0.0.1:3000/goproxy,direct
+go env -w GOPROXY=http://selfhost.com/goproxy,direct
 go list -m github.com/gin-gonic/gin@latest
 ```
 
@@ -142,7 +142,7 @@ Configure Maven's user settings to mirror Central through MirrorProxy:
   <mirrors>
     <mirror>
       <id>mirrorproxy</id>
-      <url>http://127.0.0.1:3000/maven/</url>
+      <url>http://selfhost.com/maven/</url>
       <mirrorOf>central</mirrorOf>
     </mirror>
   </mirrors>
@@ -152,7 +152,7 @@ Configure Maven's user settings to mirror Central through MirrorProxy:
 Save this under `~/.m2/settings.xml`, or let the CLI write it with rollback protection:
 
 ```bash
-mirrorproxy sources set maven --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy sources set maven --mirror mirrorproxy --base-url http://selfhost.com
 mvn dependency:resolve
 ```
 
@@ -165,13 +165,13 @@ Configure RubyGems to use MirrorProxy as its source:
 ```yaml
 ---
 :sources:
-- http://127.0.0.1:3000/rubygems/
+- http://selfhost.com/rubygems/
 ```
 
 Save this under `~/.gemrc`, or let the CLI write it with rollback protection:
 
 ```bash
-mirrorproxy sources set rubygems --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy sources set rubygems --mirror mirrorproxy --base-url http://selfhost.com
 gem install rake
 ```
 
@@ -186,7 +186,7 @@ Configure NuGet to use MirrorProxy as a v3 package source:
 <configuration>
   <packageSources>
     <clear />
-    <add key="mirrorproxy" value="http://127.0.0.1:3000/nuget/v3/index.json" protocolVersion="3" />
+    <add key="mirrorproxy" value="http://selfhost.com/nuget/v3/index.json" protocolVersion="3" />
   </packageSources>
 </configuration>
 ```
@@ -194,7 +194,7 @@ Configure NuGet to use MirrorProxy as a v3 package source:
 Save it to `%APPDATA%\NuGet\NuGet.Config` on Windows or `~/.config/NuGet/NuGet.Config` on Linux/macOS. The CLI writes the same file with rollback protection:
 
 ```bash
-mirrorproxy sources set nuget --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy sources set nuget --mirror mirrorproxy --base-url http://selfhost.com
 dotnet restore
 ```
 
@@ -205,13 +205,13 @@ The adapter rewrites NuGet v3 service-index resource URLs to MirrorProxy, then s
 Use the CPAN static-mirror endpoint with `cpanm`:
 
 ```bash
-cpanm --mirror http://127.0.0.1:3000/cpan/ --mirror-only Moo
+cpanm --mirror http://selfhost.com/cpan/ --mirror-only Moo
 ```
 
 The CLI can save a rollback-protected CPAN mirror list to `~/.cpan/CPAN/MyConfig.pm`:
 
 ```bash
-mirrorproxy sources set cpan --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy sources set cpan --mirror mirrorproxy --base-url http://selfhost.com
 ```
 
 The adapter streams CPAN indexes and distributions such as `modules/02packages.details.txt.gz` and `authors/id/...` while rejecting traversal paths.
@@ -221,11 +221,11 @@ The adapter streams CPAN indexes and distributions such as `modules/02packages.d
 Set R's CRAN repository to MirrorProxy:
 
 ```r
-options(repos = c(CRAN = "http://127.0.0.1:3000/cran/"))
+options(repos = c(CRAN = "http://selfhost.com/cran/"))
 install.packages("digest")
 ```
 
-`mirrorproxy sources set cran --mirror mirrorproxy --base-url http://127.0.0.1:3000` writes a rollback-protected `~/.Rprofile`. Source indexes, archives, and platform binary paths are streamed through `/cran`.
+`mirrorproxy sources set cran --mirror mirrorproxy --base-url http://selfhost.com` writes a rollback-protected `~/.Rprofile`. Source indexes, archives, and platform binary paths are streamed through `/cran`.
 
 ## Hackage Proxy
 
@@ -233,78 +233,78 @@ Configure Cabal's user repository to use MirrorProxy:
 
 ```yaml
 repository hackage.haskell.org
-  url: http://127.0.0.1:3000/hackage/
+  url: http://selfhost.com/hackage/
   secure: True
 ```
 
-`mirrorproxy sources set hackage --mirror mirrorproxy --base-url http://127.0.0.1:3000` writes and can restore `~/.cabal/config`. The adapter streams the package index and package tarballs while rejecting traversal paths.
+`mirrorproxy sources set hackage --mirror mirrorproxy --base-url http://selfhost.com` writes and can restore `~/.cabal/config`. The adapter streams the package index and package tarballs while rejecting traversal paths.
 
 ## LuaRocks Proxy
 
-On Linux, install from MirrorProxy with `luarocks install --server=http://127.0.0.1:3000/luarocks/ <module>`.
+On Linux, install from MirrorProxy with `luarocks install --server=http://selfhost.com/luarocks/ <module>`.
 
 ## NVM / Node.js Distribution Proxy
 
 On Linux, point NVM at the proxied Node.js release files before installing a version:
 
 ```bash
-export NVM_NODEJS_ORG_MIRROR=http://127.0.0.1:3000/nvm/
+export NVM_NODEJS_ORG_MIRROR=http://selfhost.com/nvm/
 nvm install --lts
 ```
 
 ## opam Proxy
 
-On Linux, configure `opam repository set-url default http://127.0.0.1:3000/opam/`.
+On Linux, configure `opam repository set-url default http://selfhost.com/opam/`.
 
 ## Clojars Proxy
 
 Configure the Clojure CLI user `deps.edn` to route Clojars through MirrorProxy:
 
 ```clojure
-{:mvn/repos {"clojars" {:url "http://127.0.0.1:3000/clojars/"}}}
+{:mvn/repos {"clojars" {:url "http://selfhost.com/clojars/"}}}
 ```
 
-`mirrorproxy sources set clojars --mirror mirrorproxy --base-url http://127.0.0.1:3000` writes and can restore `~/.clojure/deps.edn`. The adapter streams Clojars POMs, metadata, and JARs with normalized repository paths only.
+`mirrorproxy sources set clojars --mirror mirrorproxy --base-url http://selfhost.com` writes and can restore `~/.clojure/deps.edn`. The adapter streams Clojars POMs, metadata, and JARs with normalized repository paths only.
 
 ## Pub / Flutter Proxy
 
 ```bash
-PUB_HOSTED_URL=http://127.0.0.1:3000/pub/ flutter pub get
+PUB_HOSTED_URL=http://selfhost.com/pub/ flutter pub get
 ```
 
 Pub package metadata and official archives stay on MirrorProxy; archive URLs are rewritten only for the official Google Cloud Storage host.
 
 ## Anaconda / Conda Proxy
 
-Use MirrorProxy as a Conda channel base, for example `http://127.0.0.1:3000/anaconda/main`. The adapter streams `repodata.json` and package artifacts while rejecting traversal paths.
+Use MirrorProxy as a Conda channel base, for example `http://selfhost.com/anaconda/main`. The adapter streams `repodata.json` and package artifacts while rejecting traversal paths.
 
 ## TeX Live Proxy
 
-Use `http://127.0.0.1:3000/texlive/` as a TeX Live network installer mirror. The adapter streams `tlpkg/texlive.tlpdb` and archive files using normalized paths only.
+Use `http://selfhost.com/texlive/` as a TeX Live network installer mirror. The adapter streams `tlpkg/texlive.tlpdb` and archive files using normalized paths only.
 
 ## GNU ELPA Proxy
 
-Use `http://127.0.0.1:3000/elpa/` as an Emacs package archive URL. The adapter streams `archive-contents` and package archives through normalized paths only.
+Use `http://selfhost.com/elpa/` as an Emacs package archive URL. The adapter streams `archive-contents` and package archives through normalized paths only.
 
 ## Nix Binary Cache Proxy
 
-Use `http://127.0.0.1:3000/nix/` as a Nix substituter. `.narinfo` signatures and relative cache URLs remain unchanged, so Nix continues to verify cache signatures normally.
+Use `http://selfhost.com/nix/` as a Nix substituter. `.narinfo` signatures and relative cache URLs remain unchanged, so Nix continues to verify cache signatures normally.
 
 ## GNU Guix Substitute Cache Proxy
 
-Use `http://127.0.0.1:3000/guix/` as a Guix substitute URL, for example `guix build --substitute-urls=http://127.0.0.1:3000/guix/ hello`. Narinfo signatures and substitute payloads are streamed unchanged, so Guix continues to verify authorized cache keys.
+Use `http://selfhost.com/guix/` as a Guix substitute URL, for example `guix build --substitute-urls=http://selfhost.com/guix/ hello`. Narinfo signatures and substitute payloads are streamed unchanged, so Guix continues to verify authorized cache keys.
 
 ## Flatpak OSTree Proxy
 
-Use `http://127.0.0.1:3000/flatpak/` as a Flatpak remote URL. OSTree summaries and GPG signatures are streamed unchanged, preserving client-side repository verification.
+Use `http://selfhost.com/flatpak/` as a Flatpak remote URL. OSTree summaries and GPG signatures are streamed unchanged, preserving client-side repository verification.
 
 ## Homebrew Bottle Proxy
 
-Set `HOMEBREW_BOTTLE_DOMAIN=http://127.0.0.1:3000/homebrew` before running `brew install`. The default upstream is Homebrew's public GHCR OCI bottle repository; manifest and blob requests are streamed unchanged, including Range requests.
+Set `HOMEBREW_BOTTLE_DOMAIN=http://selfhost.com/homebrew` before running `brew install`. The default upstream is Homebrew's public GHCR OCI bottle repository; manifest and blob requests are streamed unchanged, including Range requests.
 
 ## OS Static Repository Proxy
 
-Use fixed target paths such as `http://127.0.0.1:3000/os/debian/`, `/os/ubuntu/`, `/os/fedora/`, `/os/archlinux/`, `/os/opensuse/`, `/os/void/`, `/os/gentoo/`, `/os/freebsd/`, `/os/alpine/`, `/os/openwrt/`, or `/os/termux/`. Only these targets are accepted; each has a separately configurable upstream.
+Use fixed target paths such as `http://selfhost.com/os/debian/`, `/os/ubuntu/`, `/os/fedora/`, `/os/archlinux/`, `/os/opensuse/`, `/os/void/`, `/os/gentoo/`, `/os/freebsd/`, `/os/alpine/`, `/os/openwrt/`, or `/os/termux/`. Only these targets are accepted; each has a separately configurable upstream.
 
 ## Rust Crates Proxy
 
@@ -315,7 +315,7 @@ Configure Cargo to use MirrorProxy as a sparse registry mirror:
 replace-with = "mirrorproxy"
 
 [source.mirrorproxy]
-registry = "sparse+http://127.0.0.1:3000/crates-index/"
+registry = "sparse+http://selfhost.com/crates-index/"
 ```
 
 Then fetch dependencies:
@@ -331,7 +331,7 @@ MirrorProxy serves a local sparse `config.json` and proxies crate downloads thro
 Configure pip to use MirrorProxy:
 
 ```bash
-pip config set global.index-url http://127.0.0.1:3000/pypi/simple/
+pip config set global.index-url http://selfhost.com/pypi/simple/
 pip install requests
 ```
 
@@ -359,8 +359,8 @@ replaced unless `--force` is explicit, and reset similarly refuses a file that
 was changed after the command.
 
 ```bash
-mirrorproxy sources set npm --mirror mirrorproxy --base-url http://127.0.0.1:3000
-mirrorproxy sources set cargo --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy sources set npm --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy sources set cargo --mirror mirrorproxy --base-url http://selfhost.com
 mirrorproxy sources reset npm
 ```
 
@@ -394,7 +394,7 @@ the exact previous file. Restart Docker after applying the configuration.
 Copy `config.example.toml` and adjust the public URL for your deployment:
 
 ```toml
-listen_addr = "127.0.0.1:3000"
+listen_addr = "selfhost.com"
 public_base_url = "https://mirror.example.com"
 enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "luarocks", "clojars", "pub", "anaconda", "texlive", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
@@ -571,7 +571,7 @@ server {
     proxy_buffering off;
 
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://selfhost.com;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -585,7 +585,7 @@ Caddy example:
 
 ```caddyfile
 mirror.example.com {
-    reverse_proxy 127.0.0.1:3000 {
+    reverse_proxy selfhost.com {
         flush_interval -1
     }
 }
