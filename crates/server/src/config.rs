@@ -801,6 +801,23 @@ fn default_os_repositories() -> BTreeMap<String, String> {
             "https://repo.manjaro.org/repo".to_string(),
         ),
         ("msys2".to_string(), "https://repo.msys2.org".to_string()),
+        (
+            "raspios".to_string(),
+            "https://archive.raspberrypi.com/debian".to_string(),
+        ),
+        ("armbian".to_string(), "https://apt.armbian.com".to_string()),
+        (
+            "openeuler".to_string(),
+            "https://repo.openeuler.org".to_string(),
+        ),
+        (
+            "anolis".to_string(),
+            "https://mirrors.openanolis.cn/anolis".to_string(),
+        ),
+        (
+            "deepin".to_string(),
+            "https://community-packages.deepin.com/deepin".to_string(),
+        ),
     ])
 }
 

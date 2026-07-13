@@ -582,12 +582,37 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
     template_only_os_target!("trisquel", "Trisquel", []),
     template_only_os_target!("linuxlite", "Linux Lite", []),
     template_only_os_target!("ros", "ROS", []),
-    template_only_os_target!("raspios", "Raspberry Pi OS", ["raspberrypi"]),
-    template_only_os_target!("armbian", "Armbian", []),
+    template_only_os_target!(
+        "raspios",
+        "Raspberry Pi OS",
+        ["raspberrypi"],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
+    template_only_os_target!(
+        "armbian",
+        "Armbian",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
     template_only_os_target!("openkylin", "openKylin", []),
-    template_only_os_target!("openeuler", "openEuler", []),
-    template_only_os_target!("anolis", "Anolis OS", []),
-    template_only_os_target!("deepin", "deepin", []),
+    template_only_os_target!(
+        "openeuler",
+        "openEuler",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
+    template_only_os_target!(
+        "anolis",
+        "Anolis OS",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
+    template_only_os_target!(
+        "deepin",
+        "deepin",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
     template_only_os_target!("netbsd", "NetBSD", []),
     template_only_os_target!("openbsd", "OpenBSD", []),
     SourceTarget {
@@ -772,6 +797,41 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "msys2",
         provider_code: "mirrorproxy",
         repo_url: "/os/msys2/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "raspios",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/raspios/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "armbian",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/armbian/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "openeuler",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/openeuler/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "anolis",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/anolis/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "deepin",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/deepin/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
