@@ -39,52 +39,55 @@ pub async fn proxy(
     {
         return Err(ProxyError::InvalidUrl);
     }
-    let base = match target {
-        "alpine" => &c.upstreams.alpine,
-        "openwrt" => &c.upstreams.openwrt,
-        "termux" => &c.upstreams.termux,
-        "debian" => &c.upstreams.debian,
-        "ubuntu" => &c.upstreams.ubuntu,
-        "fedora" => &c.upstreams.fedora,
-        "archlinux" => &c.upstreams.archlinux,
-        "opensuse" => &c.upstreams.opensuse,
-        "void" => &c.upstreams.void,
-        "gentoo" => &c.upstreams.gentoo,
-        "freebsd" => &c.upstreams.freebsd,
-        target => c
-            .upstreams
-            .additional_os
-            .get(target)
-            .ok_or(ProxyError::UnsupportedTarget)?,
-    };
+    let base = repository_for_target(&c.upstreams, target)?;
     let mut u = reqwest::Url::parse(base).map_err(|_| ProxyError::InvalidUrl)?;
     let b = u.path().trim_end_matches('/');
     u.set_path(&format!("{b}/{p}"));
     u.set_query(request.uri().query());
     proxy::forward(&state, request.method().clone(), u, request.headers()).await
 }
+
+fn repository_for_target<'a>(
+    upstreams: &'a crate::config::Upstreams,
+    target: &str,
+) -> Result<&'a str, ProxyError> {
+    Ok(match target {
+        "alpine" => &upstreams.alpine,
+        "openwrt" => &upstreams.openwrt,
+        "termux" => &upstreams.termux,
+        "debian" => &upstreams.debian,
+        "ubuntu" => &upstreams.ubuntu,
+        "fedora" => &upstreams.fedora,
+        "archlinux" => &upstreams.archlinux,
+        "opensuse" => &upstreams.opensuse,
+        "void" => &upstreams.void,
+        "gentoo" => &upstreams.gentoo,
+        "freebsd" => &upstreams.freebsd,
+        target => upstreams
+            .additional_os
+            .get(target)
+            .map(String::as_str)
+            .ok_or(ProxyError::UnsupportedTarget)?,
+    })
+}
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn documents_fixed_targets() {
+    fn resolves_fixed_and_additional_targets() {
+        let upstreams = crate::config::Upstreams::default();
+        assert_eq!(
+            repository_for_target(&upstreams, "debian").unwrap(),
+            "https://deb.debian.org/debian"
+        );
+        assert_eq!(
+            repository_for_target(&upstreams, "kali").unwrap(),
+            "https://http.kali.org/kali"
+        );
         assert!(matches!(
-            "alpine",
-            "alpine"
-                | "openwrt"
-                | "termux"
-                | "debian"
-                | "ubuntu"
-                | "fedora"
-                | "archlinux"
-                | "opensuse"
-                | "void"
-                | "gentoo"
-                | "freebsd"
-                | "kali"
-                | "rocky"
-                | "alma"
-                | "manjaro"
-                | "msys2"
+            repository_for_target(&upstreams, "not-a-repository"),
+            Err(ProxyError::UnsupportedTarget)
         ));
     }
 }
