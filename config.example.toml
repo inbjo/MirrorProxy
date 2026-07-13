@@ -46,6 +46,8 @@ opensuse = "https://download.opensuse.org"
 void = "https://repo-default.voidlinux.org"
 gentoo = "https://distfiles.gentoo.org"
 freebsd = "https://pkg.freebsd.org"
+
+additional_os = { kali = "https://http.kali.org/kali", rocky = "https://dl.rockylinux.org/pub/rocky", alma = "https://repo.almalinux.org/almalinux", manjaro = "https://repo.manjaro.org/repo", msys2 = "https://repo.msys2.org" }
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"

@@ -126,6 +126,8 @@ pub struct Upstreams {
     pub gentoo: String,
     #[serde(default = "default_freebsd_repository")]
     pub freebsd: String,
+    #[serde(default = "default_os_repositories")]
+    pub additional_os: BTreeMap<String, String>,
     #[serde(default = "default_crates_index")]
     pub crates_index: String,
     #[serde(default = "default_crates_api")]
@@ -390,6 +392,9 @@ impl Config {
         validate_http_url("upstreams.void", &self.upstreams.void)?;
         validate_http_url("upstreams.gentoo", &self.upstreams.gentoo)?;
         validate_http_url("upstreams.freebsd", &self.upstreams.freebsd)?;
+        for (target, url) in &self.upstreams.additional_os {
+            validate_http_url(&format!("upstreams.additional_os.{target}"), url)?;
+        }
         validate_http_url("upstreams.crates_index", &self.upstreams.crates_index)?;
         validate_http_url("upstreams.crates_api", &self.upstreams.crates_api)?;
         validate_http_url("upstreams.pypi_simple", &self.upstreams.pypi_simple)?;
@@ -528,6 +533,7 @@ impl Default for Upstreams {
             void: default_void_repository(),
             gentoo: default_gentoo_repository(),
             freebsd: default_freebsd_repository(),
+            additional_os: default_os_repositories(),
             crates_index: default_crates_index(),
             crates_api: default_crates_api(),
             pypi_simple: default_pypi_simple(),
@@ -777,6 +783,25 @@ fn default_gentoo_repository() -> String {
 }
 fn default_freebsd_repository() -> String {
     "https://pkg.freebsd.org".to_string()
+}
+
+fn default_os_repositories() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("kali".to_string(), "https://http.kali.org/kali".to_string()),
+        (
+            "rocky".to_string(),
+            "https://dl.rockylinux.org/pub/rocky".to_string(),
+        ),
+        (
+            "alma".to_string(),
+            "https://repo.almalinux.org/almalinux".to_string(),
+        ),
+        (
+            "manjaro".to_string(),
+            "https://repo.manjaro.org/repo".to_string(),
+        ),
+        ("msys2".to_string(), "https://repo.msys2.org".to_string()),
+    ])
 }
 
 fn default_crates_index() -> String {

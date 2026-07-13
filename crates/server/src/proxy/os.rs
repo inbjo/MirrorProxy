@@ -51,7 +51,11 @@ pub async fn proxy(
         "void" => &c.upstreams.void,
         "gentoo" => &c.upstreams.gentoo,
         "freebsd" => &c.upstreams.freebsd,
-        _ => return Err(ProxyError::UnsupportedTarget),
+        target => c
+            .upstreams
+            .additional_os
+            .get(target)
+            .ok_or(ProxyError::UnsupportedTarget)?,
     };
     let mut u = reqwest::Url::parse(base).map_err(|_| ProxyError::InvalidUrl)?;
     let b = u.path().trim_end_matches('/');
@@ -76,6 +80,11 @@ mod tests {
                 | "void"
                 | "gentoo"
                 | "freebsd"
+                | "kali"
+                | "rocky"
+                | "alma"
+                | "manjaro"
+                | "msys2"
         ));
     }
 }
