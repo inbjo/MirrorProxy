@@ -544,9 +544,8 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
-    // chsrc operating-system targets that are catalogued for guided external
-    // configuration. They intentionally remain template-only until a fixed,
-    // separately configurable server-side adapter is implemented.
+    // Some operating-system clients need their own upstream and repository
+    // layout, but are still served through the constrained OS proxy.
     template_only_os_target!(
         "linuxmint",
         "Linux Mint",
@@ -584,9 +583,24 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
     ),
     template_only_os_target!("solus", "Solus", []),
-    template_only_os_target!("trisquel", "Trisquel", []),
-    template_only_os_target!("linuxlite", "Linux Lite", []),
-    template_only_os_target!("ros", "ROS", []),
+    template_only_os_target!(
+        "trisquel",
+        "Trisquel",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
+    template_only_os_target!(
+        "linuxlite",
+        "Linux Lite",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
+    template_only_os_target!(
+        "ros",
+        "ROS 2",
+        ["ros2"],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
     template_only_os_target!(
         "raspios",
         "Raspberry Pi OS",
@@ -854,6 +868,27 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "linuxmint",
         provider_code: "mirrorproxy",
         repo_url: "/os/linuxmint/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "trisquel",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/trisquel/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "linuxlite",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/linuxlite/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "ros",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/ros/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -1134,9 +1169,9 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
 
 pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
     SourceTemplate { target_code: "solus", os_family: "solus", scope: SourceScope::System, template: "No MirrorProxy server adapter is available yet. Configure a compatible external Solus mirror for this release.", requires_sudo: true },
-    SourceTemplate { target_code: "trisquel", os_family: "debian", scope: SourceScope::System, template: "No MirrorProxy server adapter is available yet. Configure a compatible external Trisquel mirror for this release.", requires_sudo: true },
-    SourceTemplate { target_code: "linuxlite", os_family: "ubuntu", scope: SourceScope::System, template: "No MirrorProxy server adapter is available yet. Configure a compatible external Linux Lite mirror for this release.", requires_sudo: true },
-    SourceTemplate { target_code: "ros", os_family: "linux", scope: SourceScope::System, template: "No MirrorProxy server adapter is available yet. Configure the ROS apt repository with a compatible external mirror.", requires_sudo: true },
+    SourceTemplate { target_code: "trisquel", os_family: "debian", scope: SourceScope::System, template: "deb {repo_url} <trisquel-codename> main", requires_sudo: true },
+    SourceTemplate { target_code: "linuxlite", os_family: "ubuntu", scope: SourceScope::System, template: "deb {repo_url} <linux-lite-codename> main", requires_sudo: true },
+    SourceTemplate { target_code: "ros", os_family: "ubuntu", scope: SourceScope::System, template: "deb {repo_url} <ubuntu-codename> main", requires_sudo: true },
     SourceTemplate { target_code: "winget", os_family: "windows", scope: SourceScope::User, template: "No MirrorProxy server adapter is available yet. Configure a compatible external WinGet source where supported.", requires_sudo: false },
     SourceTemplate {
         target_code: "linuxmint",
@@ -1401,6 +1436,12 @@ mod tests {
             find_target("openbsd").unwrap().supported_modes,
             &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
         );
+        for target_code in ["trisquel", "linuxlite", "ros"] {
+            assert!(find_target(target_code)
+                .unwrap()
+                .supported_modes
+                .contains(&SourceMode::ProxyAdapter));
+        }
     }
 
     #[test]
@@ -1441,6 +1482,10 @@ mod tests {
         assert!(templates_for_target("solus")[0]
             .template
             .contains("No MirrorProxy server adapter"));
+        assert_eq!(
+            templates_for_target("ros")[0].template,
+            "deb {repo_url} <ubuntu-codename> main"
+        );
         assert!(templates_for_target("winget")[0]
             .template
             .contains("external WinGet source"));

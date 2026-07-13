@@ -822,6 +822,18 @@ fn default_os_repositories() -> BTreeMap<String, String> {
             "linuxmint".to_string(),
             "https://packages.linuxmint.com".to_string(),
         ),
+        (
+            "trisquel".to_string(),
+            "https://archive.trisquel.info/trisquel".to_string(),
+        ),
+        (
+            "linuxlite".to_string(),
+            "https://repo.linuxliteos.com/linuxlite".to_string(),
+        ),
+        (
+            "ros".to_string(),
+            "https://packages.ros.org/ros2/ubuntu".to_string(),
+        ),
         ("netbsd".to_string(), "https://cdn.netbsd.org".to_string()),
         ("openbsd".to_string(), "https://cdn.openbsd.org".to_string()),
     ])

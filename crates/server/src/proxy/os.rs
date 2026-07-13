@@ -85,6 +85,10 @@ mod tests {
             repository_for_target(&upstreams, "kali").unwrap(),
             "https://http.kali.org/kali"
         );
+        assert_eq!(
+            repository_for_target(&upstreams, "ros").unwrap(),
+            "https://packages.ros.org/ros2/ubuntu"
+        );
         assert!(matches!(
             repository_for_target(&upstreams, "not-a-repository"),
             Err(ProxyError::UnsupportedTarget)

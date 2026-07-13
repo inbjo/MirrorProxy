@@ -552,6 +552,9 @@ export function sourceManualCommand(targetCode: string, repoUrl: string, templat
   const base = repoUrl.replace(/\/+$/, '')
   const commands: Record<string, string> = {
     apt: `set -eu\n. /etc/os-release\ncase "$ID" in\n  ubuntu) components='main restricted universe multiverse' ;;\n  debian) components='main' ;;\n  *) echo "仅支持 Debian/Ubuntu，当前为: $ID" >&2; exit 1 ;;\nesac\nsudo tee /etc/apt/sources.list.d/mirrorproxy.list >/dev/null <<EOF\ndeb ${base}/$ID/ $VERSION_CODENAME $components\nEOF\nsudo apt update`,
+    trisquel: `set -eu\n. /etc/os-release\nsudo tee /etc/apt/sources.list.d/mirrorproxy-trisquel.list >/dev/null <<EOF\ndeb ${base} $VERSION_CODENAME main\nEOF\nsudo apt update`,
+    linuxlite: `set -eu\n. /etc/os-release\nsudo tee /etc/apt/sources.list.d/mirrorproxy-linuxlite.list >/dev/null <<EOF\ndeb ${base} $VERSION_CODENAME main\nEOF\nsudo apt update`,
+    ros: `set -eu\n. /etc/os-release\n: "\${UBUNTU_CODENAME:=\${VERSION_CODENAME:?This command requires an Ubuntu codename}}"\nsudo tee /etc/apt/sources.list.d/mirrorproxy-ros2.list >/dev/null <<EOF\ndeb ${base} $UBUNTU_CODENAME main\nEOF\nsudo apt update`,
     alpine: `set -eu\n. /etc/os-release\nrelease="v\${VERSION_ID%.*}"\nprintf '%s\\n%s\\n' '${base}/'$release'/main' '${base}/'$release'/community' | sudo tee /etc/apk/repositories >/dev/null\nsudo apk update`,
     dnf: `sudo tee /etc/yum.repos.d/mirrorproxy.repo >/dev/null <<'EOF'\n[mirrorproxy]\nname=MirrorProxy Fedora\nbaseurl=${base}/fedora/releases/$releasever/Everything/$basearch/os/\nenabled=1\ngpgcheck=1\nEOF\nsudo dnf makecache`,
     pacman: `printf 'Server = ${base}/archlinux/$repo/os/$arch\\n' | sudo tee /etc/pacman.d/mirrorproxy >/dev/null\nsudo pacman -Syy`,

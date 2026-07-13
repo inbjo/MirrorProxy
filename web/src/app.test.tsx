@@ -31,6 +31,10 @@ describe('App preferences', () => {
     expect(sourceManualCommand('go', 'https://sina.dev/goproxy/', 'go env -w GOPROXY={repo_url},direct')).toBe('go env -w GOPROXY=https://sina.dev/goproxy/,direct')
   })
 
+  it('generates a Bash setup command for the ROS APT proxy', () => {
+    expect(sourceManualCommand('ros', 'https://sina.dev/os/ros/')).toContain('deb https://sina.dev/os/ros $UBUNTU_CODENAME main')
+  })
+
   it('renders nested additional OS upstreams as editable fields', async () => {
     const json = (value: unknown) => Promise.resolve(new Response(JSON.stringify(value), { status: 200 }))
     vi.stubGlobal('fetch', vi.fn((input: string) => {
