@@ -476,6 +476,10 @@ fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
 }
 
 fn config_value(config: &Config, key: &str) -> Option<String> {
+    if let Some(target) = key.strip_prefix("upstreams.additional_os.") {
+        return config.upstreams.additional_os.get(target).cloned();
+    }
+
     match key {
         "database_path" => Some(config.database_path.clone()),
         "listen_addr" => Some(config.listen_addr.clone()),
@@ -2488,6 +2492,10 @@ mod tests {
             "https://pkg.julialang.org"
         );
         assert_eq!(
+            config_value(&config, "upstreams.additional_os.kali").unwrap(),
+            "https://http.kali.org/kali"
+        );
+        assert_eq!(
             config_value(&config, "upstreams.maven").unwrap(),
             "https://repo.maven.apache.org/maven2"
         );
@@ -2557,6 +2565,14 @@ mod tests {
             plan_config_set(&config, "upstreams.opam", "https://mirror.example/opam").unwrap();
         assert_eq!(upstream.toml_path, "upstreams.opam");
         assert_eq!(upstream.current_value, "https://opam.ocaml.org");
+
+        let os_upstream = plan_config_set(
+            &config,
+            "upstreams.additional_os.kali",
+            "https://mirror.example/kali",
+        )
+        .unwrap();
+        assert_eq!(os_upstream.toml_path, "upstreams.additional_os.kali");
     }
 
     #[test]
