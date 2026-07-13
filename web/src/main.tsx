@@ -157,7 +157,10 @@ const messages = {
     providers: 'Providers',
     proxyReady: 'Proxy ready',
     configOnly: 'Config only',
+    proxyReadyHint: 'Requests are served through this MirrorProxy instance.',
+    configOnlyHint: 'MirrorProxy generates guidance; configure a compatible external mirror.',
     quota: 'Monthly quota',
+    adapters: 'Enabled adapters',
     quotaOff: 'Disabled',
     enabled: 'Enabled',
     disabled: 'Disabled',
@@ -200,7 +203,10 @@ const messages = {
     providers: '镜像站',
     proxyReady: '可代理',
     configOnly: '仅配置',
+    proxyReadyHint: '请求会通过当前 MirrorProxy 实例代理。',
+    configOnlyHint: 'MirrorProxy 仅生成配置提示；请使用兼容的外部镜像站。',
     quota: '月流量配额',
+    adapters: '已启用适配器',
     quotaOff: '未启用',
     enabled: '已启用',
     disabled: '未启用',
@@ -319,7 +325,7 @@ export function App() {
         <Metric icon={<CheckCircle2 size={18} />} label={t.status} value={t.online} tone="ok" />
         <Metric icon={<Code2 size={18} />} label={t.baseUrl} value={baseUrl} />
         <Metric icon={<Database size={18} />} label={t.quota} value={quotaValue} />
-        <Metric icon={<PackageOpen size={18} />} label="Adapters" value={config.enabled_proxies.join(', ')} />
+        <Metric icon={<PackageOpen size={18} />} label={t.adapters} value={String(config.enabled_proxies.length)} />
       </section>
 
       <section className="workspace">
@@ -431,7 +437,7 @@ export function App() {
             <InfoBlock title="Runtime" body={t.apiHint} />
           </section>
 
-          {catalog && <SourceCatalogPanel catalog={catalog} labels={t} />}
+          {catalog && <SourceCatalogPanel catalog={catalog} baseUrl={baseUrl} labels={t} />}
         </div>
       </section>
     </main>
@@ -631,7 +637,7 @@ function SourceCommandGenerator({ catalog, baseUrl, text }: { catalog: SourceCat
   return <section className="source-generator"><div className="generator-head"><h4><Terminal size={14} /> {text.generator}</h4><span className={executable ? 'generator-status ready' : 'generator-status'}>{executable ? text.ready : text.guidance}</span></div><div className="generator-fields"><label>{text.target}<select value={target?.code ?? targetCode} onChange={(event) => { const nextTarget = catalog.targets.find((item) => item.code === event.target.value); setTargetCode(event.target.value); setMirrorCode('mirrorproxy'); setScope(nextTarget?.default_scope ?? 'user') }}>{catalog.targets.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label><label>{text.mirror}<select value={activeMirror} onChange={(event) => setMirrorCode(event.target.value)}>{sources.map((source) => <option key={source.provider_code} value={source.provider_code}>{source.provider_code}</option>)}</select></label><label>{text.scope}<select value={scope} onChange={(event) => setScope(event.target.value)}><option value="user">user</option><option value="system">system</option></select></label>{target?.code === 'apt' && scope === 'system' ? <label>{text.distribution}<input value={distribution} onChange={(event) => setDistribution(event.target.value)} /></label> : null}</div><div className="generator-command"><code>{command}</code><button onClick={copyGenerated}><Clipboard size={15} /> {copied ? text.copiedCommand : text.copyCommand}</button></div></section>
 }
 
-function SourceCatalogPanel({ catalog, labels }: { catalog: SourceCatalog; labels: Record<string, string> }) {
+function SourceCatalogPanel({ catalog, baseUrl, labels }: { catalog: SourceCatalog; baseUrl: string; labels: Record<string, string> }) {
   const groups = [
     { code: 'lang', title: labels.langSources },
     { code: 'os', title: labels.osSources },
@@ -671,7 +677,7 @@ function SourceCatalogPanel({ catalog, labels }: { catalog: SourceCatalog; label
                       <small>{target.code} · {target.supported_modes.join(', ')}</small>
                       {!hasProxyAdapter(target.code) && guidance(target.code) ? <small>{guidance(target.code)}</small> : null}
                     </div>
-                    <span className={hasProxyAdapter(target.code) ? 'mini-status ready' : 'mini-status'}>
+                    <span title={hasProxyAdapter(target.code) ? labels.proxyReadyHint : labels.configOnlyHint} className={hasProxyAdapter(target.code) ? 'mini-status ready' : 'mini-status'}>
                       {hasProxyAdapter(target.code) ? labels.proxyReady : labels.configOnly}
                     </span>
                     <span className="provider-count">{providerCount(target.code)}</span>
@@ -681,6 +687,7 @@ function SourceCatalogPanel({ catalog, labels }: { catalog: SourceCatalog; label
           </div>
         ))}
       </div>
+      <SourceCommandGenerator catalog={catalog} baseUrl={baseUrl} text={labels} />
     </section>
   )
 }
