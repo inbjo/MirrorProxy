@@ -549,8 +549,8 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
     }
 }
 
-fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
-    [
+fn config_entries(config: &Config) -> Vec<(String, String)> {
+    let mut entries = [
         "database_path",
         "listen_addr",
         "public_base_url",
@@ -617,11 +617,19 @@ fn config_entries(config: &Config) -> Vec<(&'static str, String)> {
     .into_iter()
     .map(|key| {
         (
-            key,
+            key.to_string(),
             config_value(config, key).expect("listed config key should resolve"),
         )
     })
-    .collect()
+    .collect::<Vec<_>>();
+    entries.extend(
+        config
+            .upstreams
+            .additional_os
+            .iter()
+            .map(|(target, url)| (format!("upstreams.additional_os.{target}"), url.clone())),
+    );
+    entries
 }
 
 fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
@@ -2521,34 +2529,38 @@ mod tests {
 
         assert!(entries
             .iter()
-            .any(|(key, value)| *key == "enabled_proxies" && value.contains("github")));
+            .any(|(key, value)| key == "enabled_proxies" && value.contains("github")));
         assert!(entries
             .iter()
-            .any(|(key, value)| *key == "quota.on_exceeded" && value == "stop_proxy"));
+            .any(|(key, value)| key == "quota.on_exceeded" && value == "stop_proxy"));
         assert!(entries
             .iter()
-            .any(|(key, value)| *key == "cache.directory" && value == "mirrorproxy-cache"));
+            .any(|(key, value)| key == "cache.directory" && value == "mirrorproxy-cache"));
         assert!(entries
             .iter()
-            .any(|(key, value)| *key == "upstreams.pypi_files"
+            .any(|(key, value)| key == "upstreams.pypi_files"
                 && value == "https://files.pythonhosted.org"));
-        assert!(entries.iter().any(|(key, value)| *key == "upstreams.maven"
+        assert!(entries.iter().any(|(key, value)| key == "upstreams.maven"
             && value == "https://repo.maven.apache.org/maven2"));
         assert!(entries
             .iter()
-            .any(|(key, value)| *key == "upstreams.rubygems" && value == "https://rubygems.org"));
+            .any(|(key, value)| key == "upstreams.rubygems" && value == "https://rubygems.org"));
         assert!(entries
             .iter()
-            .any(|(key, value)| *key == "upstreams.nuget" && value == "https://api.nuget.org"));
+            .any(|(key, value)| key == "upstreams.nuget" && value == "https://api.nuget.org"));
         assert!(entries
             .iter()
-            .any(|(key, value)| *key == "upstreams.cpan" && value == "https://cpan.metacpan.org"));
+            .any(|(key, value)| key == "upstreams.cpan" && value == "https://cpan.metacpan.org"));
         assert!(entries
             .iter()
-            .any(|(key, value)| *key == "upstreams.opam" && value == "https://opam.ocaml.org"));
+            .any(|(key, value)| key == "upstreams.opam" && value == "https://opam.ocaml.org"));
         assert!(entries
             .iter()
-            .any(|(key, value)| *key == "upstreams.julia" && value == "https://pkg.julialang.org"));
+            .any(|(key, value)| key == "upstreams.julia" && value == "https://pkg.julialang.org"));
+        assert!(entries
+            .iter()
+            .any(|(key, value)| key == "upstreams.additional_os.kali"
+                && value == "https://http.kali.org/kali"));
     }
 
     #[test]
