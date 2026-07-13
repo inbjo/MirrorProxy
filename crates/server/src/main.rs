@@ -2621,6 +2621,37 @@ on_exceeded = "stop_proxy"
     }
 
     #[test]
+    fn persist_config_set_updates_additional_os_upstream() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrorproxy-additional-os-config-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let config_path = directory.join("config.toml");
+        fs::write(
+            &config_path,
+            "[upstreams]\nadditional_os = { kali = \"https://http.kali.org/kali\" }\n",
+        )
+        .unwrap();
+
+        let change = plan_config_set(
+            &Config::load(Some(&config_path)).unwrap(),
+            "upstreams.additional_os.kali",
+            "https://mirror.example/kali",
+        )
+        .unwrap();
+        persist_config_set(&config_path, &change).unwrap();
+
+        let updated = Config::load(Some(&config_path)).unwrap();
+        assert_eq!(
+            updated.upstreams.additional_os.get("kali").unwrap(),
+            "https://mirror.example/kali"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn mirrorproxy_source_url_uses_placeholder_or_base_url() {
         assert_eq!(
             mirrorproxy_source_url(None, "/npm/"),
