@@ -654,7 +654,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "WinGet",
         category: SourceCategory::Repository,
         aliases: &[],
-        supported_modes: &[SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -996,6 +996,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         capability: SourceMode::ProxyAdapter,
     },
     TargetSource {
+        target_code: "winget",
+        provider_code: "mirrorproxy",
+        repo_url: "/winget/cache",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
         target_code: "anaconda",
         provider_code: "mirrorproxy",
         repo_url: "/anaconda/",
@@ -1184,7 +1191,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
     SourceTemplate { target_code: "trisquel", os_family: "debian", scope: SourceScope::System, template: "deb {repo_url} <trisquel-codename> main", requires_sudo: true },
     SourceTemplate { target_code: "linuxlite", os_family: "ubuntu", scope: SourceScope::System, template: "deb {repo_url} <linux-lite-codename> main", requires_sudo: true },
     SourceTemplate { target_code: "ros", os_family: "ubuntu", scope: SourceScope::System, template: "deb {repo_url} <ubuntu-codename> main", requires_sudo: true },
-    SourceTemplate { target_code: "winget", os_family: "windows", scope: SourceScope::User, template: "No MirrorProxy server adapter is available yet. Configure a compatible external WinGet source where supported.", requires_sudo: false },
+    SourceTemplate { target_code: "winget", os_family: "windows", scope: SourceScope::User, template: "winget source add --name mirrorproxy --arg {repo_url} --type Microsoft.PreIndexed.Package --accept-source-agreements", requires_sudo: true },
     SourceTemplate {
         target_code: "linuxmint",
         os_family: "linux",
@@ -1501,6 +1508,6 @@ mod tests {
         );
         assert!(templates_for_target("winget")[0]
             .template
-            .contains("external WinGet source"));
+            .contains("Microsoft.PreIndexed.Package"));
     }
 }

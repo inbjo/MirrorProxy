@@ -94,6 +94,8 @@ pub struct Upstreams {
     pub anaconda: String,
     #[serde(default = "default_texlive_repository")]
     pub texlive: String,
+    #[serde(default = "default_winget_repository")]
+    pub winget: String,
     #[serde(default = "default_elpa_repository")]
     pub elpa: String,
     #[serde(default = "default_nix_repository")]
@@ -346,7 +348,8 @@ impl Config {
                 "github" | "composer" | "oci" | "npm" | "nvm" | "opam" | "go" | "maven"
                 | "rubygems" | "rustup" | "nuget" | "cpan" | "cran" | "hackage" | "julia"
                 | "luarocks" | "clojars" | "cocoapods" | "pub" | "anaconda" | "texlive"
-                | "elpa" | "nix" | "guix" | "flatpak" | "homebrew" | "os" | "crates" | "pypi" => {}
+                | "elpa" | "nix" | "guix" | "flatpak" | "homebrew" | "winget" | "os" | "crates"
+                | "pypi" => {}
                 other => anyhow::bail!("unsupported proxy in enabled_proxies: {other}"),
             }
         }
@@ -376,6 +379,7 @@ impl Config {
         validate_http_url("upstreams.pub_repository", &self.upstreams.pub_repository)?;
         validate_http_url("upstreams.anaconda", &self.upstreams.anaconda)?;
         validate_http_url("upstreams.texlive", &self.upstreams.texlive)?;
+        validate_http_url("upstreams.winget", &self.upstreams.winget)?;
         validate_http_url("upstreams.elpa", &self.upstreams.elpa)?;
         validate_http_url("upstreams.nix", &self.upstreams.nix)?;
         validate_http_url("upstreams.guix", &self.upstreams.guix)?;
@@ -446,6 +450,7 @@ impl Config {
             "pub_repository" => &upstreams.pub_repository,
             "anaconda" => &upstreams.anaconda,
             "texlive" => &upstreams.texlive,
+            "winget" => &upstreams.winget,
             "elpa" => &upstreams.elpa,
             "nix" => &upstreams.nix,
             "guix" => &upstreams.guix,
@@ -517,6 +522,7 @@ impl Default for Upstreams {
             pub_repository: default_pub_repository(),
             anaconda: default_anaconda_repository(),
             texlive: default_texlive_repository(),
+            winget: default_winget_repository(),
             elpa: default_elpa_repository(),
             nix: default_nix_repository(),
             guix: default_guix_repository(),
@@ -626,6 +632,7 @@ fn default_enabled_proxies() -> Vec<String> {
         "pub".to_string(),
         "anaconda".to_string(),
         "texlive".to_string(),
+        "winget".to_string(),
         "elpa".to_string(),
         "nix".to_string(),
         "guix".to_string(),
@@ -729,6 +736,10 @@ fn default_anaconda_repository() -> String {
 
 fn default_texlive_repository() -> String {
     "https://mirror.ctan.org/systems/texlive/tlnet".to_string()
+}
+
+fn default_winget_repository() -> String {
+    "https://cdn.winget.microsoft.com".to_string()
 }
 
 fn default_elpa_repository() -> String {

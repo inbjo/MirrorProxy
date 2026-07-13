@@ -373,7 +373,7 @@ Docker 会写入包含 `registry-mirrors` 的 `/etc/docker/daemon.json`。已有
 ```toml
 listen_addr = "selfhost.com"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "luarocks", "clojars", "pub", "anaconda", "texlive", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "luarocks", "clojars", "pub", "anaconda", "texlive", "winget", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"

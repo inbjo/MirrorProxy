@@ -27,6 +27,7 @@ pub mod pypi;
 pub mod rubygems;
 pub mod rustup;
 pub mod texlive;
+pub mod winget;
 
 use std::{
     fs,

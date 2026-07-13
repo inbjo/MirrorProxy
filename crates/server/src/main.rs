@@ -32,7 +32,7 @@ use database::{Database, ProxyTrafficRecord};
 use proxy::{
     anaconda, clojars, cocoapods, composer, cpan, cran, cratesio, elpa, flatpak, github, go, guix,
     hackage, homebrew, julia, luarocks, maven, nix, npm, nuget, nvm, oci, opam, os, pub_repository,
-    pypi, rubygems, rustup, texlive, ProxyError,
+    pypi, rubygems, rustup, texlive, winget, ProxyError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -525,6 +525,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.pub_repository" => Some(config.upstreams.pub_repository.clone()),
         "upstreams.anaconda" => Some(config.upstreams.anaconda.clone()),
         "upstreams.texlive" => Some(config.upstreams.texlive.clone()),
+        "upstreams.winget" => Some(config.upstreams.winget.clone()),
         "upstreams.elpa" => Some(config.upstreams.elpa.clone()),
         "upstreams.nix" => Some(config.upstreams.nix.clone()),
         "upstreams.guix" => Some(config.upstreams.guix.clone()),
@@ -593,6 +594,7 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
         "upstreams.pub_repository",
         "upstreams.anaconda",
         "upstreams.texlive",
+        "upstreams.winget",
         "upstreams.elpa",
         "upstreams.nix",
         "upstreams.guix",
@@ -1486,6 +1488,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/texlive", get(texlive::root).head(texlive::root))
         .route("/texlive/", get(texlive::root).head(texlive::root))
         .route("/texlive/{*path}", get(texlive::proxy).head(texlive::proxy))
+        .route("/winget", get(winget::root).head(winget::root))
+        .route("/winget/", get(winget::root).head(winget::root))
+        .route("/winget/{*path}", get(winget::proxy).head(winget::proxy))
         .route("/elpa", get(elpa::root).head(elpa::root))
         .route("/elpa/", get(elpa::root).head(elpa::root))
         .route("/elpa/{*path}", get(elpa::proxy).head(elpa::proxy))
@@ -1748,6 +1753,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
         Some("anaconda")
     } else if path == "/texlive" || path.starts_with("/texlive/") {
         Some("texlive")
+    } else if path == "/winget" || path.starts_with("/winget/") {
+        Some("winget")
     } else if path == "/elpa" || path.starts_with("/elpa/") {
         Some("elpa")
     } else if path == "/nix" || path.starts_with("/nix/") {
@@ -1941,6 +1948,8 @@ fn is_proxy_path(path: &str) -> bool {
         || path.starts_with("/anaconda/")
         || path == "/texlive"
         || path.starts_with("/texlive/")
+        || path == "/winget"
+        || path.starts_with("/winget/")
         || path == "/elpa"
         || path.starts_with("/elpa/")
         || path == "/nix"
@@ -3551,6 +3560,14 @@ on_exceeded = "stop_proxy"
             .any(|source| source["target_code"] == "cpan"
                 && source["provider_code"] == "mirrorproxy"
                 && source["repo_url"] == "/cpan/"));
+        assert!(value["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|source| source["target_code"] == "winget"
+                && source["provider_code"] == "mirrorproxy"
+                && source["repo_url"] == "/winget/cache"
+                && source["capability"] == "proxy"));
         assert!(value["templates"]
             .as_array()
             .unwrap()
