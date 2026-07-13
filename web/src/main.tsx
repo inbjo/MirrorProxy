@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   Terminal,
   Sun,
+  X,
 } from 'lucide-react'
 import './styles.css'
 import { readStoredPreference } from './preferences'
@@ -137,7 +138,8 @@ const copy = async (value: string) => {
 const messages = {
   en: {
     title: 'MirrorProxy',
-    subtitle: 'Self-hosted mirror proxy for GitHub releases, Composer packages, and the next registries you add.',
+    accelerationTitle: 'All-in-one mirror acceleration',
+    subtitle: 'A developer acceleration desk: turn links into proxy URLs and get ready-to-use package and system mirror configuration.',
     status: 'Service status',
     online: 'Online',
     baseUrl: 'Public base URL',
@@ -166,6 +168,26 @@ const messages = {
     disabled: 'Disabled',
     copy: 'Copy',
     copied: 'Copied',
+    createAndCopy: 'Create and copy',
+    quickGithubTitle: 'GitHub link acceleration',
+    quickGithubHint: 'Paste a github.com, raw.githubusercontent.com, or release download URL.',
+    quickDockerTitle: 'Docker image acceleration',
+    quickDockerHint: 'Supports nginx, ghcr.io/org/image:tag, and quay.io/org/image.',
+    proxyLink: 'Proxy link',
+    pullCommand: 'Pull command',
+    sourceCatalogHeading: 'Choose a source configuration',
+    sourceCatalogHint: 'Select a source to open its MirrorProxy endpoint and manual setup instructions.',
+    mirrorproxyAddress: 'MirrorProxy address',
+    mirrorproxyAddressHint: 'Use this endpoint when your client accepts a mirror URL directly.',
+    mirrorproxyCli: 'MirrorProxy CLI setup',
+    mirrorproxyCliHint: 'For an installed MirrorProxy CLI; it writes local config and keeps a rollback record.',
+    manualSetup: 'Manual setup command',
+    manualSetupHint: 'Run in a terminal; the command uses this MirrorProxy domain.',
+    manualSystemSetupHint: 'Run in Bash on the target system. Confirm the distribution and release before applying it.',
+    sourceAvailable: 'Use this site address or copy a command below to enable this source locally.',
+    sourceUnavailable: 'This target currently supports local configuration only; no MirrorProxy server adapter is available.',
+    copyCommand: 'Copy command',
+    closeConfig: 'Close configuration',
     githubDesc: 'Proxy repository pages, release assets, raw files, archives, and Composer GitHub dist URLs.',
     composerDesc: 'Use MirrorProxy as a Packagist-compatible Composer repository.',
     ociDesc: 'Pull Docker Hub, GHCR, Quay, and Kubernetes public images through the same registry endpoint.',
@@ -183,7 +205,8 @@ const messages = {
   },
   zh: {
     title: 'MirrorProxy',
-    subtitle: '自部署镜像代理平台，优先支持 GitHub release 与 Composer，并为后续更多生态保留扩展边界。',
+    accelerationTitle: '一站式镜像加速',
+    subtitle: '面向开发者的一站式镜像与下载加速服务：输入地址即可生成代理链接，按需获取软件源与系统源配置。',
     status: '服务状态',
     online: '在线',
     baseUrl: '公开访问地址',
@@ -212,6 +235,26 @@ const messages = {
     disabled: '未启用',
     copy: '复制',
     copied: '已复制',
+    createAndCopy: '生成并复制',
+    quickGithubTitle: 'GitHub 地址加速',
+    quickGithubHint: '输入 github.com、raw.githubusercontent.com 或 release 下载地址。',
+    quickDockerTitle: 'Docker 镜像加速',
+    quickDockerHint: '支持 nginx、ghcr.io/org/image:tag、quay.io/org/image。',
+    proxyLink: '代理链接',
+    pullCommand: '拉取命令',
+    sourceCatalogHeading: '按类型选择配置',
+    sourceCatalogHint: '选择一个镜像源，打开其 MirrorProxy 地址和手动配置说明。',
+    mirrorproxyAddress: 'MirrorProxy 地址',
+    mirrorproxyAddressHint: '客户端可直接填写镜像 URL 时，使用此地址。',
+    mirrorproxyCli: 'MirrorProxy CLI 配置',
+    mirrorproxyCliHint: '已安装 MirrorProxy CLI 时可用；它会写入本机配置并保留回滚记录。',
+    manualSetup: '手动配置命令',
+    manualSetupHint: '可直接在终端执行；命令会使用当前 MirrorProxy 域名。',
+    manualSystemSetupHint: '可直接在目标系统的 Bash 中执行。请先确认发行版与版本符合命令说明。',
+    sourceAvailable: '使用本站地址或复制下面的命令，即可在本机启用该镜像源。',
+    sourceUnavailable: '该目标当前仅提供本机配置能力；没有对应的 MirrorProxy 服务端代理。',
+    copyCommand: '复制命令',
+    closeConfig: '关闭配置',
     githubDesc: '代理仓库页面、release 文件、raw 文件、archive，以及 Composer 中常见的 GitHub dist 地址。',
     composerDesc: '将 MirrorProxy 配置为兼容 Packagist 的 Composer 仓库。',
     ociDesc: '通过同一个 registry 地址拉取 Docker Hub、GHCR、Quay 和 Kubernetes 公开镜像。',
@@ -303,8 +346,6 @@ export function App() {
       <header className="topbar">
         <div>
           <div className="brand-mark"><ServerCog size={18} /> MirrorProxy</div>
-          <h1>{t.title}</h1>
-          <p>{t.subtitle}</p>
         </div>
         <div className="toolbar">
           <button className="icon-button" onClick={() => setLocale(locale === 'en' ? 'zh' : 'en')} title="Language">
@@ -321,6 +362,9 @@ export function App() {
 
       {adminVisible ? <AdminConsole locale={locale} catalog={catalog} onClose={() => setAdminVisible(false)} /> : null}
 
+      <AccelerationWorkbench baseUrl={baseUrl} config={config} catalog={catalog} labels={t} onCopy={copyCommand} copied={copied} />
+
+      {false && <div className="legacy-home">
       <section className="status-strip">
         <Metric icon={<CheckCircle2 size={18} />} label={t.status} value={t.online} tone="ok" />
         <Metric icon={<Code2 size={18} />} label={t.baseUrl} value={baseUrl} />
@@ -437,11 +481,85 @@ export function App() {
             <InfoBlock title="Runtime" body={t.apiHint} />
           </section>
 
-          {catalog && <SourceCatalogPanel catalog={catalog} baseUrl={baseUrl} labels={t} />}
+          {catalog && <SourceCatalogPanel catalog={catalog!} baseUrl={baseUrl} labels={t} />}
         </div>
       </section>
+      </div>}
     </main>
   )
+}
+
+function AccelerationWorkbench({ baseUrl, config, catalog, labels, onCopy, copied }: { baseUrl: string; config: PublicConfig; catalog: SourceCatalog | null; labels: Record<string, string>; onCopy: (id: string, value: string) => void; copied: string | null }) {
+  const [githubInput, setGithubInput] = React.useState('')
+  const [dockerInput, setDockerInput] = React.useState('')
+  const [selectedTarget, setSelectedTarget] = React.useState<SourceTarget | null>(null)
+  const githubLink = githubInput.trim() ? `${baseUrl}/${githubInput.trim().replace(/^\/+/, '')}` : ''
+  const dockerImage = dockerInput.trim().replace(/^docker:\/\//, '').replace(/^https?:\/\//, '')
+  const dockerCommand = dockerImage ? `docker pull ${new URL(baseUrl).host}/${dockerImage}` : ''
+  return <section className="accelerator-shell">
+    <div className="accelerator-hero">
+      <div><span className="eyebrow">MIRRORPROXY / ACCELERATION DESK</span><h1>{labels.accelerationTitle}</h1><p>{labels.subtitle}</p></div>
+      <div className="hero-stats"><Metric icon={<CheckCircle2 size={18} />} label={labels.status} value={labels.online} tone="ok" /><Metric icon={<PackageOpen size={18} />} label={labels.adapters} value={String(config.enabled_proxies.length)} /></div>
+    </div>
+    <div className="quick-converters">
+      <LinkConverter title={labels.quickGithubTitle} icon={<Github size={19} />} hint={labels.quickGithubHint} value={githubInput} onChange={setGithubInput} output={githubLink} outputLabel={labels.proxyLink} placeholder="https://github.com/owner/repo/releases/download/..." copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-github'} onCopy={() => githubLink && onCopy('quick-github', githubLink)} />
+      <LinkConverter title={labels.quickDockerTitle} icon={<Container size={19} />} hint={labels.quickDockerHint} value={dockerInput} onChange={setDockerInput} output={dockerCommand} outputLabel={labels.pullCommand} placeholder="ghcr.io/owner/image:latest" copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-docker'} onCopy={() => dockerCommand && onCopy('quick-docker', dockerCommand)} />
+    </div>
+    {catalog ? <div className="source-workbench">
+      <div className="source-workbench-head"><div><span className="eyebrow">SOURCE CATALOG</span><h2>{labels.sourceCatalogHeading}</h2><p>{labels.sourceCatalogHint}</p></div><code>{baseUrl}</code></div>
+      <div className="source-card-grid">{catalog.targets.map((item) => <button className={item.code === selectedTarget?.code ? 'source-tile selected' : 'source-tile'} onClick={() => setSelectedTarget(item)} key={item.code}>{sourceCategoryIcon(item.category)}<span><strong>{item.name}</strong><small>{sourceCategoryLabel(item.category, labels)}</small></span><em>{item.supported_modes.includes('proxy') ? labels.proxyReady : labels.configOnly}</em></button>)}</div>
+    </div> : null}
+    {selectedTarget && catalog ? <SourceConfigModal target={selectedTarget} baseUrl={baseUrl} catalog={catalog} labels={labels} copied={copied} onCopy={onCopy} onClose={() => setSelectedTarget(null)} /> : null}
+  </section>
+}
+
+function LinkConverter({ title, icon, hint, value, onChange, output, outputLabel, placeholder, copyLabel, copiedLabel, copied, onCopy }: { title: string; icon: React.ReactNode; hint: string; value: string; onChange: (value: string) => void; output: string; outputLabel: string; placeholder: string; copyLabel: string; copiedLabel: string; copied: boolean; onCopy: () => void }) {
+  return <section className="link-converter"><div className="converter-title">{icon}<div><h2>{title}</h2><p>{hint}</p></div></div><div className="converter-input"><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><button disabled={!output} onClick={onCopy}>{copied ? copiedLabel : copyLabel}</button></div>{output ? <div className="converter-output"><span>{outputLabel}</span><code>{output}</code></div> : null}</section>
+}
+
+function SourceConfigModal({ target, baseUrl, catalog, labels, copied, onCopy, onClose }: { target: SourceTarget; baseUrl: string; catalog: SourceCatalog; labels: Record<string, string>; copied: string | null; onCopy: (id: string, value: string) => void; onClose: () => void }) {
+  const source = catalog.sources.find((item) => item.target_code === target.code && item.provider_code === 'mirrorproxy')
+  const template = catalog.templates.find((item) => item.target_code === target.code)
+  const proxyUrl = source ? `${baseUrl}${source.repo_url.startsWith('/') ? source.repo_url : `/${source.repo_url}`}` : ''
+  const mirrorproxyCommand = `mirrorproxy sources set ${target.code} --mirror mirrorproxy --base-url ${baseUrl} --scope ${target.default_scope}`
+  const manualCommand = source ? sourceManualCommand(target.code, proxyUrl, template?.template) : `mirrorproxy sources get ${target.code}`
+
+  return <div className="config-modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <section className="config-modal" role="dialog" aria-modal="true" aria-label={`${target.name} ${labels.sourceCatalogHeading}`} onMouseDown={(event) => event.stopPropagation()}>
+      <button className="config-modal-close" onClick={onClose} aria-label={labels.closeConfig}><X size={18} /></button>
+      <span className="eyebrow">CONFIGURE / {target.code.toUpperCase()}</span><h2>{target.name}</h2>
+      <p>{source ? labels.sourceAvailable : labels.sourceUnavailable}</p>
+      {source ? <ConfigOption title={labels.mirrorproxyAddress} description={labels.mirrorproxyAddressHint} value={proxyUrl} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-url'} onCopy={() => onCopy('source-url', proxyUrl)} /> : null}
+      {source ? <ConfigOption title={labels.mirrorproxyCli} description={labels.mirrorproxyCliHint} value={mirrorproxyCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-cli'} onCopy={() => onCopy('source-cli', mirrorproxyCommand)} /> : null}
+      <ConfigOption title={labels.manualSetup} description={target.category === 'os' ? labels.manualSystemSetupHint : labels.manualSetupHint} value={manualCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-manual'} onCopy={() => onCopy('source-manual', manualCommand)} />
+    </section>
+  </div>
+}
+
+function ConfigOption({ title, description, value, copyLabel, copiedLabel, copied, onCopy }: { title: string; description: string; value: string; copyLabel: string; copiedLabel: string; copied: boolean; onCopy: () => void }) {
+  return <section className="config-option"><span>{title}</span><p>{description}</p><pre><code>{value}</code></pre><button onClick={onCopy}>{copied ? copiedLabel : copyLabel}</button></section>
+}
+
+function sourceCategoryIcon(category: SourceTarget['category']) {
+  return category === 'lang' ? <Code2 size={21} /> : category === 'os' ? <Database size={21} /> : <PackageOpen size={21} />
+}
+
+function sourceCategoryLabel(category: SourceTarget['category'], labels: Record<string, string>) {
+  return category === 'lang' ? labels.langSources : category === 'os' ? labels.osSources : labels.repoSources
+}
+
+export function sourceManualCommand(targetCode: string, repoUrl: string, template?: string) {
+  const base = repoUrl.replace(/\/+$/, '')
+  const commands: Record<string, string> = {
+    apt: `set -eu\n. /etc/os-release\ncase "$ID" in\n  ubuntu) components='main restricted universe multiverse' ;;\n  debian) components='main' ;;\n  *) echo "仅支持 Debian/Ubuntu，当前为: $ID" >&2; exit 1 ;;\nesac\nsudo tee /etc/apt/sources.list.d/mirrorproxy.list >/dev/null <<EOF\ndeb ${base}/$ID/ $VERSION_CODENAME $components\nEOF\nsudo apt update`,
+    alpine: `set -eu\n. /etc/os-release\nrelease="v\${VERSION_ID%.*}"\nprintf '%s\\n%s\\n' '${base}/'$release'/main' '${base}/'$release'/community' | sudo tee /etc/apk/repositories >/dev/null\nsudo apk update`,
+    dnf: `sudo tee /etc/yum.repos.d/mirrorproxy.repo >/dev/null <<'EOF'\n[mirrorproxy]\nname=MirrorProxy Fedora\nbaseurl=${base}/fedora/releases/$releasever/Everything/$basearch/os/\nenabled=1\ngpgcheck=1\nEOF\nsudo dnf makecache`,
+    pacman: `printf 'Server = ${base}/archlinux/$repo/os/$arch\\n' | sudo tee /etc/pacman.d/mirrorproxy >/dev/null\nsudo pacman -Syy`,
+    xbps: `printf 'repository=${base}/current\\n' | sudo tee /etc/xbps.d/00-mirrorproxy.conf >/dev/null\nsudo xbps-install -S`,
+    gentoo: `printf '\\n# MirrorProxy\\nGENTOO_MIRRORS="${base}"\\n' | sudo tee -a /etc/portage/make.conf >/dev/null\nsudo emerge --sync`,
+    zypper: `sudo zypper ar -f '${base}/distribution/leap/15.6/repo/oss/' mirrorproxy-oss\nsudo zypper refresh`,
+  }
+  return commands[targetCode] ?? template?.replaceAll('{repo_url}', repoUrl) ?? `mirrorproxy sources get ${targetCode}`
 }
 
 const byteLabel = (bytes: number | null) => {

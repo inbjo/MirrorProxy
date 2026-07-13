@@ -5,3 +5,6 @@
 *.log
 .env
 .env.*
+mirrorproxy.sqlite3
+mirrorproxy.sqlite3-shm
+mirrorproxy.sqlite3-wal

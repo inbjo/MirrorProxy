@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { App } from './main'
+import { App, sourceManualCommand } from './main'
 
 describe('App preferences', () => {
   afterEach(() => { localStorage.clear(); vi.restoreAllMocks() })
@@ -19,10 +19,16 @@ describe('App preferences', () => {
     const writeText = vi.fn(() => Promise.resolve())
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))))
     Object.assign(navigator, { clipboard: { writeText } })
-    render(<App />)
-    fireEvent.click(screen.getAllByText('Copy')[0])
+    const { container } = render(<App />)
+    const githubInput = container.querySelector<HTMLInputElement>('input[placeholder="https://github.com/owner/repo/releases/download/..."]')!
+    fireEvent.change(githubInput, { target: { value: 'https://github.com/openai/openai' } })
+    fireEvent.click(githubInput.parentElement!.querySelector('button')!)
     await waitFor(() => expect(writeText).toHaveBeenCalled())
-    expect(screen.getByText('Copied')).toBeTruthy()
+    expect(screen.getAllByText('Copied').at(-1)).toBeTruthy()
+  })
+
+  it('renders the active MirrorProxy URL into manual Go configuration', () => {
+    expect(sourceManualCommand('go', 'https://sina.dev/goproxy/', 'go env -w GOPROXY={repo_url},direct')).toBe('go env -w GOPROXY=https://sina.dev/goproxy/,direct')
   })
 
   it('renders nested additional OS upstreams as editable fields', async () => {
@@ -36,7 +42,8 @@ describe('App preferences', () => {
       return json({ public_base_url: 'http://selfhost.com', enabled_proxies: ['os'], quota: { enabled: false, monthly_gb: 500, timezone: 'local', on_exceeded: 'stop_proxy' } })
     }))
     render(<App />)
-    expect(await screen.findByText('Configure a compatible external Solus mirror.')).toBeTruthy()
+    fireEvent.click(await screen.findByText('Solus'))
+    expect(await screen.findByText('mirrorproxy sources get solus')).toBeTruthy()
     fireEvent.click(screen.getAllByText('Admin console').at(-1)!)
     fireEvent.change(screen.getAllByLabelText('Administrator password').at(-1)!, { target: { value: 'password' } })
     fireEvent.click(screen.getAllByText('Sign in').at(-1)!)
