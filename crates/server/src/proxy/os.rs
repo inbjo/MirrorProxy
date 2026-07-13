@@ -87,7 +87,7 @@ mod tests {
         );
         assert_eq!(
             repository_for_target(&upstreams, "ros").unwrap(),
-            "https://packages.ros.org/ros2/ubuntu"
+            "http://packages.ros.org/ros2/ubuntu"
         );
         assert_eq!(
             repository_for_target(&upstreams, "solus").unwrap(),

@@ -847,7 +847,7 @@ fn default_os_repositories() -> BTreeMap<String, String> {
         ),
         (
             "ros".to_string(),
-            "https://packages.ros.org/ros2/ubuntu".to_string(),
+            "http://packages.ros.org/ros2/ubuntu".to_string(),
         ),
         ("netbsd".to_string(), "https://cdn.netbsd.org".to_string()),
         ("openbsd".to_string(), "https://cdn.openbsd.org".to_string()),
