@@ -22,7 +22,7 @@ cat >"${config}" <<EOF
 listen_addr = "127.0.0.1:${port}"
 database_path = "${work}/mirrorproxy.sqlite3"
 public_base_url = "${base}"
-enabled_proxies = ["github", "composer", "oci", "npm", "go", "crates", "pypi", "cpan", "rubygems", "maven", "nuget", "cran", "hackage", "luarocks"]
+enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "crates", "pypi", "cpan", "rubygems", "maven", "nuget", "cran", "hackage", "julia", "luarocks", "cocoapods", "pub", "anaconda", "texlive", "elpa", "nix", "guix", "flatpak", "homebrew", "os"]
 
 [upstreams]
 github = "https://github.com"
@@ -119,6 +119,26 @@ mkdir "${work}/composer"
 
 if [[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]]; then
   docker pull "127.0.0.1:${port}/library/busybox:1.36.1" >/dev/null
+fi
+
+# Some adapters do not have a lightweight client available on every CI image.
+# Exercise their real public protocol entry points through the running proxy so
+# route wiring, upstream selection, streaming, and path validation stay covered.
+if [[ "${MIRRORPROXY_SMOKE_EXTENDED:-0}" == "1" ]]; then
+  curl --fail --silent --show-error --output /dev/null "${base}/nvm/index.json"
+  curl --fail --silent --show-error --output /dev/null "${base}/opam/repo"
+  curl --fail --silent --show-error --output /dev/null "${base}/rustup/dist/channel-rust-stable.toml"
+  curl --fail --silent --show-error --output /dev/null "${base}/julia/registries"
+  curl --fail --silent --show-error --output /dev/null "${base}/cocoapods/all_pods_versions_2_0_0.txt"
+  curl --fail --silent --show-error --output /dev/null "${base}/pub/api/packages/http"
+  curl --fail --silent --show-error --output /dev/null "${base}/anaconda/main/noarch/repodata.json"
+  curl --fail --silent --show-error --output /dev/null "${base}/texlive/tlpkg/texlive.tlpdb"
+  curl --fail --silent --show-error --output /dev/null "${base}/elpa/archive-contents"
+  curl --fail --silent --show-error --output /dev/null "${base}/nix/nix-cache-info"
+  curl --fail --silent --show-error --output /dev/null "${base}/guix/nix-cache-info"
+  curl --fail --silent --show-error --output /dev/null "${base}/flatpak/summary"
+  curl --fail --silent --show-error --output /dev/null "${base}/homebrew/homebrew/core/curl/manifests/latest"
+  curl --fail --silent --show-error --output /dev/null "${base}/os/debian/dists/stable/Release"
 fi
 
 printf 'client smoke passed: git npm yarn pnpm go cargo pip cpanm rubygems maven nuget cran cabal luarocks composer%s\n' \

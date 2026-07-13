@@ -73,4 +73,5 @@ jobs:
       - name: Run public client protocol smoke
         env:
           MIRRORPROXY_SMOKE_DOCKER: "1"
+          MIRRORPROXY_SMOKE_EXTENDED: "1"
         run: ./scripts/smoke-clients.sh
