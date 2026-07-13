@@ -35,6 +35,10 @@ describe('App preferences', () => {
     expect(sourceManualCommand('ros', 'https://sina.dev/os/ros/')).toContain('deb https://sina.dev/os/ros $UBUNTU_CODENAME main')
   })
 
+  it('generates an eopkg command for the Solus proxy', () => {
+    expect(sourceManualCommand('solus', 'https://sina.dev/os/solus/')).toContain('https://sina.dev/os/solus/polaris/eopkg-index.xml.xz')
+  })
+
   it('renders nested additional OS upstreams as editable fields', async () => {
     const json = (value: unknown) => Promise.resolve(new Response(JSON.stringify(value), { status: 200 }))
     vi.stubGlobal('fetch', vi.fn((input: string) => {

@@ -823,6 +823,10 @@ fn default_os_repositories() -> BTreeMap<String, String> {
             "https://packages.linuxmint.com".to_string(),
         ),
         (
+            "solus".to_string(),
+            "https://cdn.getsol.us/repo".to_string(),
+        ),
+        (
             "trisquel".to_string(),
             "https://archive.trisquel.info/trisquel".to_string(),
         ),

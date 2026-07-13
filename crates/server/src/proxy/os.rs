@@ -89,6 +89,10 @@ mod tests {
             repository_for_target(&upstreams, "ros").unwrap(),
             "https://packages.ros.org/ros2/ubuntu"
         );
+        assert_eq!(
+            repository_for_target(&upstreams, "solus").unwrap(),
+            "https://cdn.getsol.us/repo"
+        );
         assert!(matches!(
             repository_for_target(&upstreams, "not-a-repository"),
             Err(ProxyError::UnsupportedTarget)

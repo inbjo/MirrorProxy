@@ -582,7 +582,12 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         ["almalinux"],
         &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
     ),
-    template_only_os_target!("solus", "Solus", []),
+    template_only_os_target!(
+        "solus",
+        "Solus",
+        [],
+        &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly]
+    ),
     template_only_os_target!(
         "trisquel",
         "Trisquel",
@@ -868,6 +873,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         target_code: "linuxmint",
         provider_code: "mirrorproxy",
         repo_url: "/os/linuxmint/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
+        target_code: "solus",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/solus/",
         speed_url: None,
         capability: SourceMode::ProxyAdapter,
     },
@@ -1168,7 +1180,7 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
 ];
 
 pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
-    SourceTemplate { target_code: "solus", os_family: "solus", scope: SourceScope::System, template: "No MirrorProxy server adapter is available yet. Configure a compatible external Solus mirror for this release.", requires_sudo: true },
+    SourceTemplate { target_code: "solus", os_family: "solus", scope: SourceScope::System, template: "sudo eopkg add-repo mirrorproxy {repo_url}polaris/eopkg-index.xml.xz", requires_sudo: true },
     SourceTemplate { target_code: "trisquel", os_family: "debian", scope: SourceScope::System, template: "deb {repo_url} <trisquel-codename> main", requires_sudo: true },
     SourceTemplate { target_code: "linuxlite", os_family: "ubuntu", scope: SourceScope::System, template: "deb {repo_url} <linux-lite-codename> main", requires_sudo: true },
     SourceTemplate { target_code: "ros", os_family: "ubuntu", scope: SourceScope::System, template: "deb {repo_url} <ubuntu-codename> main", requires_sudo: true },
@@ -1479,9 +1491,10 @@ mod tests {
         );
         assert!(cargo_templates[0].template.contains("[source.crates-io]"));
         assert!(templates_for_target("kali").is_empty());
-        assert!(templates_for_target("solus")[0]
-            .template
-            .contains("No MirrorProxy server adapter"));
+        assert_eq!(
+            templates_for_target("solus")[0].template,
+            "sudo eopkg add-repo mirrorproxy {repo_url}polaris/eopkg-index.xml.xz"
+        );
         assert_eq!(
             templates_for_target("ros")[0].template,
             "deb {repo_url} <ubuntu-codename> main"
