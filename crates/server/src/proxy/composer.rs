@@ -189,7 +189,10 @@ mod tests {
     fn filters_host_credentials_and_hop_by_hop_headers() {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("mirror.example"));
-        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
         headers.insert(header::COOKIE, HeaderValue::from_static("session=secret"));
         headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
         headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
