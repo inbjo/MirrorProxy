@@ -102,7 +102,14 @@ docker run -d --name mirrorproxy --restart unless-stopped \
 MIRRORPROXY_DOCKER_BASE_REGISTRY=sina.dev/library ./scripts/docker-build.sh
 ```
 
-执行 `docker login` 后发布 `linux/amd64` 和 `linux/arm64` 多架构 manifest：
+本机首次执行多架构构建时，需要先注册 ARM64 模拟支持（GitHub Actions 会自动
+完成此步骤）。Docker Hub 不可用时可以通过 MirrorProxy 拉取该工具镜像：
+
+```bash
+docker run --privileged --rm sina.dev/tonistiigi/binfmt --install arm64
+```
+
+然后在执行 `docker login` 后发布 `linux/amd64` 和 `linux/arm64` 多架构 manifest：
 
 ```bash
 ./scripts/docker-build.sh --push --image <dockerhub-user>/mirrorproxy

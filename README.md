@@ -105,7 +105,15 @@ MirrorProxy instance:
 MIRRORPROXY_DOCKER_BASE_REGISTRY=sina.dev/library ./scripts/docker-build.sh
 ```
 
-To publish `linux/amd64` and `linux/arm64` manifests after `docker login`:
+For a local multi-platform build, register ARM64 emulation once (GitHub Actions
+does this automatically). The same image can be pulled through MirrorProxy when
+Docker Hub is unavailable:
+
+```bash
+docker run --privileged --rm sina.dev/tonistiigi/binfmt --install arm64
+```
+
+Then publish `linux/amd64` and `linux/arm64` manifests after `docker login`:
 
 ```bash
 ./scripts/docker-build.sh --push --image <dockerhub-user>/mirrorproxy
