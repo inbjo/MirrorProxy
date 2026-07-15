@@ -85,7 +85,7 @@ cat >"${config}" <<EOF
 listen_addr = "127.0.0.1:${port}"
 database_path = "${work}/mirrorproxy.sqlite3"
 public_base_url = "${base}"
-enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "crates", "pypi", "cpan", "rubygems", "maven", "nuget", "cran", "hackage", "julia", "luarocks", "cocoapods", "pub", "anaconda", "texlive", "elpa", "nix", "guix", "flatpak", "homebrew", "os"]
+enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "crates", "pypi", "cpan", "rubygems", "maven", "nuget", "cran", "hackage", "julia", "luarocks", "cocoapods", "pub", "anaconda", "texlive", "rustup", "elpa", "nix", "guix", "flatpak", "homebrew", "os"]
 
 [upstreams]
 github = "https://github.com"
