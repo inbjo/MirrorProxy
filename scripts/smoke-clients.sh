@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 # Runs real public-client protocol checks against one temporary MirrorProxy
 # instance. It deliberately uses isolated homes/caches and never changes the
@@ -35,6 +35,23 @@ print_server_log() {
     printf 'MirrorProxy server log is empty: %s\n' "${server_log}" >&2
   fi
 }
+
+report_failure() {
+  local exit_code=$?
+  local line="${BASH_LINENO[0]}"
+  local command="${BASH_COMMAND}"
+
+  printf 'client smoke failed at line %s (exit %s): %s\n' \
+    "${line}" "${exit_code}" "${command}" >&2
+  print_server_log
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    printf '::error title=Client smoke failed::line %s, exit %s: %s\n' \
+      "${line}" "${exit_code}" "${command}"
+  fi
+  exit "${exit_code}"
+}
+
+trap report_failure ERR
 
 wait_for_server() {
   local deadline=$((SECONDS + startup_timeout))
