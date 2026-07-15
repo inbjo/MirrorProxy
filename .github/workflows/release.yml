@@ -2,8 +2,17 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -139,9 +148,52 @@ jobs:
       - name: Assemble checksums
         run: |
           find release-artifacts -name '*.sha256' -print0 | sort -z | xargs -0 cat > SHA256SUMS
-      - uses: softprops/action-gh-release@v2
+      - name: Move rolling Nightly tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            try {
+              await github.rest.git.updateRef({
+                owner,
+                repo,
+                ref: "tags/nightly",
+                sha: context.sha,
+                force: true,
+              });
+            } catch (error) {
+              if (error.status !== 404 && error.status !== 422) throw error;
+              await github.rest.git.createRef({
+                owner,
+                repo,
+                ref: "refs/tags/nightly",
+                sha: context.sha,
+              });
+            }
+      - name: Publish versioned release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-artifacts/**/*
+            SHA256SUMS
+      - name: Publish rolling Nightly
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: MirrorProxy Nightly
+          body: |
+            Automated rolling build from `main` at `${{ github.sha }}`.
+
+            Assets are replaced after every push to `main` and by the daily scheduled build.
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
           files: |
             release-artifacts/**/*
             SHA256SUMS

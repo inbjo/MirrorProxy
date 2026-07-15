@@ -64,11 +64,12 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - uses: actions/setup-go@v6
+        with:
+          cache: false
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
-          cache: maven
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "8.0.x"

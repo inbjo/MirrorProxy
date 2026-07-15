@@ -40,7 +40,7 @@ test.beforeEach(async ({ page, context }) => {
 test('renders runtime configuration and opens the admin console', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { name: 'MirrorProxy' })).toBeVisible()
+  await expect(page.locator('.brand-mark')).toContainText('MirrorProxy')
   await expect(page.getByText('https://mirror.example', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Admin console' }).click()
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
@@ -63,7 +63,10 @@ test('persists language and theme preferences across a browser reload', async ({
 test('copies a generated proxy command', async ({ page }) => {
   await page.goto('/')
 
-  const copyButton = page.locator('.command button').first()
+  const converter = page.locator('.link-converter').first()
+  await converter.getByRole('textbox').fill('https://github.com/inbjo/MirrorProxy')
+  await expect(converter.getByText('https://mirror.example/https://github.com/inbjo/MirrorProxy', { exact: true })).toBeVisible()
+  const copyButton = converter.getByRole('button')
   await copyButton.click()
   await expect(copyButton).toContainText('Copied')
 })
