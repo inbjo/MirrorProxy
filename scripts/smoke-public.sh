@@ -24,7 +24,7 @@ checks=(
   'rustup|rustup|get|/rustup/dist/channel-rust-stable.toml'
   'cocoapods|cocoapods|get|/cocoapods/all_pods_versions_2_0_0.txt'
   'apt|os|get|/os/debian/dists/stable/Release'
-  'dnf|os|head|/os/fedora/releases'
+  'dnf|os|get|/os/fedora/releases/42/Everything/x86_64/os/repodata/repomd.xml'
   'pacman|os|head|/os/archlinux/core/os/x86_64/core.db'
   'kali|os|get|/os/kali/dists/kali-rolling/Release'
   'rocky|os|get|/os/rocky/9/BaseOS/x86_64/os/repodata/repomd.xml'
