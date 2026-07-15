@@ -1,0 +1,22 @@
+services:
+  mirrorproxy:
+    image: ${MIRRORPROXY_IMAGE:-inbjo/mirrorproxy:latest}
+    container_name: mirrorproxy
+    restart: unless-stopped
+    ports:
+      - "${MIRRORPROXY_PORT:-3000}:3000"
+    environment:
+      MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
+      RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
+    volumes:
+      - mirrorproxy-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  mirrorproxy-data:

@@ -55,6 +55,67 @@ Check health:
 curl http://selfhost.com/healthz
 ```
 
+## Docker Deployment
+
+The server image runs as non-root UID/GID `10001`, listens on port `3000`, and
+stores its SQLite database and optional cache under the `/data` volume.
+
+```bash
+MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com docker compose up -d
+docker compose logs mirrorproxy
+curl http://127.0.0.1:3000/healthz
+```
+
+The first startup log contains the one-time random `admin` password. Keep the
+named `mirrorproxy-data` volume when upgrading. To run without Compose:
+
+```bash
+docker run -d --name mirrorproxy --restart unless-stopped \
+  -p 3000:3000 \
+  -e MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com \
+  -v mirrorproxy-data:/data \
+  inbjo/mirrorproxy:latest
+```
+
+Environment variables such as `MIRRORPROXY_ENABLED_PROXIES`, quota, cache, and
+rate-limit settings work in the container. For a complete TOML configuration,
+mount it read-only and set its path explicitly:
+
+```bash
+docker run -d --name mirrorproxy --restart unless-stopped \
+  -p 3000:3000 \
+  -e MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml \
+  -e MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000 \
+  -e MIRRORPROXY_DB=/data/mirrorproxy.sqlite3 \
+  -v mirrorproxy-data:/data \
+  -v "$PWD/config.toml:/etc/mirrorproxy/config.toml:ro" \
+  inbjo/mirrorproxy:latest
+```
+
+Build the current source as a local `linux/amd64` image:
+
+```bash
+./scripts/docker-build.sh
+```
+
+If Docker Hub is slow or unavailable, route base-image pulls through a
+MirrorProxy instance:
+
+```bash
+MIRRORPROXY_DOCKER_BASE_REGISTRY=sina.dev/library ./scripts/docker-build.sh
+```
+
+To publish `linux/amd64` and `linux/arm64` manifests after `docker login`:
+
+```bash
+./scripts/docker-build.sh --push --image <dockerhub-user>/mirrorproxy
+```
+
+The `Docker` GitHub Actions workflow performs the same multi-platform publish.
+Set repository variable `DOCKERHUB_USERNAME` and repository secret
+`DOCKERHUB_TOKEN`; pushing a `v*` tag publishes the semantic-version and
+`latest` tags, while workflow dispatch supports an explicit version.
+
 ## GitHub Proxy
 
 MirrorProxy accepts supported GitHub absolute URLs under your own domain:
@@ -666,5 +727,21 @@ For Docker/OCI and large release files, keep request buffering disabled in the r
 
 ## Roadmap
 
-- OS mirror source adapters
-- Optional caching, rate limiting, and richer observability
+Version 1.0 already includes the multi-ecosystem and OS repository adapters,
+SQLite-backed administration and traffic accounting, global monthly quota,
+rate limiting, bounded disk caching, native client releases, the embedded web
+console, public full-source smoke coverage, and Docker deployment support.
+
+Planned v1.x work:
+
+- Maintain signed multi-architecture Docker Hub images with SBOM and provenance
+  attestations.
+- Add per-user or per-subdomain traffic ownership and independent quotas.
+- Expand real native-client smoke coverage for the remaining catalog targets,
+  especially Windows, macOS, and less common language ecosystems.
+- Add Prometheus/OpenTelemetry metrics, structured request tracing, and alerting
+  examples without recording credentials.
+- Complete additional package-manager-specific source editing and rollback
+  behavior for the remaining catalog targets.
+- Evaluate high-availability metadata storage while retaining SQLite as the
+  zero-dependency default.

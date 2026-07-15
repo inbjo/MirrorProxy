@@ -54,6 +54,64 @@ http://selfhost.com
 curl http://selfhost.com/healthz
 ```
 
+## Docker 部署
+
+服务端镜像使用非 root 的 UID/GID `10001` 运行，监听 `3000` 端口，并把 SQLite
+数据库和可选缓存统一保存到 `/data` 持久卷。
+
+```bash
+MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com docker compose up -d
+docker compose logs mirrorproxy
+curl http://127.0.0.1:3000/healthz
+```
+
+首次启动日志会输出一次性的随机 `admin` 密码，升级时请保留命名卷
+`mirrorproxy-data`。不使用 Compose 也可以直接启动：
+
+```bash
+docker run -d --name mirrorproxy --restart unless-stopped \
+  -p 3000:3000 \
+  -e MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com \
+  -v mirrorproxy-data:/data \
+  inbjo/mirrorproxy:latest
+```
+
+容器支持 `MIRRORPROXY_ENABLED_PROXIES`、配额、缓存和限流等环境变量。如需完整
+TOML 配置，可只读挂载配置文件并显式指定路径：
+
+```bash
+docker run -d --name mirrorproxy --restart unless-stopped \
+  -p 3000:3000 \
+  -e MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml \
+  -e MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000 \
+  -e MIRRORPROXY_DB=/data/mirrorproxy.sqlite3 \
+  -v mirrorproxy-data:/data \
+  -v "$PWD/config.toml:/etc/mirrorproxy/config.toml:ro" \
+  inbjo/mirrorproxy:latest
+```
+
+从当前源码构建本机 `linux/amd64` 镜像：
+
+```bash
+./scripts/docker-build.sh
+```
+
+如果 Docker Hub 访问缓慢或不可用，可以通过 MirrorProxy 拉取构建基础镜像：
+
+```bash
+MIRRORPROXY_DOCKER_BASE_REGISTRY=sina.dev/library ./scripts/docker-build.sh
+```
+
+执行 `docker login` 后发布 `linux/amd64` 和 `linux/arm64` 多架构 manifest：
+
+```bash
+./scripts/docker-build.sh --push --image <dockerhub-user>/mirrorproxy
+```
+
+GitHub Actions 的 `Docker` 工作流会执行相同的多架构发布。仓库需要设置变量
+`DOCKERHUB_USERNAME` 和机密 `DOCKERHUB_TOKEN`；推送 `v*` tag 会发布语义化版本与
+`latest` 标签，手动触发工作流时也可以指定版本。
+
 ## GitHub 代理
 
 将支持的 GitHub 绝对 URL 放在你的 MirrorProxy 域名后：
@@ -630,5 +688,16 @@ Docker/OCI blob 和 GitHub release 大文件建议关闭反向代理请求缓冲
 
 ## 路线图
 
-- 操作系统镜像源 adapter
-- 可选缓存、限流和更完整的可观测性
+v1.0 已包含多生态与操作系统仓库 adapter、SQLite 管理与流量统计、全站月度配额、
+限流、容量受控的磁盘缓存、原生客户端发布、内嵌 Web 控制台、公网全源 smoke，
+以及 Docker 部署支持。
+
+v1.x 后续计划：
+
+- 持续发布带签名、SBOM 和 provenance 证明的 Docker Hub 多架构镜像。
+- 增加按用户或子域名归属流量及独立配额的能力。
+- 为目录中尚未覆盖的目标补齐真实原生客户端 smoke，重点覆盖 Windows、macOS
+  和较少使用的语言生态。
+- 增加 Prometheus/OpenTelemetry 指标、结构化请求追踪和告警示例，同时避免记录凭据。
+- 为剩余目录目标补齐包管理器专用的本机改源与精确回滚能力。
+- 在保留 SQLite 零依赖默认方案的前提下，评估高可用 metadata 存储。
