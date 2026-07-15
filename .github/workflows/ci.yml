@@ -63,6 +63,8 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Install JavaScript package clients
+        run: npm install --global pnpm@10 yarn@1.22.22
       - uses: actions/setup-go@v6
         with:
           cache: false
