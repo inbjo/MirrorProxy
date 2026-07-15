@@ -34,7 +34,7 @@ pub async fn file(
 
     let clean_path = sanitize_path(&path)?;
     let upstream_path = format!("/{clean_path}");
-    let url = proxy::build_url(
+    let url = upstream_url(
         &config.upstreams.pypi_files,
         &upstream_path,
         request.uri().query(),
@@ -60,7 +60,7 @@ async fn proxy_simple_path(
     } else {
         format!("/{clean_path}")
     };
-    let url = proxy::build_url(&config.upstreams.pypi_simple, &upstream_path, query)?;
+    let url = upstream_url(&config.upstreams.pypi_simple, &upstream_path, query)?;
     let response = state.client.get(url).send().await?;
     let status = response.status();
     let content_type = response
@@ -94,8 +94,16 @@ async fn proxy_simple_path(
         .as_ref()
         .map(|req| req.method().clone())
         .unwrap_or(axum::http::Method::GET);
-    let fallback_url = proxy::build_url(&config.upstreams.pypi_simple, &upstream_path, query)?;
+    let fallback_url = upstream_url(&config.upstreams.pypi_simple, &upstream_path, query)?;
     proxy::forward(&state, method, fallback_url, &headers).await
+}
+
+fn upstream_url(base: &str, path: &str, query: Option<&str>) -> Result<reqwest::Url, ProxyError> {
+    let mut url = reqwest::Url::parse(base).map_err(|_| ProxyError::InvalidUrl)?;
+    let base_path = url.path().trim_end_matches('/');
+    url.set_path(&format!("{base_path}/{}", path.trim_start_matches('/')));
+    url.set_query(query);
+    Ok(url)
 }
 
 fn sanitize_path(path: &str) -> Result<String, ProxyError> {
@@ -133,5 +141,35 @@ mod tests {
         let rewritten = rewrite_file_links(html, "https://mirror.example");
         assert!(rewritten
             .contains(r#"href="https://mirror.example/pypi/files/packages/aa/pkg.whl#sha256=1""#));
+    }
+
+    #[test]
+    fn preserves_simple_upstream_base_path() {
+        assert_eq!(
+            upstream_url("https://pypi.org/simple", "/idna/", Some("format=html"))
+                .unwrap()
+                .as_str(),
+            "https://pypi.org/simple/idna/?format=html"
+        );
+        assert_eq!(
+            upstream_url("https://pypi.org/simple/", "/", None)
+                .unwrap()
+                .as_str(),
+            "https://pypi.org/simple/"
+        );
+    }
+
+    #[test]
+    fn preserves_file_upstream_base_path() {
+        assert_eq!(
+            upstream_url(
+                "https://mirror.example/python-files/",
+                "/packages/aa/pkg.whl",
+                None,
+            )
+            .unwrap()
+            .as_str(),
+            "https://mirror.example/python-files/packages/aa/pkg.whl"
+        );
     }
 }

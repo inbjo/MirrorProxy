@@ -1,4 +1,8 @@
-use axum::{extract::State, http::Uri, response::Response};
+use axum::{
+    extract::State,
+    http::{Method, Uri},
+    response::Response,
+};
 use reqwest::Url;
 
 use crate::{proxy, AppState};
@@ -29,8 +33,24 @@ pub async fn proxy(
         return Err(ProxyError::Disabled("github"));
     }
 
-    let target = target_from_uri(request.uri())?;
-    proxy::forward(&state, request.method().clone(), target, request.headers()).await
+    let (parts, body) = request.into_parts();
+    let target = target_from_uri(&parts.uri)?;
+    if !is_supported_method(&parts.method, &target) {
+        return Err(ProxyError::MethodNotAllowed);
+    }
+
+    if parts.method == Method::POST {
+        proxy::forward_with_body(&state, parts.method, target, &parts.headers, body).await
+    } else {
+        proxy::forward(&state, parts.method, target, &parts.headers).await
+    }
+}
+
+fn is_supported_method(method: &Method, target: &Url) -> bool {
+    matches!(method, &Method::GET | &Method::HEAD)
+        || (method == Method::POST
+            && target.host_str() == Some("github.com")
+            && target.path().ends_with("/git-upload-pack"))
 }
 
 fn target_from_uri(uri: &Uri) -> Result<Url, ProxyError> {
@@ -79,5 +99,20 @@ mod tests {
             target_from_uri(&uri),
             Err(ProxyError::UnsupportedTarget)
         ));
+    }
+
+    #[test]
+    fn allows_only_read_only_git_smart_http_posts() {
+        let upload_pack =
+            Url::parse("https://github.com/rust-lang/cargo.git/git-upload-pack").unwrap();
+        assert!(is_supported_method(&Method::POST, &upload_pack));
+
+        let receive_pack =
+            Url::parse("https://github.com/rust-lang/cargo.git/git-receive-pack").unwrap();
+        assert!(!is_supported_method(&Method::POST, &receive_pack));
+
+        let api = Url::parse("https://api.github.com/repos/rust-lang/cargo").unwrap();
+        assert!(!is_supported_method(&Method::POST, &api));
+        assert!(is_supported_method(&Method::GET, &api));
     }
 }

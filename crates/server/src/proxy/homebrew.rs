@@ -1,5 +1,5 @@
 use super::ProxyError;
-use crate::{proxy, AppState};
+use crate::AppState;
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -50,7 +50,7 @@ pub async fn proxy(
     let base_path = upstream.path().trim_end_matches('/');
     upstream.set_path(&format!("{base_path}/{path}"));
     upstream.set_query(request.uri().query());
-    proxy::forward(
+    super::oci::forward_with_public_auth(
         &state,
         request.method().clone(),
         upstream,

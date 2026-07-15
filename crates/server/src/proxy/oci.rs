@@ -63,7 +63,7 @@ pub async fn proxy(
     .await
 }
 
-async fn forward_with_public_auth(
+pub(super) async fn forward_with_public_auth(
     state: &AppState,
     method: Method,
     url: Url,
@@ -75,12 +75,14 @@ async fn forward_with_public_auth(
 
     let reqwest_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
         .map_err(|_| ProxyError::MethodNotAllowed)?;
-    let mut request = state.client.request(reqwest_method.clone(), url.clone());
-    for (name, value) in incoming_headers {
-        if should_forward_oci_header(name) {
-            request = request.header(name.as_str(), value.as_bytes());
-        }
-    }
+    let config = state.config();
+    let request = super::upstream_request(
+        &state.client,
+        reqwest_method.clone(),
+        url.clone(),
+        incoming_headers,
+        &config,
+    );
 
     let response = request.send().await?;
     if response.status() != reqwest::StatusCode::UNAUTHORIZED {
@@ -97,12 +99,13 @@ async fn forward_with_public_auth(
     };
 
     let token = fetch_bearer_token(&state.client, &challenge).await?;
-    let mut retry = state.client.request(reqwest_method, url);
-    for (name, value) in incoming_headers {
-        if should_forward_oci_header(name) {
-            retry = retry.header(name.as_str(), value.as_bytes());
-        }
-    }
+    let retry = super::upstream_request(
+        &state.client,
+        reqwest_method,
+        url,
+        incoming_headers,
+        &config,
+    );
 
     response_to_axum(retry.bearer_auth(token).send().await?).await
 }
@@ -243,21 +246,6 @@ async fn fetch_bearer_token(
         .and_then(|value| value.as_str())
         .map(ToString::to_string)
         .ok_or(ProxyError::InvalidUrl)
-}
-
-fn should_forward_oci_header(name: &header::HeaderName) -> bool {
-    !matches!(
-        name.as_str().to_ascii_lowercase().as_str(),
-        "host"
-            | "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    )
 }
 
 fn should_forward_oci_response_header(name: &header::HeaderName) -> bool {

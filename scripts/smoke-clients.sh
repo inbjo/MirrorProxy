@@ -99,7 +99,8 @@ cargo run --quiet --package mirrorproxy-server --bin mirrorproxy-server -- \
 pid=$!
 wait_for_server
 
-git ls-remote "${base}/https://github.com/rust-lang/cargo.git" HEAD >/dev/null
+git clone --quiet --depth 1 "${base}/https://github.com/octocat/Hello-World.git" "${work}/git-clone"
+test -f "${work}/git-clone/README"
 npm install --ignore-scripts --no-save --prefix "${work}/npm" --registry "${base}/npm/" is-number@7.0.0 >/dev/null
 mkdir "${work}/yarn"
 (
@@ -112,7 +113,8 @@ mkdir "${work}/pnpm"
   pnpm add --ignore-scripts --registry "${base}/npm/" is-number@7.0.0 >/dev/null
 )
 GOPROXY="${base}/goproxy,direct" GOMODCACHE="${work}/gomodcache" go list -m github.com/gorilla/mux@v1.8.1 >/dev/null
-mkdir -p "${work}/cargo/.cargo"
+mkdir -p "${work}/cargo/.cargo" "${work}/cargo/src"
+touch "${work}/cargo/src/lib.rs"
 cat >"${work}/cargo/Cargo.toml" <<EOF
 [package]
 name = "mirrorproxy-client-smoke"
@@ -127,7 +129,10 @@ replace-with = "mirrorproxy"
 [source.mirrorproxy]
 registry = "sparse+${base}/crates-index/"
 EOF
-CARGO_HOME="${work}/cargo-home" cargo fetch --manifest-path "${work}/cargo/Cargo.toml" >/dev/null
+(
+  cd "${work}/cargo"
+  CARGO_HOME="${work}/cargo-home" cargo fetch >/dev/null
+)
 PIP_CACHE_DIR="${work}/pip-cache" pip download --no-deps --dest "${work}/pip" --index-url "${base}/pypi/simple/" idna==3.10 >/dev/null
 command -v cpanm >/dev/null
 cpanm --mirror "${base}/cpan/" --mirror-only --notest --local-lib-contained "${work}/cpan" Try::Tiny >/dev/null
@@ -180,7 +185,7 @@ if [[ "${MIRRORPROXY_SMOKE_EXTENDED:-0}" == "1" ]]; then
   curl --fail --silent --show-error --output /dev/null "${base}/nix/nix-cache-info"
   curl --fail --silent --show-error --output /dev/null "${base}/guix/nix-cache-info"
   curl --fail --silent --show-error --output /dev/null "${base}/flatpak/summary"
-  curl --fail --silent --show-error --output /dev/null "${base}/homebrew/homebrew/core/curl/manifests/latest"
+  curl --fail --silent --show-error --output /dev/null "${base}/homebrew/curl/tags/list"
   curl --fail --silent --show-error --output /dev/null "${base}/os/debian/dists/stable/Release"
 fi
 

@@ -92,6 +92,31 @@ pub async fn forward(
         return Err(ProxyError::MethodNotAllowed);
     }
 
+    forward_request(state, method, url, incoming_headers, None).await
+}
+
+pub async fn forward_with_body(
+    state: &AppState,
+    method: Method,
+    url: Url,
+    incoming_headers: &HeaderMap,
+    body: Body,
+) -> Result<Response, ProxyError> {
+    if method != Method::POST {
+        return Err(ProxyError::MethodNotAllowed);
+    }
+
+    let body = reqwest::Body::wrap_stream(body.into_data_stream());
+    forward_request(state, method, url, incoming_headers, Some(body)).await
+}
+
+async fn forward_request(
+    state: &AppState,
+    method: Method,
+    url: Url,
+    incoming_headers: &HeaderMap,
+    body: Option<reqwest::Body>,
+) -> Result<Response, ProxyError> {
     let reqwest_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
         .map_err(|_| ProxyError::MethodNotAllowed)?;
     let config = state.config();
@@ -100,13 +125,16 @@ pub async fn forward(
             return Ok(response);
         }
     }
-    let request = upstream_request(
+    let mut request = upstream_request(
         &state.client,
         reqwest_method,
         url.clone(),
         incoming_headers,
         &config,
     );
+    if let Some(body) = body {
+        request = request.body(body);
+    }
     let upstream = request.send().await?;
     let status = upstream.status();
     let headers = upstream.headers().clone();
