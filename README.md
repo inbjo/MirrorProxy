@@ -152,7 +152,7 @@ Configure Maven's user settings to mirror Central through MirrorProxy:
 Save this under `~/.m2/settings.xml`, or let the CLI write it with rollback protection:
 
 ```bash
-mirrorproxy sources set maven --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy set maven --mirror mirrorproxy --base-url http://selfhost.com
 mvn dependency:resolve
 ```
 
@@ -171,7 +171,7 @@ Configure RubyGems to use MirrorProxy as its source:
 Save this under `~/.gemrc`, or let the CLI write it with rollback protection:
 
 ```bash
-mirrorproxy sources set rubygems --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy set rubygems --mirror mirrorproxy --base-url http://selfhost.com
 gem install rake
 ```
 
@@ -194,7 +194,7 @@ Configure NuGet to use MirrorProxy as a v3 package source:
 Save it to `%APPDATA%\NuGet\NuGet.Config` on Windows or `~/.nuget/NuGet/NuGet.Config` on Linux/macOS. The CLI writes the same file with rollback protection:
 
 ```bash
-mirrorproxy sources set nuget --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy set nuget --mirror mirrorproxy --base-url http://selfhost.com
 dotnet restore
 ```
 
@@ -211,7 +211,7 @@ cpanm --mirror http://selfhost.com/cpan/ --mirror-only Moo
 The CLI can save a rollback-protected CPAN mirror list to `~/.cpan/CPAN/MyConfig.pm`:
 
 ```bash
-mirrorproxy sources set cpan --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy set cpan --mirror mirrorproxy --base-url http://selfhost.com
 ```
 
 The adapter streams CPAN indexes and distributions such as `modules/02packages.details.txt.gz` and `authors/id/...` while rejecting traversal paths.
@@ -225,7 +225,7 @@ options(repos = c(CRAN = "http://selfhost.com/cran/"))
 install.packages("digest")
 ```
 
-`mirrorproxy sources set cran --mirror mirrorproxy --base-url http://selfhost.com` writes a rollback-protected `~/.Rprofile`. Source indexes, archives, and platform binary paths are streamed through `/cran`.
+`mirrorproxy set cran --mirror mirrorproxy --base-url http://selfhost.com` writes a rollback-protected `~/.Rprofile`. Source indexes, archives, and platform binary paths are streamed through `/cran`.
 
 ## Hackage Proxy
 
@@ -237,7 +237,7 @@ repository hackage.haskell.org
   secure: True
 ```
 
-`mirrorproxy sources set hackage --mirror mirrorproxy --base-url http://selfhost.com` writes and can restore `~/.cabal/config`. The adapter streams the package index and package tarballs while rejecting traversal paths.
+`mirrorproxy set hackage --mirror mirrorproxy --base-url http://selfhost.com` writes and can restore `~/.cabal/config`. The adapter streams the package index and package tarballs while rejecting traversal paths.
 
 ## LuaRocks Proxy
 
@@ -264,7 +264,7 @@ Configure the Clojure CLI user `deps.edn` to route Clojars through MirrorProxy:
 {:mvn/repos {"clojars" {:url "http://selfhost.com/clojars/"}}}
 ```
 
-`mirrorproxy sources set clojars --mirror mirrorproxy --base-url http://selfhost.com` writes and can restore `~/.clojure/deps.edn`. The adapter streams Clojars POMs, metadata, and JARs with normalized repository paths only.
+`mirrorproxy set clojars --mirror mirrorproxy --base-url http://selfhost.com` writes and can restore `~/.clojure/deps.edn`. The adapter streams Clojars POMs, metadata, and JARs with normalized repository paths only.
 
 ## Pub / Flutter Proxy
 
@@ -397,13 +397,12 @@ is published.
 web console. GitHub Releases provide Windows, macOS, and Linux builds; the
 independent `mirrorproxy-server` artifact is released for Linux.
 
-Source commands can be invoked chsrc-style as top-level `set`, `get`, `reset`,
-`list`, and `mirrors` commands. The fully qualified `sources` form remains
-supported; these two commands are equivalent:
+Source commands use the chsrc-style top-level `set`, `get`, `reset`, `list`,
+and `mirrors` forms. The legacy `sources` namespace remains accepted for
+backward compatibility.
 
 ```bash
 mirrorproxy set bun --mirror mirrorproxy --base-url https://sina.dev --scope user
-mirrorproxy sources set bun --mirror mirrorproxy --base-url https://sina.dev --scope user
 ```
 
 `set` writes user-level npm, pip, Cargo, Go, or Composer configuration
@@ -428,19 +427,19 @@ supplied root). APT requires a release codename; system writes normally require
 root access and are enabled only on Linux hosts.
 
 ```bash
-mirrorproxy sources set apt --mirror tuna --scope system --distribution jammy
-mirrorproxy sources set apt --mirror mirrorproxy --base-url https://mirror.example --scope system --distribution debian/bookworm
-mirrorproxy sources reset apt --scope system
-mirrorproxy sources set alpine --mirror mirrorproxy --base-url https://mirror.example --scope system --distribution v3.21
-mirrorproxy sources reset alpine --scope system
-mirrorproxy sources set xbps --mirror mirrorproxy --base-url https://mirror.example --scope system
-mirrorproxy sources reset xbps --scope system
-mirrorproxy sources set zypper --mirror mirrorproxy --base-url https://mirror.example --scope system --distribution distribution/leap/15.6
-mirrorproxy sources reset zypper --scope system
-mirrorproxy sources set gentoo --mirror mirrorproxy --base-url https://mirror.example --scope system
-mirrorproxy sources reset gentoo --scope system
-mirrorproxy sources set docker --mirror mirrorproxy --base-url https://mirror.example --scope system
-mirrorproxy sources reset docker --scope system
+mirrorproxy set apt --mirror tuna --scope system --distribution jammy
+mirrorproxy set apt --mirror mirrorproxy --base-url https://mirror.example --scope system --distribution debian/bookworm
+mirrorproxy reset apt --scope system
+mirrorproxy set alpine --mirror mirrorproxy --base-url https://mirror.example --scope system --distribution v3.21
+mirrorproxy reset alpine --scope system
+mirrorproxy set xbps --mirror mirrorproxy --base-url https://mirror.example --scope system
+mirrorproxy reset xbps --scope system
+mirrorproxy set zypper --mirror mirrorproxy --base-url https://mirror.example --scope system --distribution distribution/leap/15.6
+mirrorproxy reset zypper --scope system
+mirrorproxy set gentoo --mirror mirrorproxy --base-url https://mirror.example --scope system
+mirrorproxy reset gentoo --scope system
+mirrorproxy set docker --mirror mirrorproxy --base-url https://mirror.example --scope system
+mirrorproxy reset docker --scope system
 ```
 
 Docker writes `/etc/docker/daemon.json` with `registry-mirrors`. It never
