@@ -186,6 +186,7 @@ mkdir "${work}/composer"
 (
   cd "${work}/composer"
   COMPOSER_HOME="${work}/composer-home" composer init --no-interaction --name mirrorproxy/client-smoke >/dev/null
+  COMPOSER_HOME="${work}/composer-home" composer config secure-http false
   COMPOSER_HOME="${work}/composer-home" composer config repositories.packagist composer "${base}/composer/"
   COMPOSER_HOME="${work}/composer-home" composer require monolog/monolog:^3 --no-interaction --no-progress >/dev/null
 )
