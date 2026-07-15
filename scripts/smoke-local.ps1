@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $targetDir = Join-Path $root "target\smoke"
-$binary = Join-Path $targetDir "debug\mirrorproxy.exe"
+$binary = Join-Path $targetDir "debug\mirrorproxy-server.exe"
 $config = Join-Path ([System.IO.Path]::GetTempPath()) "mirrorproxy-smoke-$Port.toml"
 $database = Join-Path ([System.IO.Path]::GetTempPath()) "mirrorproxy-smoke-$Port.sqlite3"
 $databaseToml = $database.Replace('\', '\\')
@@ -46,7 +46,7 @@ function Wait-ForHealth {
 
 try {
     Push-Location $root
-    cargo build --target-dir $targetDir
+    cargo build --target-dir $targetDir --package mirrorproxy-server --bin mirrorproxy-server
     if ($LASTEXITCODE -ne 0) {
         throw "cargo build failed with exit code $LASTEXITCODE"
     }

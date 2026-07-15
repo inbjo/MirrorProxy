@@ -1144,7 +1144,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "mirrorproxy"
+name = "mirrorproxy-catalog"
+version = "0.1.0"
+
+[[package]]
+name = "mirrorproxy-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mirrorproxy-catalog",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "mirrorproxy-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1158,6 +1174,7 @@ dependencies = [
  "http",
  "include_dir",
  "mime_guess",
+ "mirrorproxy-catalog",
  "rand 0.8.6",
  "reqwest",
  "serde",

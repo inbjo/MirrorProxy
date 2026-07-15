@@ -51,7 +51,7 @@ describe('App preferences', () => {
     }))
     render(<App />)
     fireEvent.click(await screen.findByText('Solus'))
-    expect(await screen.findByText('mirrorproxy sources get solus')).toBeTruthy()
+    expect(await screen.findByText('mirrorproxy get solus')).toBeTruthy()
     fireEvent.click(screen.getAllByText('Admin console').at(-1)!)
     fireEvent.change(screen.getAllByLabelText('Administrator password').at(-1)!, { target: { value: 'password' } })
     fireEvent.click(screen.getAllByText('Sign in').at(-1)!)

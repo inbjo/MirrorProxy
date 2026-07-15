@@ -1,9 +1,8 @@
 [workspace]
-members = ["crates/server"]
+members = ["crates/catalog", "crates/client", "crates/server"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/mirrorproxy/mirrorproxy"
-

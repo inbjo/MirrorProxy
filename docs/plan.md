@@ -10,7 +10,7 @@
 
 当前仓库已经不是空目录，已有一个可运行的基础版本：
 
-- Rust workspace 已存在，服务端在 `crates/server`，前端在 `web`。
+- Rust workspace 已存在：服务端在 `crates/server`，独立改源客户端在 `crates/client`，共享 catalog 在 `crates/catalog`，前端在 `web`。
 - 已实现并注册的代理类型：GitHub、Composer/Packagist、Docker/OCI、npm、Go module、Cargo sparse registry、PyPI Simple API、Maven、RubyGems、NuGet v3、CPAN、CRAN、Hackage、Clojars、Pub/Flutter、Anaconda/Conda。
 - 已有运行时配置读取与持久化：`config.example.toml`、环境变量覆盖、SQLite 运行时配置、`/api/public-config` 公开摘要与受保护的管理配置 API。
 - 已有 Web 控制台：React + Vite 内嵌到 Rust 二进制，支持说明页、源目录、登录、代理/上游/配额配置、CLI 命令生成、统计与审计日志。
@@ -44,6 +44,8 @@
 
 建议结构：
 - `crates/server`：Rust 服务主程序。
+- `crates/client`：不依赖服务端运行时的跨平台改源客户端。
+- `crates/catalog`：服务端与客户端共享的镜像源静态目录。
 - `web`：React + Vite 8 + Tailwind 前端。
 - `.github/workflows`：CI 与 release 构建。
 - `README.md`、`README_CN.md`、`build.sh`、`config.example.toml`、`LICENSE`。
@@ -322,13 +324,13 @@
 ### 12. CI、发布与文档
 
 目标：
-- GitHub Actions 自动完成测试、构建、Linux release artifact。
+- GitHub Actions 自动完成测试与构建，发布 Windows、macOS、Linux 客户端以及 Linux 服务端 artifact。
 - 提供静态编译 `build.sh`。
 - 提供完整英文 README 和中文 README_CN。
 
 GitHub Actions：
-- PR/Push：fmt、clippy、test、frontend build。
-- Release：Linux x86_64 musl 静态二进制、Linux arm64。
+- PR/Push：fmt、clippy、test、frontend build，并在 Linux、Windows、macOS 原生测试客户端。
+- Release：Windows x86_64、macOS x86_64/arm64、Linux x86_64/arm64 客户端；Linux x86_64 musl/arm64 服务端。
 - 生成 checksums。
 - 上传 artifact。
 
@@ -408,13 +410,17 @@ MirrorProxy 需要把这些能力拆成三层，而不是直接把每个 chsrc r
 ### 14. CLI 改源命令
 
 目标：
-- 在现有二进制上增加 CLI 子命令，支持类似 chsrc 的 `list/get/set/reset` 工作流。
+- 提供独立的 `mirrorproxy` 客户端二进制，支持类似 chsrc 的 `list/get/set/reset` 工作流。
 - CLI 既能修改本机源地址，也能把源地址改为当前 MirrorProxy 服务地址。
 
 建议命令：
 
 ```bash
-mirrorproxy serve --config config.toml
+mirrorproxy-server --config config.toml
+mirrorproxy list
+mirrorproxy get npm
+mirrorproxy set npm --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy reset npm --scope user
 mirrorproxy sources list
 mirrorproxy sources list --category lang
 mirrorproxy sources mirrors
@@ -422,18 +428,19 @@ mirrorproxy sources get npm
 mirrorproxy sources set npm --mirror mirrorproxy --base-url http://127.0.0.1:3000
 mirrorproxy sources set pip --mirror tuna --scope user
 mirrorproxy sources reset npm --scope user
-mirrorproxy config get
-mirrorproxy config set public_base_url http://127.0.0.1:3000
+mirrorproxy-server config get
+mirrorproxy-server config set public_base_url http://127.0.0.1:3000
 ```
 
 实现要求：
 
-- `serve` 保持当前服务启动行为。
+- 服务启动与服务配置命令只属于 `mirrorproxy-server`，改源命令只属于 `mirrorproxy`。
 - `sources list` 使用内置 catalog 或 SQLite catalog，不依赖启动 Web 服务。
+- `list/get/set/reset/mirrors` 可省略 `sources` 命名空间，完整写法继续兼容。
 - `set/reset` 需要分 target 实现，先覆盖 npm、pip、cargo、go、composer、docker、apt、yum/dnf、pacman。
 - 默认写用户级配置；需要系统级写入时必须显式 `--scope system`，并清楚提示需要权限。
 - 写配置前备份原文件，备份记录写入 SQLite 或本地状态文件，便于 rollback。
-- v1 仅支持 Linux；其他平台不在实现或发布范围内。
+- 用户级改源客户端支持 Windows、macOS、Linux；Linux 专属的 APT、DNF、pacman 等系统级写入在其他平台明确拒绝。
 
 验收标准：
 

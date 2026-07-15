@@ -557,8 +557,8 @@ function SourceConfigModal({ target, baseUrl, catalog, labels, copied, onCopy, o
   const source = catalog.sources.find((item) => item.target_code === target.code && item.provider_code === 'mirrorproxy')
   const template = catalog.templates.find((item) => item.target_code === target.code)
   const proxyUrl = source ? `${baseUrl}${source.repo_url.startsWith('/') ? source.repo_url : `/${source.repo_url}`}` : ''
-  const mirrorproxyCommand = `mirrorproxy sources set ${target.code} --mirror mirrorproxy --base-url ${baseUrl} --scope ${target.default_scope}`
-  const manualCommand = source ? sourceManualCommand(target.code, proxyUrl, template?.template) : `mirrorproxy sources get ${target.code}`
+  const mirrorproxyCommand = `mirrorproxy set ${target.code} --mirror mirrorproxy --base-url ${baseUrl} --scope ${target.default_scope}`
+  const manualCommand = source ? sourceManualCommand(target.code, proxyUrl, template?.template) : `mirrorproxy get ${target.code}`
 
   return <div className="config-modal-backdrop" role="presentation" onMouseDown={onClose}>
     <section className="config-modal" role="dialog" aria-modal="true" aria-label={`${target.name} ${labels.sourceCatalogHeading}`} onMouseDown={(event) => event.stopPropagation()}>
@@ -599,7 +599,7 @@ export function sourceManualCommand(targetCode: string, repoUrl: string, templat
     gentoo: `printf '\\n# MirrorProxy\\nGENTOO_MIRRORS="${base}"\\n' | sudo tee -a /etc/portage/make.conf >/dev/null\nsudo emerge --sync`,
     zypper: `sudo zypper ar -f '${base}/distribution/leap/15.6/repo/oss/' mirrorproxy-oss\nsudo zypper refresh`,
   }
-  return commands[targetCode] ?? template?.replaceAll('{repo_url}', repoUrl) ?? `mirrorproxy sources get ${targetCode}`
+  return commands[targetCode] ?? template?.replaceAll('{repo_url}', repoUrl) ?? `mirrorproxy get ${targetCode}`
 }
 
 const byteLabel = (bytes: number | null) => {
@@ -780,8 +780,8 @@ function SourceCommandGenerator({ catalog, baseUrl, text }: { catalog: SourceCat
   const selected = sources.find((source) => source.provider_code === mirrorCode) ?? sources[0]
   const activeMirror = selected?.provider_code ?? mirrorCode
   const command = selected
-    ? `mirrorproxy sources set ${target.code} --mirror ${activeMirror}${activeMirror === 'mirrorproxy' ? ` --base-url ${baseUrl.replace(/\/$/, '')}` : ''} --scope ${scope}${target?.code === 'apt' && scope === 'system' ? ` --distribution ${distribution}` : ''}`
-    : `mirrorproxy sources get ${target?.code ?? targetCode}`
+    ? `mirrorproxy set ${target.code} --mirror ${activeMirror}${activeMirror === 'mirrorproxy' ? ` --base-url ${baseUrl.replace(/\/$/, '')}` : ''} --scope ${scope}${target?.code === 'apt' && scope === 'system' ? ` --distribution ${distribution}` : ''}`
+    : `mirrorproxy get ${target?.code ?? targetCode}`
   const executable = scope === 'user'
     ? ['npm', 'pip', 'cargo', 'go', 'maven', 'rubygems', 'nuget', 'cpan', 'cran', 'hackage', 'clojars', 'composer', 'pdm', 'uv', 'bun', 'anaconda'].includes(target?.code ?? '')
     : ['apt', 'dnf', 'pacman', 'docker'].includes(target?.code ?? '')

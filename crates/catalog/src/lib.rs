@@ -1205,7 +1205,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         template: "npm config set registry {repo_url}",
         requires_sudo: false,
     },
-    SourceTemplate { target_code: "bun", os_family: "linux", scope: SourceScope::User, template: "[install]\nregistry = \"{repo_url}\"", requires_sudo: false },
+    SourceTemplate { target_code: "bun", os_family: "any", scope: SourceScope::User, template: "[install]\nregistry = \"{repo_url}\"", requires_sudo: false },
     SourceTemplate {
         target_code: "pip",
         os_family: "any",
@@ -1213,8 +1213,8 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         template: "pip config set global.index-url {repo_url}",
         requires_sudo: false,
     },
-    SourceTemplate { target_code: "pdm", os_family: "linux", scope: SourceScope::User, template: "pdm config pypi.url {repo_url}", requires_sudo: false },
-    SourceTemplate { target_code: "uv", os_family: "linux", scope: SourceScope::User, template: "UV_DEFAULT_INDEX={repo_url} uv pip install <package>", requires_sudo: false },
+    SourceTemplate { target_code: "pdm", os_family: "any", scope: SourceScope::User, template: "pdm config pypi.url {repo_url}", requires_sudo: false },
+    SourceTemplate { target_code: "uv", os_family: "any", scope: SourceScope::User, template: "UV_DEFAULT_INDEX={repo_url} uv pip install <package>", requires_sudo: false },
     SourceTemplate { target_code: "julia", os_family: "linux", scope: SourceScope::User, template: "export JULIA_PKG_SERVER={repo_url}", requires_sudo: false },
     SourceTemplate { target_code: "poetry", os_family: "linux", scope: SourceScope::User, template: "poetry source add --priority=primary mirrorproxy {repo_url}", requires_sudo: false },
     SourceTemplate {

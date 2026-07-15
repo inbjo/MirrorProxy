@@ -37,6 +37,22 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace
 
+  client-native:
+    name: Client tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run native client tests
+        run: cargo test --locked -p mirrorproxy-cli
+
   client-smoke:
     runs-on: ubuntu-latest
     steps:

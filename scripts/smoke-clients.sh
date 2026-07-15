@@ -48,7 +48,8 @@ luarocks = "https://luarocks.org"
 EOF
 
 cd "${root}"
-cargo run --quiet -- --config "${config}" >"${work}/server.log" 2>&1 &
+cargo run --quiet --package mirrorproxy-server --bin mirrorproxy-server -- \
+  --config "${config}" >"${work}/server.log" 2>&1 &
 pid=$!
 for _ in {1..40}; do
   curl --fail --silent "${base}/healthz" >/dev/null && break

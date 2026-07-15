@@ -1,6 +1,6 @@
 # MirrorProxy
 
-MirrorProxy is a self-hosted mirror proxy platform written in Rust. The current working slice supports GitHub absolute URL proxying, Composer/Packagist metadata proxying, public Docker/OCI registry pull-through routing, npm registry proxying, Go module proxying, Maven Central proxying, RubyGems proxying, NuGet v3 proxying, CPAN proxying, Cargo sparse registry proxying, and PyPI Simple API proxying, with a React + Vite + Tailwind web console embedded into the Rust binary.
+MirrorProxy is a self-hosted mirror proxy platform written in Rust. The `mirrorproxy-server` service and the `mirrorproxy` source-management client are independent binaries. The server embeds the React + Vite + Tailwind web console; the standalone client runs on Windows, macOS, and Linux.
 
 The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go modules, operating system mirrors, and other ecosystems can be added behind the same proxy core.
 
@@ -40,7 +40,7 @@ The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go mod
 ## Quick Start
 
 ```bash
-cargo run -- --config config.example.toml
+cargo run -p mirrorproxy-server --bin mirrorproxy-server -- --config config.example.toml
 ```
 
 Open:
@@ -191,7 +191,7 @@ Configure NuGet to use MirrorProxy as a v3 package source:
 </configuration>
 ```
 
-Save it to `%APPDATA%\NuGet\NuGet.Config` on Windows or `~/.config/NuGet/NuGet.Config` on Linux/macOS. The CLI writes the same file with rollback protection:
+Save it to `%APPDATA%\NuGet\NuGet.Config` on Windows or `~/.nuget/NuGet/NuGet.Config` on Linux/macOS. The CLI writes the same file with rollback protection:
 
 ```bash
 mirrorproxy sources set nuget --mirror mirrorproxy --base-url http://selfhost.com
@@ -344,32 +344,46 @@ creates a sibling `.bak` backup before atomically replacing the file; use
 `--dry-run` to inspect the change first.
 
 ```bash
-mirrorproxy --config ./config.toml config get public_base_url
-mirrorproxy --config ./config.toml config set public_base_url https://mirror.example
-mirrorproxy --config ./config.toml config set quota.monthly_gb 100 --dry-run
+mirrorproxy-server --config ./config.toml config get public_base_url
+mirrorproxy-server --config ./config.toml config set public_base_url https://mirror.example
+mirrorproxy-server --config ./config.toml config set quota.monthly_gb 100 --dry-run
 ```
 
 ## Local Source CLI
 
-`sources set` writes user-level npm, pip, Cargo, Go, or Composer configuration
+`mirrorproxy` is a standalone client without Axum, the database, or the embedded
+web console. GitHub Releases provide Windows, macOS, and Linux builds; the
+independent `mirrorproxy-server` artifact is released for Linux.
+
+Source commands can be invoked chsrc-style as top-level `set`, `get`, `reset`,
+`list`, and `mirrors` commands. The fully qualified `sources` form remains
+supported; these two commands are equivalent:
+
+```bash
+mirrorproxy set bun --mirror mirrorproxy --base-url https://sina.dev --scope user
+mirrorproxy sources set bun --mirror mirrorproxy --base-url https://sina.dev --scope user
+```
+
+`set` writes user-level npm, pip, Cargo, Go, or Composer configuration
 without invoking the package-manager executable. Before its first change it
-records the complete previous file under `~/.local/state/mirrorproxy/sources/`;
-`sources reset` restores that exact file. A non-empty configuration is never
+records the complete previous file in the platform-native user state directory
+(`~/.local/state/mirrorproxy/sources/` by default on Linux); `reset` restores
+that exact file. A non-empty configuration is never
 replaced unless `--force` is explicit, and reset similarly refuses a file that
 was changed after the command.
 
 ```bash
-mirrorproxy sources set npm --mirror mirrorproxy --base-url http://selfhost.com
-mirrorproxy sources set cargo --mirror mirrorproxy --base-url http://selfhost.com
-mirrorproxy sources reset npm
+mirrorproxy set npm --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy set cargo --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy reset npm
 ```
 
-Use `--config-root /tmp/mirrorproxy-home` for an isolated home directory in
+Use `--config-root /tmp/mirrorproxy-config` for an isolated configuration root in
 automation or tests. APT, DNF/YUM, pacman, and Docker additionally support
 explicit `--scope system`: MirrorProxy only manages the relevant configuration
 file and keeps a rollback record under `/var/lib/mirrorproxy/sources/` (or the
 supplied root). APT requires a release codename; system writes normally require
-root access.
+root access and are enabled only on Linux hosts.
 
 ```bash
 mirrorproxy sources set apt --mirror tuna --scope system --distribution jammy
@@ -534,7 +548,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test
 ```
 
-GitHub Actions runs formatting, clippy, Rust tests, the frontend production build, and browser end-to-end tests on pushes and pull requests. Tagging `v*` builds Linux musl/ARM64 artifacts and publishes a GitHub release with per-artifact checksums and `SHA256SUMS`.
+GitHub Actions runs formatting, clippy, Rust tests, the frontend production build, browser end-to-end tests, and native client tests on Linux, Windows, and macOS. Tagging `v*` builds three-platform client artifacts plus Linux server artifacts and publishes a GitHub release with per-artifact checksums and `SHA256SUMS`.
 
 For a local real-client protocol check (Git, npm/yarn/pnpm, Go, Cargo, pip, CPAN cpanm, RubyGems, Maven, NuGet, CRAN, Cabal/Hackage, and Composer), run:
 
@@ -552,7 +566,7 @@ On Linux:
 ./build.sh
 ```
 
-The script builds the web console first, then builds a `x86_64-unknown-linux-musl` release binary.
+The script builds the web console first, then builds `mirrorproxy-server` and `mirrorproxy` release binaries for `x86_64-unknown-linux-musl`.
 Install `musl-tools` first so `musl-gcc` is available.
 
 ## Reverse Proxy Deployment
