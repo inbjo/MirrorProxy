@@ -330,6 +330,43 @@ mirrorproxy-server --config ./config.toml config set public_base_url https://mir
 mirrorproxy-server --config ./config.toml config set quota.monthly_gb 100 --dry-run
 ```
 
+## 一键安装客户端
+
+Linux 和 macOS 共用同一份安装脚本。脚本会自动识别操作系统与 CPU 架构，从
+GitHub 最新稳定版 Release 下载对应客户端，校验 SHA-256 后安装到
+`/usr/local/bin`；仅在目录不可写时调用 `sudo`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh | sh
+```
+
+也可以通过 MirrorProxy 同时加速安装脚本和稳定版客户端资产：
+
+```bash
+curl -fsSL https://sina.dev/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh | sh -s -- --mirror https://sina.dev
+```
+
+Windows 使用独立 PowerShell 安装器。Windows 默认可能阻止远程脚本，先仅为
+当前 PowerShell 进程允许脚本执行，再运行安装命令：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+irm https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
+```
+
+Windows 加速安装：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+$env:MIRRORPROXY_DOWNLOAD_MIRROR='https://sina.dev'
+irm https://sina.dev/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
+```
+
+PowerShell 安装器会把 `mirrorproxy.exe` 放到当前用户的本地程序目录，并加入用户
+`PATH`。两份脚本都支持通过 `MIRRORPROXY_VERSION` 指定版本、通过
+`MIRRORPROXY_INSTALL_DIR` 修改安装目录。`latest` 只选择稳定版本，不会选择滚动的
+`nightly` 预发布版本；仓库发布第一个 `v*` tag 后该地址才会可用。
+
 ## 本机改源 CLI
 
 `mirrorproxy` 是不包含 Axum、数据库和 Web 控制台的独立客户端。GitHub Release

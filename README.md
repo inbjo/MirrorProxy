@@ -349,6 +349,48 @@ mirrorproxy-server --config ./config.toml config set public_base_url https://mir
 mirrorproxy-server --config ./config.toml config set quota.monthly_gb 100 --dry-run
 ```
 
+## Install the Client
+
+Linux and macOS share one installer. It detects the operating system and CPU
+architecture, downloads the matching asset from the latest stable GitHub
+Release, verifies its SHA-256 checksum, and installs `mirrorproxy` under
+`/usr/local/bin` (using `sudo` only when required):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh | sh
+```
+
+To accelerate both the installer and release asset through a MirrorProxy
+instance, pass `--mirror`:
+
+```bash
+curl -fsSL https://sina.dev/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh | sh -s -- --mirror https://sina.dev
+```
+
+Windows uses a separate PowerShell installer. Windows may block remote scripts
+by default, so allow them for the current PowerShell process only, then run the
+installer:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+irm https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
+```
+
+Accelerated Windows installation:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+$env:MIRRORPROXY_DOWNLOAD_MIRROR='https://sina.dev'
+irm https://sina.dev/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
+```
+
+The PowerShell installer places `mirrorproxy.exe` under the current user's
+local programs directory and adds it to the user `PATH`. Both installers accept
+`MIRRORPROXY_VERSION` for a specific tag and `MIRRORPROXY_INSTALL_DIR` for a
+custom location. The `latest` route intentionally selects a stable release, not
+the rolling `nightly` prerelease; it becomes available after the first `v*` tag
+is published.
+
 ## Local Source CLI
 
 `mirrorproxy` is a standalone client without Axum, the database, or the embedded

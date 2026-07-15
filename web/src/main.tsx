@@ -8,6 +8,7 @@ import {
   Code2,
   Container,
   Database,
+  Download,
   Github,
   Languages,
   Moon,
@@ -207,6 +208,17 @@ const messages = {
     faq: 'Notes',
     faqText: 'Only configured upstreams are proxied. Arbitrary open proxy targets are rejected by default.',
     console: 'Admin console',
+    installClient: 'Install the CLI',
+    installClientDesc: 'Install the latest stable MirrorProxy client. Downloads are checksum-verified and can be accelerated through this MirrorProxy instance.',
+    stableRelease: 'LATEST STABLE RELEASE',
+    unixInstall: 'Linux / macOS',
+    unixInstallHint: 'One POSIX shell installer detects the operating system and CPU architecture automatically.',
+    windowsInstall: 'Windows PowerShell',
+    windowsInstallHint: 'Windows uses a separate PowerShell installer and adds the client to your user PATH.',
+    windowsPolicy: 'Allow remote scripts for this PowerShell session',
+    windowsPolicyHint: 'Windows may block remote scripts by default. This Process-scoped setting applies only to the current PowerShell window.',
+    viewReleases: 'View stable releases',
+    copyright: 'MirrorProxy on GitHub',
   },
   zh: {
     title: 'MirrorProxy',
@@ -278,6 +290,17 @@ const messages = {
     faq: '说明',
     faqText: '默认只代理配置好的上游，任意开放代理目标会被拒绝。',
     console: '管理控制台',
+    installClient: '一键安装 CLI',
+    installClientDesc: '自动安装最新稳定版 MirrorProxy 客户端，下载后校验 SHA-256，并可通过当前 MirrorProxy 实例加速。',
+    stableRelease: '最新稳定版本',
+    unixInstall: 'Linux / macOS',
+    unixInstallHint: '共用一份 POSIX shell 安装器，自动识别操作系统和 CPU 架构。',
+    windowsInstall: 'Windows PowerShell',
+    windowsInstallHint: 'Windows 使用独立 PowerShell 安装器，并自动把客户端目录加入用户 PATH。',
+    windowsPolicy: '仅为当前 PowerShell 窗口允许远程脚本',
+    windowsPolicyHint: 'Windows 默认可能阻止远程脚本；Process 作用域只对当前 PowerShell 窗口生效。',
+    viewReleases: '查看稳定版本',
+    copyright: 'MirrorProxy GitHub 仓库',
   },
 } satisfies Record<Locale, Record<string, string>>
 
@@ -372,6 +395,11 @@ export function App() {
       {adminVisible ? <AdminConsole locale={locale} catalog={catalog} onClose={() => setAdminVisible(false)} /> : null}
 
       <AccelerationWorkbench baseUrl={baseUrl} config={config} catalog={catalog} labels={t} onCopy={copyCommand} copied={copied} />
+
+      <footer className="site-footer">
+        <span>© {new Date().getFullYear()} MirrorProxy</span>
+        <a href="https://github.com/inbjo/MirrorProxy" target="_blank" rel="noreferrer"><Github size={15} /> {t.copyright}</a>
+      </footer>
 
       {false && <div className="legacy-home">
       <section className="status-strip">
@@ -534,6 +562,7 @@ function AccelerationWorkbench({ baseUrl, config, catalog, labels, onCopy, copie
       <LinkConverter title={labels.quickGithubTitle} icon={<Github size={19} />} hint={labels.quickGithubHint} value={githubInput} onChange={setGithubInput} output={githubLink} outputLabel={labels.proxyLink} placeholder="https://github.com/owner/repo/releases/download/..." copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-github'} onCopy={() => githubLink && onCopy('quick-github', githubLink)} />
       <LinkConverter title={labels.quickDockerTitle} icon={<Container size={19} />} hint={labels.quickDockerHint} value={dockerInput} onChange={setDockerInput} output={dockerCommand} outputLabel={labels.pullCommand} placeholder="ghcr.io/owner/image:latest" copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-docker'} onCopy={() => dockerCommand && onCopy('quick-docker', dockerCommand)} />
     </div>
+    <InstallClientPanel baseUrl={baseUrl} labels={labels} copied={copied} onCopy={onCopy} />
     {catalog ? <div className="source-workbench">
       <div className="source-workbench-head"><div><span className="eyebrow">SOURCE CATALOG</span><h2>{labels.sourceCatalogHeading}</h2><p>{labels.sourceCatalogHint}</p></div><code>{baseUrl}</code></div>
       <div className="source-toolbar">
@@ -547,6 +576,37 @@ function AccelerationWorkbench({ baseUrl, config, catalog, labels, onCopy, copie
     </div> : null}
     {selectedTarget && catalog ? <SourceConfigModal target={selectedTarget} baseUrl={baseUrl} catalog={catalog} labels={labels} copied={copied} onCopy={onCopy} onClose={() => setSelectedTarget(null)} /> : null}
   </section>
+}
+
+function InstallClientPanel({ baseUrl, labels, copied, onCopy }: { baseUrl: string; labels: Record<string, string>; copied: string | null; onCopy: (id: string, value: string) => void }) {
+  const rawBase = `${baseUrl}/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts`
+  const unixCommand = `curl -fsSL ${rawBase}/install.sh | sh -s -- --mirror ${baseUrl}`
+  const windowsPolicy = 'Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force'
+  const windowsCommand = `$env:MIRRORPROXY_DOWNLOAD_MIRROR='${baseUrl}'; irm '${rawBase}/install.ps1' | iex`
+
+  return <section id="install" className="install-panel">
+    <div className="install-heading">
+      <div><span className="eyebrow">{labels.stableRelease}</span><h2><Download size={24} /> {labels.installClient}</h2><p>{labels.installClientDesc}</p></div>
+      <a href="https://github.com/inbjo/MirrorProxy/releases/latest" target="_blank" rel="noreferrer"><Github size={16} /> {labels.viewReleases}</a>
+    </div>
+    <div className="install-grid">
+      <InstallCommand title={labels.unixInstall} hint={labels.unixInstallHint} command={unixCommand} copied={copied === 'install-unix'} copyLabel={labels.copyCommand} copiedLabel={labels.copied} onCopy={() => onCopy('install-unix', unixCommand)} />
+      <div className="install-platform">
+        <div className="install-platform-title"><Terminal size={18} /><div><h3>{labels.windowsInstall}</h3><p>{labels.windowsInstallHint}</p></div></div>
+        <div className="policy-note"><ShieldCheck size={16} /><div><strong>{labels.windowsPolicy}</strong><p>{labels.windowsPolicyHint}</p></div></div>
+        <InstallCode command={windowsPolicy} copied={copied === 'install-windows-policy'} copyLabel={labels.copyCommand} copiedLabel={labels.copied} onCopy={() => onCopy('install-windows-policy', windowsPolicy)} />
+        <InstallCode command={windowsCommand} copied={copied === 'install-windows'} copyLabel={labels.copyCommand} copiedLabel={labels.copied} onCopy={() => onCopy('install-windows', windowsCommand)} />
+      </div>
+    </div>
+  </section>
+}
+
+function InstallCommand({ title, hint, command, copied, copyLabel, copiedLabel, onCopy }: { title: string; hint: string; command: string; copied: boolean; copyLabel: string; copiedLabel: string; onCopy: () => void }) {
+  return <div className="install-platform"><div className="install-platform-title"><Terminal size={18} /><div><h3>{title}</h3><p>{hint}</p></div></div><InstallCode command={command} copied={copied} copyLabel={copyLabel} copiedLabel={copiedLabel} onCopy={onCopy} /></div>
+}
+
+function InstallCode({ command, copied, copyLabel, copiedLabel, onCopy }: { command: string; copied: boolean; copyLabel: string; copiedLabel: string; onCopy: () => void }) {
+  return <div className="install-command"><code>{command}</code><button onClick={onCopy}><Clipboard size={15} /> {copied ? copiedLabel : copyLabel}</button></div>
 }
 
 function LinkConverter({ title, icon, hint, value, onChange, output, outputLabel, placeholder, copyLabel, copiedLabel, copied, onCopy }: { title: string; icon: React.ReactNode; hint: string; value: string; onChange: (value: string) => void; output: string; outputLabel: string; placeholder: string; copyLabel: string; copiedLabel: string; copied: boolean; onCopy: () => void }) {

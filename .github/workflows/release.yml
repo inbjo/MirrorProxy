@@ -142,6 +142,7 @@ jobs:
     needs: [client, server]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v6
         with:
           path: release-artifacts
@@ -180,6 +181,8 @@ jobs:
           files: |
             release-artifacts/**/*
             SHA256SUMS
+            scripts/install.sh
+            scripts/install.ps1
       - name: Publish rolling Nightly
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: softprops/action-gh-release@v2
@@ -197,3 +200,5 @@ jobs:
           files: |
             release-artifacts/**/*
             SHA256SUMS
+            scripts/install.sh
+            scripts/install.ps1

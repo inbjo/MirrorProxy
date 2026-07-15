@@ -47,6 +47,16 @@ test('renders runtime configuration and opens the admin console', async ({ page 
   await expect(page.getByLabel('Administrator password')).toBeVisible()
 })
 
+test('offers accelerated stable client installers and GitHub project link', async ({ page }) => {
+  await page.goto('/')
+
+  const installer = page.locator('#install')
+  await expect(installer.getByRole('heading', { name: 'Install the CLI' })).toBeVisible()
+  await expect(installer).toContainText('https://mirror.example/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh')
+  await expect(installer).toContainText('Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force')
+  await expect(page.locator('.site-footer a')).toHaveAttribute('href', 'https://github.com/inbjo/MirrorProxy')
+})
+
 test('persists language and theme preferences across a browser reload', async ({ page }) => {
   await page.goto('/')
 

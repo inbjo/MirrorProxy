@@ -27,6 +27,22 @@ describe('App preferences', () => {
     expect(screen.getAllByText('Copied').at(-1)).toBeTruthy()
   })
 
+  it('shows accelerated stable client installers and the GitHub footer', async () => {
+    const json = (value: unknown) => Promise.resolve(new Response(JSON.stringify(value), { status: 200 }))
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      if (input === '/api/public-config') return json({ public_base_url: 'https://mirror.example', enabled_proxies: [], quota: { enabled: false, monthly_gb: 0, timezone: 'UTC', on_exceeded: 'stop_proxy' } })
+      return Promise.reject(new Error('offline'))
+    }))
+
+    const { container } = render(<App />)
+
+    await waitFor(() => expect(container.querySelector('.install-panel')?.textContent).toContain('Install the CLI'))
+    const commands = Array.from(container.querySelectorAll('.install-command code')).map((element) => element.textContent)
+    expect(commands).toContain('Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force')
+    expect(commands.some((value) => value?.includes('https://mirror.example/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh'))).toBe(true)
+    expect(container.querySelector<HTMLAnchorElement>('.site-footer a')?.href).toBe('https://github.com/inbjo/MirrorProxy')
+  })
+
   it('renders the active MirrorProxy URL into manual Go configuration', () => {
     expect(sourceManualCommand('go', 'https://sina.dev/goproxy/', 'go env -w GOPROXY={repo_url},direct')).toBe('go env -w GOPROXY=https://sina.dev/goproxy/,direct')
   })
