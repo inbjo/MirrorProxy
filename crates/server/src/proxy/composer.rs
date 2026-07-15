@@ -160,6 +160,9 @@ fn is_packagist_download_url(url: &str) -> bool {
 fn to_reqwest_headers(headers: &axum::http::HeaderMap) -> reqwest::header::HeaderMap {
     let mut out = reqwest::header::HeaderMap::new();
     for (name, value) in headers {
+        if name == header::ACCEPT_ENCODING || !super::should_forward_request_header(name) {
+            continue;
+        }
         if let (Ok(name), Ok(value)) = (
             reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes()),
             reqwest::header::HeaderValue::from_bytes(value.as_bytes()),
@@ -180,6 +183,29 @@ mod tests {
     fn rejects_path_traversal() {
         assert!(sanitize_path("../packages.json").is_err());
         assert!(sanitize_path("p/provider.json").is_ok());
+    }
+
+    #[test]
+    fn filters_host_credentials_and_hop_by_hop_headers() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("mirror.example"));
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        headers.insert(header::COOKIE, HeaderValue::from_static("session=secret"));
+        headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
+        headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+
+        let forwarded = to_reqwest_headers(&headers);
+
+        assert!(!forwarded.contains_key(reqwest::header::HOST));
+        assert!(!forwarded.contains_key(reqwest::header::AUTHORIZATION));
+        assert!(!forwarded.contains_key(reqwest::header::COOKIE));
+        assert!(!forwarded.contains_key(reqwest::header::CONNECTION));
+        assert!(!forwarded.contains_key(reqwest::header::ACCEPT_ENCODING));
+        assert_eq!(
+            forwarded.get(reqwest::header::ACCEPT).unwrap(),
+            "application/json"
+        );
     }
 
     #[test]
