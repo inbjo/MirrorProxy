@@ -8,8 +8,16 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 port="${MIRRORPROXY_SMOKE_PORT:-39102}"
 base="http://127.0.0.1:${port}"
+startup_timeout="${MIRRORPROXY_SMOKE_STARTUP_TIMEOUT:-300}"
+
+if [[ ! "${startup_timeout}" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'MIRRORPROXY_SMOKE_STARTUP_TIMEOUT must be a positive integer, got %s\n' "${startup_timeout}" >&2
+  exit 2
+fi
+
 work="$(mktemp -d)"
 config="${work}/mirrorproxy.toml"
+server_log="${work}/server.log"
 pid=""
 
 cleanup() {
@@ -17,6 +25,44 @@ cleanup() {
   rm -rf "${work}"
 }
 trap cleanup EXIT
+
+print_server_log() {
+  if [[ -s "${server_log}" ]]; then
+    printf '%s\n' '--- MirrorProxy server log ---' >&2
+    cat "${server_log}" >&2
+    printf '%s\n' '--- end MirrorProxy server log ---' >&2
+  else
+    printf 'MirrorProxy server log is empty: %s\n' "${server_log}" >&2
+  fi
+}
+
+wait_for_server() {
+  local deadline=$((SECONDS + startup_timeout))
+  local exit_code
+
+  while (( SECONDS < deadline )); do
+    if curl --fail --silent "${base}/healthz" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      if wait "${pid}"; then
+        exit_code=0
+      else
+        exit_code=$?
+      fi
+      printf 'MirrorProxy exited with code %s before becoming healthy at %s\n' "${exit_code}" "${base}" >&2
+      print_server_log
+      return 1
+    fi
+
+    sleep 0.25
+  done
+
+  printf 'MirrorProxy did not become healthy at %s within %s seconds\n' "${base}" "${startup_timeout}" >&2
+  print_server_log
+  return 1
+}
 
 cat >"${config}" <<EOF
 listen_addr = "127.0.0.1:${port}"
@@ -49,13 +95,9 @@ EOF
 
 cd "${root}"
 cargo run --quiet --package mirrorproxy-server --bin mirrorproxy-server -- \
-  --config "${config}" >"${work}/server.log" 2>&1 &
+  --config "${config}" >"${server_log}" 2>&1 &
 pid=$!
-for _ in {1..40}; do
-  curl --fail --silent "${base}/healthz" >/dev/null && break
-  sleep 0.25
-done
-curl --fail --silent "${base}/healthz" >/dev/null
+wait_for_server
 
 git ls-remote "${base}/https://github.com/rust-lang/cargo.git" HEAD >/dev/null
 npm install --ignore-scripts --no-save --prefix "${work}/npm" --registry "${base}/npm/" is-number@7.0.0 >/dev/null
