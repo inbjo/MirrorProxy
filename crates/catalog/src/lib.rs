@@ -1195,7 +1195,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         target_code: "linuxmint",
         os_family: "linux",
         scope: SourceScope::System,
-        template: "No MirrorProxy server adapter is available yet. Configure a compatible external Linux Mint mirror for this release.",
+        template: "deb {repo_url} <mint-codename> main upstream import backport",
         requires_sudo: true,
     },
     SourceTemplate {
@@ -1448,6 +1448,9 @@ mod tests {
             ]
         );
         assert_eq!(find_target("mint").unwrap().code, "linuxmint");
+        assert!(templates_for_target("linuxmint")[0]
+            .template
+            .starts_with("deb {repo_url}"));
         assert_eq!(find_target("almalinux").unwrap().code, "alma");
         assert_eq!(
             find_target("openbsd").unwrap().supported_modes,

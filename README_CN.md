@@ -286,7 +286,7 @@ Pub 元数据和官方 archive 下载都会留在 MirrorProxy；仅重写官方 
 
 ## OS 静态目录代理
 
-使用固定 target 路径，例如 `http://selfhost.com/os/debian/`、`/os/ubuntu/`、`/os/fedora/`、`/os/archlinux/`、`/os/opensuse/`、`/os/void/`、`/os/gentoo/`、`/os/freebsd/`、`/os/alpine/`、`/os/openwrt/`、`/os/termux/`、`/os/kali/`、`/os/rocky/`、`/os/alma/`、`/os/manjaro/`、`/os/msys2/`、`/os/raspios/`、`/os/armbian/`、`/os/openeuler/`、`/os/anolis/`、`/os/deepin/`、`/os/linuxmint/`、`/os/solus/`、`/os/trisquel/`、`/os/linuxlite/`、`/os/ros/`、`/os/netbsd/` 或 `/os/openbsd/`。仅允许这些 target，且每项都有独立可配置 upstream；新增目标通过 TOML 的 `[upstreams.additional_os]` 映射配置。ROS target 代理 ROS 2 Ubuntu APT 仓库；Solus 使用 `/os/solus/polaris/eopkg-index.xml.xz`。
+使用固定 target 路径，例如 `http://selfhost.com/os/debian/`、`/os/ubuntu/`、`/os/fedora/`、`/os/archlinux/`、`/os/opensuse/`、`/os/void/`、`/os/gentoo/`、`/os/freebsd/`、`/os/alpine/`、`/os/openwrt/`、`/os/termux/`、`/os/kali/`、`/os/rocky/`、`/os/alma/`、`/os/manjaro/`、`/os/msys2/`、`/os/raspios/`、`/os/armbian/`、`/os/openeuler/`、`/os/anolis/`、`/os/deepin/`、`/os/linuxmint/`、`/os/solus/`、`/os/trisquel/`、`/os/linuxlite/`、`/os/ros/`、`/os/netbsd/` 或 `/os/openbsd/`。仅允许这些 target，且每项都有独立可配置 upstream；新增目标通过 TOML 的 `[upstreams.additional_os]` 映射配置。Linux Mint 默认使用 Kernel.org HTTPS 软件包镜像；ROS target 代理 ROS 2 Ubuntu APT 仓库；Solus 使用 `/os/solus/polaris/eopkg-index.xml.xz`。
 
 ## Rust Crates 代理
 

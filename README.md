@@ -304,7 +304,7 @@ Set `HOMEBREW_BOTTLE_DOMAIN=http://selfhost.com/homebrew` before running `brew i
 
 ## OS Static Repository Proxy
 
-Use fixed target paths such as `http://selfhost.com/os/debian/`, `/os/ubuntu/`, `/os/fedora/`, `/os/archlinux/`, `/os/opensuse/`, `/os/void/`, `/os/gentoo/`, `/os/freebsd/`, `/os/alpine/`, `/os/openwrt/`, `/os/termux/`, `/os/kali/`, `/os/rocky/`, `/os/alma/`, `/os/manjaro/`, `/os/msys2/`, `/os/raspios/`, `/os/armbian/`, `/os/openeuler/`, `/os/anolis/`, `/os/deepin/`, `/os/linuxmint/`, `/os/solus/`, `/os/trisquel/`, `/os/linuxlite/`, `/os/ros/`, `/os/netbsd/`, or `/os/openbsd/`. Only these targets are accepted; each has a separately configurable upstream. Additional OS targets use the `[upstreams.additional_os]` TOML map. The ROS target proxies the ROS 2 Ubuntu APT repository; Solus uses `/os/solus/polaris/eopkg-index.xml.xz`.
+Use fixed target paths such as `http://selfhost.com/os/debian/`, `/os/ubuntu/`, `/os/fedora/`, `/os/archlinux/`, `/os/opensuse/`, `/os/void/`, `/os/gentoo/`, `/os/freebsd/`, `/os/alpine/`, `/os/openwrt/`, `/os/termux/`, `/os/kali/`, `/os/rocky/`, `/os/alma/`, `/os/manjaro/`, `/os/msys2/`, `/os/raspios/`, `/os/armbian/`, `/os/openeuler/`, `/os/anolis/`, `/os/deepin/`, `/os/linuxmint/`, `/os/solus/`, `/os/trisquel/`, `/os/linuxlite/`, `/os/ros/`, `/os/netbsd/`, or `/os/openbsd/`. Only these targets are accepted; each has a separately configurable upstream. Additional OS targets use the `[upstreams.additional_os]` TOML map. Linux Mint defaults to the Kernel.org HTTPS package mirror; the ROS target proxies the ROS 2 Ubuntu APT repository; Solus uses `/os/solus/polaris/eopkg-index.xml.xz`.
 
 ## Rust Crates Proxy
 

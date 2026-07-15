@@ -121,7 +121,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes gcc-aarch64-linux-gnu
       - name: Build server
-        run: cargo build --locked --release -p mirrorproxy-server --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          GIT_COMMIT="${GITHUB_SHA}" \
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          cargo build --locked --release -p mirrorproxy-server --target ${{ matrix.target }}
       - name: Package server
         shell: bash
         run: |

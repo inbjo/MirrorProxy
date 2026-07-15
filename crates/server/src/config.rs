@@ -831,7 +831,7 @@ fn default_os_repositories() -> BTreeMap<String, String> {
         ),
         (
             "linuxmint".to_string(),
-            "https://packages.linuxmint.com".to_string(),
+            "https://mirrors.edge.kernel.org/linuxmint-packages".to_string(),
         ),
         (
             "solus".to_string(),
@@ -909,6 +909,14 @@ fn validate_http_url(field: &str, value: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn defaults_linuxmint_to_reachable_https_mirror() {
+        assert_eq!(
+            Config::default().upstreams.additional_os["linuxmint"],
+            "https://mirrors.edge.kernel.org/linuxmint-packages"
+        );
+    }
 
     #[test]
     fn rejects_invalid_public_base_url() {

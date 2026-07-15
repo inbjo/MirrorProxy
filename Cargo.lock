@@ -1145,11 +1145,11 @@ dependencies = [
 
 [[package]]
 name = "mirrorproxy-catalog"
-version = "0.1.0"
+version = "1.0.0"
 
 [[package]]
 name = "mirrorproxy-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1161,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "mirrorproxy-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "argon2",
