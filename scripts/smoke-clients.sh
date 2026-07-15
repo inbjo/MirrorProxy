@@ -160,8 +160,16 @@ cat >"${work}/maven/settings.xml" <<EOF
 EOF
 mvn -s "${work}/maven/settings.xml" -Dmaven.repo.local="${work}/m2" dependency:get -Dartifact=org.apache.commons:commons-lang3:3.14.0 -q
 dotnet new classlib --output "${work}/nuget" --no-restore >/dev/null
+cat >"${work}/nuget/NuGet.Config" <<EOF
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="mirrorproxy" value="${base}/nuget/v3/index.json" protocolVersion="3" allowInsecureConnections="true" />
+  </packageSources>
+</configuration>
+EOF
 NUGET_PACKAGES="${work}/nuget-packages" dotnet add "${work}/nuget/nuget.csproj" package Newtonsoft.Json --version 13.0.3 --source "${base}/nuget/v3/index.json" --no-restore >/dev/null
-NUGET_PACKAGES="${work}/nuget-packages" dotnet restore "${work}/nuget/nuget.csproj" --source "${base}/nuget/v3/index.json" >/dev/null
+NUGET_PACKAGES="${work}/nuget-packages" dotnet restore "${work}/nuget/nuget.csproj" --configfile "${work}/nuget/NuGet.Config" >/dev/null
 mkdir -p "${work}/r-library"
 R_LIBS_USER="${work}/r-library" Rscript -e 'install.packages("digest", repos = commandArgs(TRUE)[1], lib = Sys.getenv("R_LIBS_USER"), quiet = TRUE)' "${base}/cran/"
 mkdir -p "${work}/hackage"
