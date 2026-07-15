@@ -1,6 +1,6 @@
 services:
   mirrorproxy:
-    image: ${MIRRORPROXY_IMAGE:-inbjo/mirrorproxy:latest}
+    image: ${MIRRORPROXY_IMAGE:-kudang/mirrorproxy:latest}
     container_name: mirrorproxy
     restart: unless-stopped
     ports:

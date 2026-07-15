@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-image="${MIRRORPROXY_DOCKER_IMAGE:-inbjo/mirrorproxy}"
+image="${MIRRORPROXY_DOCKER_IMAGE:-kudang/mirrorproxy}"
 version="${MIRRORPROXY_DOCKER_VERSION:-$(sed -n 's/^version = "\([^"]*\)"/\1/p' "${root}/crates/server/Cargo.toml" | head -n 1)}"
 platforms=""
 push=0
@@ -13,7 +13,7 @@ usage() {
 Build the MirrorProxy server container image.
 
 Usage: scripts/docker-build.sh [options]
-  --image NAME          Image repository (default: inbjo/mirrorproxy)
+  --image NAME          Image repository (default: kudang/mirrorproxy)
   --version VERSION     Image version tag (default: server crate version)
   --platforms LIST      Buildx platforms (push default: linux/amd64,linux/arm64)
   --push                Push a multi-platform image instead of loading locally

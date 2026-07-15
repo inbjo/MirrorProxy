@@ -74,7 +74,7 @@ docker run -d --name mirrorproxy --restart unless-stopped \
   -p 3000:3000 \
   -e MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com \
   -v mirrorproxy-data:/data \
-  inbjo/mirrorproxy:latest
+  kudang/mirrorproxy:latest
 ```
 
 Environment variables such as `MIRRORPROXY_ENABLED_PROXIES`, quota, cache, and
@@ -89,7 +89,7 @@ docker run -d --name mirrorproxy --restart unless-stopped \
   -e MIRRORPROXY_DB=/data/mirrorproxy.sqlite3 \
   -v mirrorproxy-data:/data \
   -v "$PWD/config.toml:/etc/mirrorproxy/config.toml:ro" \
-  inbjo/mirrorproxy:latest
+  kudang/mirrorproxy:latest
 ```
 
 Build the current source as a local `linux/amd64` image:

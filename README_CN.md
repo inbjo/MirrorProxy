@@ -73,7 +73,7 @@ docker run -d --name mirrorproxy --restart unless-stopped \
   -p 3000:3000 \
   -e MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com \
   -v mirrorproxy-data:/data \
-  inbjo/mirrorproxy:latest
+  kudang/mirrorproxy:latest
 ```
 
 容器支持 `MIRRORPROXY_ENABLED_PROXIES`、配额、缓存和限流等环境变量。如需完整
@@ -87,7 +87,7 @@ docker run -d --name mirrorproxy --restart unless-stopped \
   -e MIRRORPROXY_DB=/data/mirrorproxy.sqlite3 \
   -v mirrorproxy-data:/data \
   -v "$PWD/config.toml:/etc/mirrorproxy/config.toml:ro" \
-  inbjo/mirrorproxy:latest
+  kudang/mirrorproxy:latest
 ```
 
 从当前源码构建本机 `linux/amd64` 镜像：
