@@ -35,7 +35,7 @@ checks=(
   'armbian|os|get|/os/armbian/dists/bookworm/Release'
   'openeuler|os|get|/os/openeuler/openEuler-24.03-LTS/OS/x86_64/repodata/repomd.xml'
   'anolis|os|get|/os/anolis/8/BaseOS/x86_64/os/repodata/repomd.xml'
-  'deepin|os|head|/os/deepin/dists'
+  'deepin|os|get|/os/deepin/dists/beige/InRelease'
   'linuxmint|os|get|/os/linuxmint/dists/faye/Release'
   'solus|os|head|/os/solus/polaris/eopkg-index.xml.xz'
   'trisquel|os|get|/os/trisquel/dists/aramo/Release'

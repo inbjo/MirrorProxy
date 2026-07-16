@@ -827,7 +827,7 @@ fn default_os_repositories() -> BTreeMap<String, String> {
         ),
         (
             "deepin".to_string(),
-            "https://community-packages.deepin.com/deepin".to_string(),
+            "https://community-packages.deepin.com/beige".to_string(),
         ),
         (
             "linuxmint".to_string(),
@@ -915,6 +915,14 @@ mod tests {
         assert_eq!(
             Config::default().upstreams.additional_os["linuxmint"],
             "https://mirrors.edge.kernel.org/linuxmint-packages"
+        );
+    }
+
+    #[test]
+    fn defaults_deepin_to_the_current_beige_repository_root() {
+        assert_eq!(
+            Config::default().upstreams.additional_os["deepin"],
+            "https://community-packages.deepin.com/beige"
         );
     }
 

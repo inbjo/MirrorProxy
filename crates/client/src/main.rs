@@ -659,7 +659,10 @@ fn source_config_path(
             "zypper" => "etc/zypp/repos.d/mirrorproxy.repo",
             "gentoo" => "etc/portage/make.conf",
             "dnf" => "etc/yum.repos.d/mirrorproxy.repo",
-            "pacman" => "etc/pacman.d/mirrorproxy",
+            // pacman does not scan arbitrary files in /etc/pacman.d. The
+            // stock Arch configuration explicitly includes `mirrorlist`, so
+            // manage that file and rely on the normal rollback protection.
+            "pacman" => "etc/pacman.d/mirrorlist",
             other => {
                 anyhow::bail!("{other} does not support safe system-scope configuration writes")
             }
@@ -1590,7 +1593,7 @@ mod tests {
 
         for (target_code, expected_path) in [
             ("dnf", "etc/yum.repos.d/mirrorproxy.repo"),
-            ("pacman", "etc/pacman.d/mirrorproxy"),
+            ("pacman", "etc/pacman.d/mirrorlist"),
         ] {
             let command = PlannedSourceCommand {
                 target_code,

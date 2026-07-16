@@ -423,7 +423,11 @@ mirrorproxy-server --config ./config.toml config set quota.monthly_gb 100 --dry-
 Linux and macOS share one installer. It detects the operating system and CPU
 architecture, downloads the matching asset from the latest stable GitHub
 Release, verifies its SHA-256 checksum, and installs `mirrorproxy` under
-`/usr/local/bin` (using `sudo` only when required):
+`/usr/local/bin` (using `sudo` only when required).
+The host must provide `curl`, `tar`, `gzip`, `install`, and either `sha256sum`
+or `shasum`; the installer reports a missing prerequisite before downloading.
+
+Install it with:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh | sh
@@ -667,6 +671,41 @@ For a local real-client protocol check (Git, npm/yarn/pnpm, Go, Cargo, pip, CPAN
 ```
 
 The script starts a temporary local server, uses temporary client homes/caches, and removes them on exit.
+
+### Verified platforms and clients
+
+The following matrix records checks that were actually run; a plain HTTP GET/HEAD
+probe is not presented as a native-client test. The 2026-07-16 OS checks pulled
+their container images and package repositories through `sina.dev`. Images that
+can run the Linux client also exercised the one-line installer, source changes,
+index refreshes, and a real package download.
+
+| Verification level | Verified targets |
+| --- | --- |
+| Native language/development clients | Git, npm, Yarn, pnpm, Go modules, Cargo, pip, CPAN/cpanm, RubyGems, Maven, NuGet, CRAN/R, Cabal/Hackage, LuaRocks, Composer, and Docker/OCI |
+| Native package manager in the matching OS container | Debian 12 APT, Ubuntu 24.04 APT, Fedora 42 DNF, Arch Linux pacman, Alpine 3.21 apk, openSUSE Leap 15.6 zypper, Void Linux xbps, Gentoo emerge, Kali rolling APT, Rocky Linux 9 DNF, AlmaLinux 9 DNF, Manjaro pacman, openEuler 24.03 LTS DNF, Anolis OS 8.8 DNF, Deepin 23 APT, ROS 2 Jazzy APT, OpenWrt 24.10.5 opkg, and Termux x86_64 APT |
+| Compatible package-manager container | Linux Mint, Trisquel, and Linux Lite through APT; Raspberry Pi OS and Armbian through arm64 APT indexes and packages; MSYS2 through its mingw64 repository with pacman |
+| Public protocol endpoint only | FreeBSD, Solus, NetBSD, and OpenBSD; their native userlands/kernels cannot run on a Linux Docker daemon, so these are not labelled native package-manager tests |
+
+The OS checks download at least one real package, not only repository metadata:
+`.deb` for Debian-family targets, `.rpm` for Fedora/RHEL-family targets,
+`.pkg.tar.zst` for Arch/Manjaro/MSYS2, `.apk` for Alpine, `.ipk` for OpenWrt,
+`.xbps` for Void, and a distfile through `emerge --fetchonly` for Gentoo. When a
+minimal image lacks CA certificates, `tar`, or `gzip`, only those bootstrap
+dependencies may be installed from the image's original repository before its
+sources are cleared and MirrorProxy is tested.
+
+Run the repeatable core OS package-manager matrix with:
+
+```bash
+./scripts/smoke-os-clients.sh
+```
+
+The default matrix covers Debian, Ubuntu, Fedora, Arch Linux, Alpine, openSUSE,
+Void, and Gentoo. Select a subset with `MIRRORPROXY_OS_SMOKE_TARGETS`. To verify
+an unpublished client fix, point `MIRRORPROXY_OS_SMOKE_CLIENT_BINARY` at a local
+static client. The script still runs the public one-line installer first, then
+uses the candidate binary for the source-change regression.
 
 ## Static Linux Build
 

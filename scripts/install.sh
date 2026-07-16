@@ -87,6 +87,9 @@ download_url() {
 }
 
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
+command -v tar >/dev/null 2>&1 || { echo "tar is required" >&2; exit 1; }
+command -v gzip >/dev/null 2>&1 || { echo "gzip is required" >&2; exit 1; }
+command -v install >/dev/null 2>&1 || { echo "install is required" >&2; exit 1; }
 tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t mirrorproxy-install)
 cleanup() { rm -rf "$tmp_dir"; }
 trap cleanup EXIT HUP INT TERM
