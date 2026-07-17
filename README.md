@@ -1,37 +1,47 @@
 # MirrorProxy
 
+[English](README.md) | [简体中文](README_CN.md)
+
 MirrorProxy is a self-hosted mirror proxy platform written in Rust. The `mirrorproxy-server` service and the `mirrorproxy` source-management client are independent binaries. The server embeds the React + Vite + Tailwind web console; the standalone client runs on Windows, macOS, and Linux.
 
-The project is intentionally adapter-based: Docker/OCI, npm, PyPI, Cargo, Go modules, operating system mirrors, and other ecosystems can be added behind the same proxy core.
+The project uses an adapter-based proxy core and already ships adapters for GitHub, Docker/OCI, Composer, npm, PyPI, Cargo, Go modules, major language repositories, developer-tool distribution services, and operating system mirrors. New ecosystems can reuse the same routing, streaming, security, accounting, quota, and cache infrastructure.
 
 ## Features
 
-- Embedded web console at `/`
+- Embedded public and authenticated administration web console at `/`
 - Health endpoint at `/healthz`
 - Runtime public config endpoint at `/api/config`
+- Source catalog endpoint at `/api/sources`
+- SQLite-backed settings, administrator sessions, audit log, traffic accounting, monthly quota, rate limiting, and bounded disk cache
+- Standalone Windows/macOS/Linux client with source editing, exact rollback, and GitHub HTTPS Git URL rewriting
 - GitHub proxy for repository pages, raw files, release assets, archives, and Composer GitHub dist URLs
 - Composer proxy at `/composer`
 - Docker/OCI proxy at `/v2/*` for Docker Hub, GHCR, Quay, and Kubernetes public images
 - npm/yarn/pnpm proxy at `/npm`
 - Node.js distribution proxy for NVM at `/nvm`
+- opam repository proxy at `/opam`
 - Go module proxy at `/goproxy`
 - Maven Central proxy at `/maven`
 - RubyGems proxy at `/rubygems`
+- Rustup distribution proxy at `/rustup`
 - NuGet v3 proxy at `/nuget/v3/index.json`
 - CPAN repository proxy at `/cpan`
 - CRAN repository proxy at `/cran`
 - Hackage repository proxy at `/hackage`
+- Julia package server proxy at `/julia`
+- LuaRocks repository proxy at `/luarocks`
 - Clojars repository proxy at `/clojars`
 - CocoaPods CDN proxy at `/cocoapods`
 - Dart / Flutter Pub proxy at `/pub`
 - Anaconda / Conda proxy at `/anaconda`
 - TeX Live proxy at `/texlive`
+- WinGet source proxy at `/winget`
 - GNU ELPA proxy at `/elpa`
 - Nix binary cache proxy at `/nix`
 - GNU Guix substitute cache proxy at `/guix`
 - Flatpak OSTree proxy at `/flatpak`
 - Homebrew bottle proxy at `/homebrew`
-- Debian / Ubuntu / Fedora / Arch Linux / openSUSE / Void / Gentoo / FreeBSD / Alpine / OpenWrt / Termux static proxy at `/os`
+- Allowlisted Linux, BSD, MSYS2, OpenWrt, Termux, ROS, and related operating-system repositories under `/os`
 - Cargo sparse registry proxy at `/crates-index`
 - pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
@@ -308,6 +318,22 @@ repository hackage.haskell.org
 
 `mirrorproxy set hackage --mirror mirrorproxy --base-url http://selfhost.com` writes and can restore `~/.cabal/config`. The adapter streams the package index and package tarballs while rejecting traversal paths.
 
+## Rustup Distribution Proxy
+
+Point Rustup's distribution and self-update roots at MirrorProxy:
+
+```bash
+export RUSTUP_DIST_SERVER=http://selfhost.com/rustup
+export RUSTUP_UPDATE_ROOT=http://selfhost.com/rustup/rustup
+rustup update stable
+```
+
+Channel manifests, components, checksums, and signatures are streamed from the official Rust distribution service through normalized paths.
+
+## Julia Package Server Proxy
+
+Set `JULIA_PKG_SERVER=http://selfhost.com/julia` before running Julia's package manager. Registry and package-server protocol paths are forwarded to the configured Julia package server.
+
 ## LuaRocks Proxy
 
 On Linux, install from MirrorProxy with `luarocks install --server=http://selfhost.com/luarocks/ <module>`.
@@ -334,6 +360,20 @@ Configure the Clojure CLI user `deps.edn` to route Clojars through MirrorProxy:
 ```
 
 `mirrorproxy set clojars --mirror mirrorproxy --base-url http://selfhost.com` writes and can restore `~/.clojure/deps.edn`. The adapter streams Clojars POMs, metadata, and JARs with normalized repository paths only.
+
+## CocoaPods CDN Proxy
+
+Use `source 'http://selfhost.com/cocoapods/'` in a Podfile when routing the CocoaPods CDN through MirrorProxy. CDN index shards and podspec files are accepted only through normalized paths.
+
+## WinGet Source Proxy
+
+Add the MirrorProxy endpoint as a pre-indexed WinGet source:
+
+```powershell
+winget source add --name mirrorproxy --arg http://selfhost.com/winget/ --type Microsoft.PreIndexed.Package --accept-source-agreements
+```
+
+The adapter streams the official WinGet source indexes and package metadata through `/winget`.
 
 ## Pub / Flutter Proxy
 
@@ -478,8 +518,10 @@ backward compatibility.
 mirrorproxy set bun --mirror mirrorproxy --base-url https://sina.dev --scope user
 ```
 
-`set` writes user-level npm, pip, Cargo, Go, or Composer configuration
-without invoking the package-manager executable. Before its first change it
+`set` writes supported user-level package-manager configuration, including npm,
+pip, Cargo, GitHub HTTPS Git URL rewriting, Go, Composer, Maven, RubyGems,
+NuGet, CPAN, CRAN, Hackage, Clojars, and Anaconda, without invoking the
+package-manager executable. Before its first change it
 records the complete previous file in the platform-native user state directory
 (`~/.local/state/mirrorproxy/sources/` by default on Linux); `reset` restores
 that exact file. A non-empty configuration is never
@@ -530,9 +572,9 @@ the exact previous file. Restart Docker after applying the configuration.
 Copy `config.example.toml` and adjust the public URL for your deployment:
 
 ```toml
-listen_addr = "selfhost.com"
+listen_addr = "0.0.0.0:3000"
 public_base_url = "https://mirror.example.com"
-enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "luarocks", "clojars", "pub", "anaconda", "texlive", "winget", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
+enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "julia", "luarocks", "clojars", "cocoapods", "pub", "anaconda", "texlive", "winget", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
 [upstreams]
 github = "https://github.com"
@@ -544,17 +586,23 @@ quay = "https://quay.io"
 kubernetes = "https://registry.k8s.io"
 npm = "https://registry.npmjs.org"
 nvm = "https://nodejs.org/dist"
+opam = "https://opam.ocaml.org"
 go_proxy = "https://proxy.golang.org"
 maven = "https://repo.maven.apache.org/maven2"
 rubygems = "https://rubygems.org"
+rustup = "https://static.rust-lang.org"
 nuget = "https://api.nuget.org"
 cpan = "https://cpan.metacpan.org"
 cran = "https://cloud.r-project.org"
 hackage = "https://hackage.haskell.org"
+julia = "https://pkg.julialang.org"
+luarocks = "https://luarocks.org"
 clojars = "https://repo.clojars.org"
+cocoapods = "https://cdn.cocoapods.org"
 pub_repository = "https://pub.dev"
 anaconda = "https://repo.anaconda.com/pkgs"
 texlive = "https://mirror.ctan.org/systems/texlive/tlnet"
+winget = "https://cdn.winget.microsoft.com"
 elpa = "https://elpa.gnu.org/packages"
 nix = "https://cache.nixos.org"
 guix = "https://ci.guix.gnu.org"
@@ -567,6 +615,10 @@ debian = "https://deb.debian.org/debian"
 ubuntu = "https://archive.ubuntu.com/ubuntu"
 fedora = "https://download.fedoraproject.org/pub/fedora/linux"
 archlinux = "https://geo.mirror.pkgbuild.com"
+opensuse = "https://download.opensuse.org"
+void = "https://repo-default.voidlinux.org"
+gentoo = "https://distfiles.gentoo.org"
+freebsd = "https://pkg.freebsd.org"
 crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
@@ -582,7 +634,7 @@ MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
 MIRRORPROXY_DB=/var/lib/mirrorproxy/mirrorproxy.sqlite3
 MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
-MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,go,maven,rubygems,nuget,cpan,cran,hackage,clojars,pub,anaconda,texlive,elpa,nix,guix,flatpak,homebrew,os,crates,pypi
+MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,nvm,opam,go,maven,rubygems,rustup,nuget,cpan,cran,hackage,julia,luarocks,clojars,cocoapods,pub,anaconda,texlive,winget,elpa,nix,guix,flatpak,homebrew,os,crates,pypi
 MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
 MIRRORPROXY_RATE_LIMIT_ENABLED=true
 MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
@@ -672,7 +724,7 @@ cargo test
 
 GitHub Actions runs formatting, clippy, Rust tests, the frontend production build, browser end-to-end tests, and native client tests on Linux, Windows, and macOS. Tagging `v*` builds three-platform client artifacts plus Linux server artifacts and publishes a GitHub release with per-artifact checksums and `SHA256SUMS`.
 
-For a local real-client protocol check (Git, npm/yarn/pnpm, Go, Cargo, pip, CPAN cpanm, RubyGems, Maven, NuGet, CRAN, Cabal/Hackage, and Composer), run:
+For a local real-client protocol check (Git, npm/yarn/pnpm, Go, Cargo, pip, CPAN cpanm, RubyGems, Maven, NuGet, CRAN, Cabal/Hackage, LuaRocks, and Composer, with optional Docker), run:
 
 ```bash
 ./scripts/smoke-clients.sh
@@ -785,7 +837,8 @@ For Docker/OCI and large release files, keep request buffering disabled in the r
 Version 1.0 already includes the multi-ecosystem and OS repository adapters,
 SQLite-backed administration and traffic accounting, global monthly quota,
 rate limiting, bounded disk caching, native client releases, the embedded web
-console, public full-source smoke coverage, and Docker deployment support.
+console, documented native-client and public-protocol smoke matrices, and
+Docker deployment support.
 
 Planned v1.x work:
 
@@ -800,3 +853,27 @@ Planned v1.x work:
   behavior for the remaining catalog targets.
 - Evaluate high-availability metadata storage while retaining SQLite as the
   zero-dependency default.
+
+### Spark volunteer mirror network
+
+The planned **Spark** network will let operators voluntarily contribute public
+MirrorProxy capacity while clients discover and fail over between nodes without
+depending on a single mirror endpoint:
+
+- `spark-mirrors.sina.dev` DNS TXT records publish only a small, versioned set
+  of core bootstrap peers; the DNS record is not a global node list.
+- Bootstrap peers introduce clients to signed node advertisements through a
+  libp2p control plane based on Kademlia discovery, Identify, Ping, and optional
+  Gossipsub events.
+- A local MirrorProxy agent will score eligible nodes by health, latency,
+  declared capacity, and recent request success, then route package-manager
+  requests with circuit breaking and failover.
+- Volunteer nodes remain restricted MirrorProxy adapters rather than arbitrary
+  URL forward proxies. Peer identities, expiring advertisements, integrity
+  checks, bandwidth limits, and operator-controlled quotas are required.
+
+Spark deliberately targets directly reachable servers. Every volunteer node
+must have a public domain name, a valid publicly trusted HTTPS certificate, and
+the required inbound ports open from the Internet. Nodes behind NAT or CGNAT
+are out of scope; the roadmap does not include relay bandwidth, UPnP, NAT-PMP,
+hole punching, or a NAT-traversing data plane.

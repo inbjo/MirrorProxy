@@ -11,7 +11,7 @@
 当前仓库已经不是空目录，已有一个可运行的基础版本：
 
 - Rust workspace 已存在：服务端在 `crates/server`，独立改源客户端在 `crates/client`，共享 catalog 在 `crates/catalog`，前端在 `web`。
-- 已实现并注册的代理类型：GitHub、Composer/Packagist、Docker/OCI、npm、Go module、Cargo sparse registry、PyPI Simple API、Maven、RubyGems、NuGet v3、CPAN、CRAN、Hackage、Clojars、Pub/Flutter、Anaconda/Conda。
+- 已实现并注册的代理类型：GitHub、Composer/Packagist、Docker/OCI、npm、NVM/Node.js、opam、Go module、Maven、RubyGems、Rustup、NuGet v3、CPAN、CRAN、Hackage、Julia、LuaRocks、Clojars、CocoaPods、Pub/Flutter、Anaconda/Conda、TeX Live、WinGet、GNU ELPA、Nix、Guix、Flatpak、Homebrew、操作系统仓库、Cargo sparse registry 和 PyPI Simple API。
 - 已有运行时配置读取与持久化：`config.example.toml`、环境变量覆盖、SQLite 运行时配置、`/api/public-config` 公开摘要与受保护的管理配置 API。
 - 已有 Web 控制台：React + Vite 内嵌到 Rust 二进制，支持说明页、源目录、登录、代理/上游/配额配置、CLI 命令生成、统计与审计日志。
 - 已有请求限流、SQLite 流量统计和按月流量封停；代理响应默认保持流式计量，并可选缓存有明确长度的小型公开 GET 响应到磁盘。
@@ -25,6 +25,8 @@
 
 当前完成度估算：
 
+以下百分比仅针对原始 v1 集中式代理范围，不包含第 18 节新增的星火计划：
+
 - 代理服务基础能力：约 98%（主流开发生态、LuaRocks、Rustup、NVM/Node.js 发行包、CocoaPods CDN、GNU Guix substitute cache 与主要 Linux 静态仓库已覆盖，Homebrew bottles 已接入；其余生态 adapter 尚缺）。
 - Web 控制台：约 94%（公开说明、源目录、登录、设置、统计、审计已完成；已覆盖语言/主题偏好、命令复制及管理控制台登录、配置加载与保存、密码更新和统计刷新的 Chromium 浏览器端到端测试）。
 - 配置持久化与管理后台：约 85%。
@@ -32,6 +34,7 @@
 - SQLite 统计与月流量限制：约 95%（持久统计、全站月度封停、并发原子预留、可配置请求明细保留和缓存容量控制已完成；用户子域名配额作为后续独立扩展）。
 - 对齐 chsrc 支持源范围：约 86%，主要目标已登记且更多语言协议可代理，但 OS/软件仓库 adapter 仍有明显缺口。
 - 整体按本计划口径估算：约 98%。
+- 星火志愿镜像网络：0%（已完成架构边界和验收条件记录，尚未进入实现）。
 
 ## Key Changes
 
@@ -558,12 +561,49 @@ on_exceeded = "stop_proxy"
 - 并发下载不会明显超卖配额；允许最后一个流式请求略微超过阈值，但后续请求必须停止。
 - 统计数据重启后不丢失。
 
+### 18. 星火志愿镜像网络
+
+目标：
+
+- 允许运营者自愿贡献一台公网 MirrorProxy 节点，形成可发现、可选择、可故障切换的社区镜像网络。
+- 使用 `spark-mirrors.sina.dev` DNS TXT 发布少量、带版本的核心 Bootstrap Peer，不在 DNS 中保存全量志愿者节点。
+- 客户端从 Bootstrap Peer 进入 libp2p 控制面，通过 Kademlia、Identify、Ping 和可选 Gossipsub 事件发现节点；节点公告必须由 PeerId 对应身份密钥签名，并带过期时间和递增序号。
+- 将独立客户端扩展为可选的本机 Agent；包管理器连接本机入口，Agent 根据健康状态、延迟、声明容量和近期请求成功率选路，并实现熔断与故障切换。
+
+节点准入硬性要求：
+
+- 必须拥有稳定的公网域名。
+- 必须配置有效且受公共信任的 HTTPS 证书。
+- 必须从公网开放 MirrorProxy HTTPS 服务和协议要求的发现端口。
+- 必须继续使用 MirrorProxy adapter 白名单、安全 Header 策略、流量限制和配额，禁止演变为任意 URL 开放代理。
+- 必须使用长期节点身份、短期签名公告和内容完整性校验；默认不得把客户端私有 Token 转发给志愿者节点。
+
+明确不做：
+
+- 不接纳 NAT、CGNAT 或仅内网可达节点。
+- 不实现 Relay 承载下载流量、UPnP、NAT-PMP、DCUtR 打洞或其他 NAT 穿透数据面。
+- 第一阶段不做完全无许可节点接入；先采用社区签发/吊销的节点身份，降低恶意节点、Sybil 和供应链投毒风险。
+
+实施阶段：
+
+1. 公网 HTTPS 联邦：完成志愿者注册、签名心跳、能力/负载公告、本机 Agent 选路和故障切换。
+2. 去中心化发现：DNS TXT 收敛为 Bootstrap，接入 Kademlia Provider 发现、Identify、Ping 和签名节点详情查询。
+3. 社区治理与安全：增加节点证书续期/吊销、信誉与隔离、内容校验失败证据、节点和全网流量保护。
+
+验收标准：
+
+- DNS TXT 中任一有效 Bootstrap Peer 可帮助全新客户端发现至少两个志愿者节点。
+- 单个志愿者节点下线时，本机 Agent 能在不修改包管理器配置的情况下自动切换。
+- 客户端拒绝过期、签名错误、未获社区信任或不满足 HTTPS 准入要求的节点公告。
+- 节点只能访问已实现 adapter 的受限上游路径，SSRF、开放代理和私有凭据泄漏测试全部通过。
+- 文档和 UI 明确显示该节点需要公网域名、公共可信 HTTPS 证书和开放端口，不提供 NAT 节点加入入口。
+
 ## Test Plan
 
 整体测试分层：
 - 单元测试：URL 解析、镜像名解析、metadata 重写、配置校验、安全过滤。
 - 集成测试：使用 mock upstream 验证代理核心、header、redirect、range、错误映射。
-- 客户端 smoke test：`git`、`docker`、`composer`、`npm`、`yarn`、`pnpm`、`go`、`cargo`、`pip`。
+- 客户端 smoke test：`git`、`docker`、`composer`、`npm`、`yarn`、`pnpm`、`go`、`cargo`、`pip`、`cpanm`、`gem`、`mvn`、`dotnet`、`R`、`cabal` 和 `luarocks`。
 - 前端测试：React 单测、Playwright 桌面/移动端、暗黑/明亮、中英文切换。
 - 发布测试：CI matrix、静态构建、二进制启动、内嵌静态资源访问。
 
@@ -574,8 +614,8 @@ on_exceeded = "stop_proxy"
 
 ## Assumptions
 
-- 当前仓库为空目录，计划从零初始化项目。
-- 默认服务域名示例统一使用 `https://abc.com`，实现中通过 `public_base_url` 配置生成真实命令。
+- 当前仓库已经包含可运行的 Rust workspace、独立客户端/服务端、Web 控制台、SQLite 管理面和多生态 adapter；后续计划必须基于当前实现增量演进。
+- 默认服务域名示例使用 `https://mirror.example.com`；命令示例中的 `selfhost.com` 表示实际自部署域名，并由 `public_base_url` 配置生成真实地址。
 - Vite 8 使用当前官方 Vite 8 系列；Node.js 版本按 Vite 8 要求使用 20.19+ 或 22.12+。
 - v1 默认代理公开资源，也支持在服务 TOML 中为已配置上游设置静态私有 registry 凭据；如需 GitHub/npm/PyPI 客户端 Token，可显式启用 `forward_client_authorization`，且静态上游凭据始终优先。
 - v1 默认不启用持久缓存；先保证协议兼容、安全和可观测性，再增加缓存策略。
