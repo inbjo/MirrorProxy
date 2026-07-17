@@ -2,6 +2,13 @@
 
 [English](README.md) | [简体中文](README_CN.md)
 
+[![CI](https://img.shields.io/github/actions/workflow/status/inbjo/MirrorProxy/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/inbjo/MirrorProxy/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/inbjo/MirrorProxy?style=flat-square&logo=github&label=Release)](https://github.com/inbjo/MirrorProxy/releases/latest)
+[![License](https://img.shields.io/github/license/inbjo/MirrorProxy?style=flat-square&label=License)](LICENSE)
+[![Docker Pulls](https://img.shields.io/docker/pulls/kudang/mirrorproxy?style=flat-square&logo=docker&logoColor=white&label=Docker%20Pulls)](https://hub.docker.com/r/kudang/mirrorproxy)
+[![Clients](https://img.shields.io/badge/clients-Windows%20%7C%20macOS%20%7C%20Linux-2f81f7?style=flat-square)](#一键安装客户端)
+[![GitHub Stars](https://img.shields.io/github/stars/inbjo/MirrorProxy?style=flat-square&logo=github&label=Stars)](https://github.com/inbjo/MirrorProxy/stargazers)
+
 MirrorProxy 是一个基于 Rust 的自部署镜像代理平台。服务端 `mirrorproxy-server` 与改源客户端 `mirrorproxy` 是两个独立二进制；服务端内嵌 React + Vite + Tailwind Web 控制台，客户端可单独下载并运行于 Windows、macOS 和 Linux。
 
 项目采用 adapter 架构，当前已经实现 GitHub、Docker/OCI、Composer、npm、PyPI、Cargo、Go modules、主流语言仓库、开发工具分发服务和操作系统镜像源；新增生态可继续复用同一套路由、流式传输、安全过滤、流量统计、配额和缓存基础设施。

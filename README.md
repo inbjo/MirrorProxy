@@ -2,6 +2,13 @@
 
 [English](README.md) | [简体中文](README_CN.md)
 
+[![CI](https://img.shields.io/github/actions/workflow/status/inbjo/MirrorProxy/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/inbjo/MirrorProxy/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/inbjo/MirrorProxy?style=flat-square&logo=github&label=Release)](https://github.com/inbjo/MirrorProxy/releases/latest)
+[![License](https://img.shields.io/github/license/inbjo/MirrorProxy?style=flat-square&label=License)](LICENSE)
+[![Docker Pulls](https://img.shields.io/docker/pulls/kudang/mirrorproxy?style=flat-square&logo=docker&logoColor=white&label=Docker%20Pulls)](https://hub.docker.com/r/kudang/mirrorproxy)
+[![Clients](https://img.shields.io/badge/clients-Windows%20%7C%20macOS%20%7C%20Linux-2f81f7?style=flat-square)](#install-the-client)
+[![GitHub Stars](https://img.shields.io/github/stars/inbjo/MirrorProxy?style=flat-square&logo=github&label=Stars)](https://github.com/inbjo/MirrorProxy/stargazers)
+
 MirrorProxy is a self-hosted mirror proxy platform written in Rust. The `mirrorproxy-server` service and the `mirrorproxy` source-management client are independent binaries. The server embeds the React + Vite + Tailwind web console; the standalone client runs on Windows, macOS, and Linux.
 
 The project uses an adapter-based proxy core and already ships adapters for GitHub, Docker/OCI, Composer, npm, PyPI, Cargo, Go modules, major language repositories, developer-tool distribution services, and operating system mirrors. New ecosystems can reuse the same routing, streaming, security, accounting, quota, and cache infrastructure.
