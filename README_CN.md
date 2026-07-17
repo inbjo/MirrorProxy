@@ -77,6 +77,41 @@ curl http://selfhost.com/healthz
 服务端镜像使用非 root 的 UID/GID `10001` 运行，监听 `3000` 端口，并把 SQLite
 数据库和可选缓存统一保存到 `/data` 持久卷。
 
+仓库已经提供可直接运行的 [compose.yaml](compose.yaml)。也可以把下面内容保存为部署
+目录中的 `docker-compose.yaml`：
+
+```yaml
+services:
+  mirrorproxy:
+    image: ${MIRRORPROXY_IMAGE:-kudang/mirrorproxy:latest}
+    container_name: mirrorproxy
+    restart: unless-stopped
+    ports:
+      - "${MIRRORPROXY_PORT:-3000}:3000"
+    environment:
+      MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
+      RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
+    volumes:
+      - mirrorproxy-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  mirrorproxy-data:
+```
+
+启动前可使用 `.env` 设置外部访问地址和宿主机端口：
+
+```dotenv
+MIRRORPROXY_PORT=53000
+MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
+```
+
 ```bash
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com docker compose up -d
 docker compose logs mirrorproxy
@@ -93,6 +128,17 @@ docker run -d --name mirrorproxy --restart unless-stopped \
   -v mirrorproxy-data:/data \
   kudang/mirrorproxy:latest
 ```
+
+推荐使用 named volume。如果改为 `/srv/mirrorproxy/data:/data` 这样的宿主机目录挂载，
+必须保证容器 UID/GID `10001:10001` 可以写入：
+
+```bash
+sudo install -d -o 10001 -g 10001 -m 0750 /srv/mirrorproxy/data
+sudo install -d -o 10001 -g 10001 -m 0750 /srv/mirrorproxy/data/cache
+```
+
+启用 SELinux 的宿主机还需要给 bind mount 添加 `:Z`。否则 SQLite 启动时可能出现
+`code: 14 unable to open database file`。
 
 容器支持 `MIRRORPROXY_ENABLED_PROXIES`、配额、缓存和限流等环境变量。如需完整
 TOML 配置，可只读挂载配置文件并显式指定路径：

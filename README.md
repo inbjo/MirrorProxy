@@ -77,6 +77,42 @@ curl http://selfhost.com/healthz
 The server image runs as non-root UID/GID `10001`, listens on port `3000`, and
 stores its SQLite database and optional cache under the `/data` volume.
 
+The repository includes a ready-to-run [compose.yaml](compose.yaml). You can
+also save the following as `docker-compose.yaml` in an empty deployment
+directory:
+
+```yaml
+services:
+  mirrorproxy:
+    image: ${MIRRORPROXY_IMAGE:-kudang/mirrorproxy:latest}
+    container_name: mirrorproxy
+    restart: unless-stopped
+    ports:
+      - "${MIRRORPROXY_PORT:-3000}:3000"
+    environment:
+      MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
+      RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
+    volumes:
+      - mirrorproxy-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  mirrorproxy-data:
+```
+
+Set the external URL and optional host port in a `.env` file before startup:
+
+```dotenv
+MIRRORPROXY_PORT=53000
+MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
+```
+
 ```bash
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com docker compose up -d
 docker compose logs mirrorproxy
@@ -93,6 +129,18 @@ docker run -d --name mirrorproxy --restart unless-stopped \
   -v mirrorproxy-data:/data \
   kudang/mirrorproxy:latest
 ```
+
+The named volume is recommended. If you replace it with a host bind mount such
+as `/srv/mirrorproxy/data:/data`, that directory must be writable by container
+UID/GID `10001:10001`:
+
+```bash
+sudo install -d -o 10001 -g 10001 -m 0750 /srv/mirrorproxy/data
+sudo install -d -o 10001 -g 10001 -m 0750 /srv/mirrorproxy/data/cache
+```
+
+On an SELinux-enforcing host, append `:Z` to the bind mount. Otherwise SQLite
+may fail at startup with `code: 14 unable to open database file`.
 
 Environment variables such as `MIRRORPROXY_ENABLED_PROXIES`, quota, cache, and
 rate-limit settings work in the container. For a complete TOML configuration,
