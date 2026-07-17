@@ -530,6 +530,7 @@ fn apply_source_set_at(
     if original_content
         .as_deref()
         .is_some_and(|content| !content.trim().is_empty())
+        && command.target_code != "github"
         && !force
     {
         anyhow::bail!(
@@ -538,8 +539,14 @@ fn apply_source_set_at(
         );
     }
 
-    let expected_content =
-        source_config_content(command.target_code, scope, &command.repo_url, distribution)?;
+    let expected_content = if command.target_code == "github" {
+        if scope != CliSourceScope::User {
+            anyhow::bail!("github supports only user-scope configuration writes");
+        }
+        github_config_content(original_content.as_deref(), &command.repo_url)?
+    } else {
+        source_config_content(command.target_code, scope, &command.repo_url, distribution)?
+    };
     let rollback = SourceRollback {
         target_code: command.target_code.to_string(),
         config_path: config_path.to_path_buf(),
@@ -684,6 +691,7 @@ fn user_source_config_path(target_code: &str) -> anyhow::Result<&'static str> {
         "uv" if cfg!(windows) => "uv/uv.toml",
         "uv" => ".config/uv/uv.toml",
         "cargo" => ".cargo/config.toml",
+        "github" => ".gitconfig",
         "go" if cfg!(windows) => "go/env",
         "go" if cfg!(target_os = "macos") => "go/env",
         "go" => ".config/go/env",
@@ -737,6 +745,7 @@ fn user_source_config_content(target_code: &str, repo_url: &str) -> anyhow::Resu
         "cargo" => source_config_command("cargo", repo_url)
             .map(|content| format!("{content}\n"))
             .ok_or_else(|| anyhow::anyhow!("missing Cargo configuration template")),
+        "github" => github_config_content(None, repo_url),
         "go" => Ok(format!("GOPROXY={repo_url},direct\n")),
         "maven" => source_config_command("maven", repo_url)
             .map(|content| format!("{content}\n"))
@@ -1055,6 +1064,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         "cargo" => {
             "Remove the [source.crates-io] replacement and [source.mirrorproxy] entries from Cargo config"
         }
+        "github" => "Restore the Git config that preceded MirrorProxy's GitHub insteadOf rule",
         "go" => "go env -u GOPROXY",
         "maven" => "Remove the MirrorProxy mirror entry from Maven settings.xml",
         "rubygems" => "Restore the previous RubyGems source list",
@@ -1094,6 +1104,35 @@ fn docker_registry_mirror_url(repo_url: &str) -> anyhow::Result<String> {
     url.set_query(None);
     url.set_fragment(None);
     Ok(url.to_string().trim_end_matches('/').to_string())
+}
+
+fn github_config_content(original: Option<&str>, repo_url: &str) -> anyhow::Result<String> {
+    let url =
+        Url::parse(repo_url).with_context(|| format!("invalid GitHub proxy URL {repo_url}"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.path().ends_with("/https://github.com/")
+    {
+        anyhow::bail!(
+            "GitHub proxy URL must be an http(s) MirrorProxy URL ending in /https://github.com/"
+        );
+    }
+
+    let mut content = original.unwrap_or_default().to_string();
+    if !content.is_empty() {
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push('\n');
+    }
+    content.push_str(&format!(
+        "# Managed by MirrorProxy\n[url \"{repo_url}\"]\n\tinsteadOf = https://github.com/\n"
+    ));
+    Ok(content)
 }
 
 fn render_source_template(template: &str, repo_url: &str) -> String {
@@ -1294,8 +1333,9 @@ mod tests {
             source_config_command("composer", "https://mirror.example/composer/").unwrap(),
             "composer config repo.packagist composer https://mirror.example/composer/"
         );
-        assert!(
-            source_config_command("github", "https://mirror.example/https://github.com/").is_none()
+        assert_eq!(
+            source_config_command("github", "https://mirror.example/https://github.com/").unwrap(),
+            "git config --global --add url.\"https://mirror.example/https://github.com/\".insteadOf https://github.com/"
         );
     }
 
@@ -1371,8 +1411,47 @@ mod tests {
         assert_eq!(docker.target_code, "docker");
         assert!(docker.command.contains("registry-mirrors"));
 
-        assert!(plan_source_reset_command("github").is_err());
+        let github = plan_source_reset_command("github").unwrap();
+        assert_eq!(github.target_code, "github");
+        assert!(github.command.contains("insteadOf"));
         assert!(plan_source_reset_command("missing").is_err());
+    }
+
+    #[test]
+    fn github_set_merges_gitconfig_and_reset_restores_it_exactly() {
+        let directory =
+            std::env::temp_dir().join(format!("mirrorproxy-client-github-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let gitconfig = directory.join(".gitconfig");
+        let original = "[user]\n\tname = Existing User\n";
+        fs::write(&gitconfig, original).unwrap();
+
+        let github =
+            plan_source_set_command("github", "mirrorproxy", Some("https://mirror.example"))
+                .unwrap();
+        let applied =
+            apply_source_set(&github, CliSourceScope::User, &directory, None, false).unwrap();
+        let configured = fs::read_to_string(&applied.config_path).unwrap();
+        assert!(configured.starts_with(original));
+        assert!(configured.contains("[url \"https://mirror.example/https://github.com/\"]"));
+        assert!(configured.contains("insteadOf = https://github.com/"));
+
+        apply_source_reset("github", CliSourceScope::User, &directory, false).unwrap();
+        assert_eq!(fs::read_to_string(gitconfig).unwrap(), original);
+        assert!(!applied.rollback_path.exists());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn github_set_rejects_non_mirrorproxy_urls() {
+        assert!(github_config_content(None, "file:///tmp/https://github.com/").is_err());
+        assert!(github_config_content(None, "https://mirror.example/github/").is_err());
+        assert!(github_config_content(
+            None,
+            "https://user:secret@mirror.example/https://github.com/"
+        )
+        .is_err());
     }
 
     #[test]

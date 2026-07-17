@@ -19,7 +19,7 @@
 未完成或需要重做的部分：
 
 - 仍缺少部分计划中的生态 adapter；主流 Linux 发行版（含 Debian、Ubuntu、Fedora、Arch、openSUSE、Void、Gentoo、FreeBSD）已加入受限 OS 静态目录代理，Homebrew bottles 已通过 `/homebrew` 提供 GHCR OCI bottle 流式代理，GNU Guix substitute cache 已通过 `/guix` 提供受限流式代理，Rustup、NVM/Node.js 发行包、LuaRocks 与 opam 已提供受限流式代理。
-- chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚覆盖 npm、pip、cargo、go、composer、docker、APT（Ubuntu/Debian）、Alpine apk、Void xbps、openSUSE zypper、Gentoo、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Anaconda；Guix 会生成官方 `--substitute-urls` 单次命令，其他登记目标明确标为仅配置/计划中。
+- chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚覆盖 npm、pip、cargo、GitHub HTTPS Git URL 重写、go、composer、docker、APT（Ubuntu/Debian）、Alpine apk、Void xbps、openSUSE zypper、Gentoo、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Anaconda；Guix 会生成官方 `--substitute-urls` 单次命令，其他登记目标明确标为仅配置/计划中。
 - 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip、Docker、CPAN cpanm、RubyGems、Maven、NuGet、CRAN、Cabal/Hackage 和 LuaRocks；其余生态客户端仍待补齐，并需持续保留路由/单元测试。
 - 小对象可选磁盘缓存已完成（默认关闭，跳过认证、Cookie 与 Range 请求），并具备总容量限制与 LRU 淘汰；私有 registry 已支持服务 TOML 中的静态 Basic/Bearer 凭据并且不会写入 SQLite 或管理 API。当前版本采用全站月度总流量闸；后续如需用户配额，以“分配用户子域名（如 `user-id.abc.com`）→ 按 Host 归属流量和配额”的模型扩展。月配额已使用 SQLite 原子预留窗口控制并发超卖，超大单流仍按流式计量结算。
 
@@ -420,7 +420,9 @@ mirrorproxy-server --config config.toml
 mirrorproxy list
 mirrorproxy get npm
 mirrorproxy set npm --mirror mirrorproxy --base-url http://127.0.0.1:3000
+mirrorproxy set github --mirror mirrorproxy --base-url http://127.0.0.1:3000
 mirrorproxy reset npm --scope user
+mirrorproxy reset github --scope user
 mirrorproxy sources list
 mirrorproxy sources list --category lang
 mirrorproxy sources mirrors
@@ -437,7 +439,7 @@ mirrorproxy-server config set public_base_url http://127.0.0.1:3000
 - 服务启动与服务配置命令只属于 `mirrorproxy-server`，改源命令只属于 `mirrorproxy`。
 - `sources list` 使用内置 catalog 或 SQLite catalog，不依赖启动 Web 服务。
 - `list/get/set/reset/mirrors` 可省略 `sources` 命名空间，完整写法继续兼容。
-- `set/reset` 需要分 target 实现，先覆盖 npm、pip、cargo、go、composer、docker、apt、yum/dnf、pacman。
+- `set/reset` 需要分 target 实现，先覆盖 npm、pip、cargo、github、go、composer、docker、apt、yum/dnf、pacman。
 - 默认写用户级配置；需要系统级写入时必须显式 `--scope system`，并清楚提示需要权限。
 - 写配置前备份原文件，备份记录写入 SQLite 或本地状态文件，便于 rollback。
 - 用户级改源客户端支持 Windows、macOS、Linux；Linux 专属的 APT、DNF、pacman 等系统级写入在其他平台明确拒绝。
@@ -447,6 +449,7 @@ mirrorproxy-server config set public_base_url http://127.0.0.1:3000
 - `mirrorproxy sources set npm --mirror mirrorproxy` 后 `npm config get registry` 指向 MirrorProxy。
 - `mirrorproxy sources set pip --mirror mirrorproxy` 后 `pip config list` 生效。
 - `mirrorproxy sources set cargo --mirror mirrorproxy` 生成正确 sparse registry 配置。
+- `mirrorproxy set github --mirror mirrorproxy` 保留已有 `.gitconfig`，并追加将 `https://github.com/` 重写到 MirrorProxy 的 `insteadOf` 规则。
 - `mirrorproxy sources reset <target>` 能恢复 CLI 修改前的配置。
 - CLI 不会静默覆盖用户手写配置；发生冲突时提示并要求 `--force`。
 

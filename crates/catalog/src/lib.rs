@@ -275,7 +275,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "GitHub",
         category: SourceCategory::Repository,
         aliases: &["git"],
-        supported_modes: &[SourceMode::ProxyAdapter],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -1225,6 +1225,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         requires_sudo: false,
     },
     SourceTemplate {
+        target_code: "github",
+        os_family: "any",
+        scope: SourceScope::User,
+        template: "git config --global --add url.\"{repo_url}\".insteadOf https://github.com/",
+        requires_sudo: false,
+    },
+    SourceTemplate {
         target_code: "go",
         os_family: "any",
         scope: SourceScope::User,
@@ -1492,12 +1499,18 @@ mod tests {
     fn includes_source_templates_for_cli_generation() {
         let npm_templates = templates_for_target("npm");
         let cargo_templates = templates_for_target("cargo");
+        let github_templates = templates_for_target("github");
 
         assert_eq!(
             npm_templates[0].template,
             "npm config set registry {repo_url}"
         );
         assert!(cargo_templates[0].template.contains("[source.crates-io]"));
+        assert!(github_templates[0].template.contains("insteadOf"));
+        assert!(find_target("github")
+            .unwrap()
+            .supported_modes
+            .contains(&SourceMode::LocalConfig));
         assert!(templates_for_target("kali").is_empty());
         assert_eq!(
             templates_for_target("solus")[0].template,

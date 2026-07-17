@@ -458,8 +458,15 @@ mirrorproxy set bun --mirror mirrorproxy --base-url https://sina.dev --scope use
 ```bash
 mirrorproxy set npm --mirror mirrorproxy --base-url http://selfhost.com
 mirrorproxy set cargo --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy set github --mirror mirrorproxy --base-url http://selfhost.com
 mirrorproxy reset npm
+mirrorproxy reset github
 ```
+
+`set github` 会在用户的 `~/.gitconfig` 中追加 `url.<MirrorProxy>.insteadOf`
+规则，使使用 `https://github.com/` 的 Git clone 和包管理器 Git 依赖自动改走
+MirrorProxy。该操作会保留已有 Git 配置，不要求 `--force`；`reset github` 会根据
+rollback 记录精确恢复修改前的文件。SSH 格式的 GitHub 地址不会被重写。
 
 自动化或测试可使用 `--config-root /tmp/mirrorproxy-config` 指定隔离的配置根目录。APT、
 DNF/YUM、pacman 和 Docker 额外支持显式的 `--scope system`：MirrorProxy 只管理对应的

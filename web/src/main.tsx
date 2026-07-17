@@ -843,7 +843,7 @@ function SourceCommandGenerator({ catalog, baseUrl, text }: { catalog: SourceCat
     ? `mirrorproxy set ${target.code} --mirror ${activeMirror}${activeMirror === 'mirrorproxy' ? ` --base-url ${baseUrl.replace(/\/$/, '')}` : ''} --scope ${scope}${target?.code === 'apt' && scope === 'system' ? ` --distribution ${distribution}` : ''}`
     : `mirrorproxy get ${target?.code ?? targetCode}`
   const executable = scope === 'user'
-    ? ['npm', 'pip', 'cargo', 'go', 'maven', 'rubygems', 'nuget', 'cpan', 'cran', 'hackage', 'clojars', 'composer', 'pdm', 'uv', 'bun', 'anaconda'].includes(target?.code ?? '')
+    ? ['npm', 'pip', 'cargo', 'github', 'go', 'maven', 'rubygems', 'nuget', 'cpan', 'cran', 'hackage', 'clojars', 'composer', 'pdm', 'uv', 'bun', 'anaconda'].includes(target?.code ?? '')
     : ['apt', 'dnf', 'pacman', 'docker'].includes(target?.code ?? '')
 
   const copyGenerated = async () => {

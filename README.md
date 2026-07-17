@@ -489,8 +489,16 @@ was changed after the command.
 ```bash
 mirrorproxy set npm --mirror mirrorproxy --base-url http://selfhost.com
 mirrorproxy set cargo --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy set github --mirror mirrorproxy --base-url http://selfhost.com
 mirrorproxy reset npm
+mirrorproxy reset github
 ```
+
+`set github` appends a `url.<MirrorProxy>.insteadOf` rule to the user's
+`~/.gitconfig`, so Git clones and package-manager Git dependencies that use
+`https://github.com/` automatically go through MirrorProxy. Existing Git config
+is preserved without requiring `--force`, and `reset github` restores the exact
+file recorded by the rollback. SSH-form GitHub URLs are not rewritten.
 
 Use `--config-root /tmp/mirrorproxy-config` for an isolated configuration root in
 automation or tests. APT, DNF/YUM, pacman, and Docker additionally support
