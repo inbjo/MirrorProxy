@@ -605,11 +605,18 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .build()?;
 
     if let Some(credentials) = initial_admin {
-        tracing::warn!(
-            username = credentials.username,
-            password = credentials.password,
-            "created initial MirrorProxy administrator; save this password now because it is not shown again"
-        );
+        if credentials.generated {
+            tracing::warn!(
+                username = credentials.username,
+                password = credentials.password,
+                "created initial MirrorProxy administrator; save this password now because it is not shown again"
+            );
+        } else {
+            tracing::info!(
+                username = credentials.username,
+                "created initial MirrorProxy administrator with MIRRORPROXY_ADMIN_PASSWORD"
+            );
+        }
     }
 
     let state = AppState {
