@@ -1,5 +1,6 @@
 mod config;
 mod database;
+mod observability;
 mod proxy;
 mod static_assets;
 
@@ -28,6 +29,11 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use database::{Database, ProxyTrafficRecord};
 use mirrorproxy_catalog as catalog;
+use observability::Observability;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_http::HeaderExtractor;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use proxy::{
     anaconda, clojars, cocoapods, composer, cpan, cran, cratesio, elpa, flatpak, github, go, guix,
     hackage, homebrew, julia, luarocks, maven, nix, npm, nuget, nvm, oci, opam, os, pub_repository,
@@ -35,7 +41,9 @@ use proxy::{
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::cors::CorsLayer;
+use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const QUOTA_RESERVATION_BYTES: u64 = 8 * 1024 * 1024;
@@ -79,6 +87,7 @@ pub struct AppState {
     database: Arc<Database>,
     client: Client,
     rate_limiter: Arc<RateLimiter>,
+    observability: Arc<Observability>,
 }
 
 pub struct RateLimiter {
@@ -96,7 +105,7 @@ impl AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_tracing();
+    let _tracer_provider = init_tracing()?;
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Config { command }) => {
@@ -611,14 +620,48 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
     entries
 }
 
-fn init_tracing() {
+fn init_tracing() -> anyhow::Result<Option<SdkTracerProvider>> {
+    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+        .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let tracer_provider = endpoint
+        .map(|endpoint| {
+            let exporter = opentelemetry_otlp::SpanExporter::builder()
+                .with_tonic()
+                .with_endpoint(endpoint)
+                .build()?;
+            Ok::<_, anyhow::Error>(
+                SdkTracerProvider::builder()
+                    .with_resource(
+                        opentelemetry_sdk::Resource::builder()
+                            .with_service_name("mirrorproxy-server")
+                            .build(),
+                    )
+                    .with_batch_exporter(exporter)
+                    .build(),
+            )
+        })
+        .transpose()?;
+    let otel_layer = tracer_provider.as_ref().map(|provider| {
+        tracing_opentelemetry::layer().with_tracer(provider.tracer("mirrorproxy-server"))
+    });
+    if tracer_provider.is_some() {
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
+    }
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "mirrorproxy_server=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
-        .init();
+        .with(otel_layer)
+        .try_init()
+        .context("failed to initialize tracing subscriber")?;
+    Ok(tracer_provider)
 }
 
 async fn build_router(config: Config) -> anyhow::Result<Router> {
@@ -639,6 +682,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .redirect(reqwest::redirect::Policy::limited(10))
         .timeout(request_timeout)
         .build()?;
+    let observability = Arc::new(Observability::new()?);
 
     if let Some(credentials) = initial_admin {
         if credentials.generated {
@@ -659,11 +703,13 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         config: Arc::new(RwLock::new(config)),
         database: Arc::new(database),
         client,
+        observability,
     };
 
     Ok(Router::new()
         .route("/healthz", get(healthz))
         .route("/version", get(version))
+        .route("/metrics", get(metrics))
         .route("/api/config", get(public_config))
         .route("/api/public-config", get(public_config))
         .route("/api/admin/login", post(admin_login))
@@ -817,7 +863,10 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             rate_limit_middleware,
         ))
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            observability_middleware,
+        ))
         .with_state(state))
 }
 
@@ -850,6 +899,65 @@ impl RateLimiter {
     }
 }
 
+async fn observability_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let started = Instant::now();
+    let method = request.method().as_str().to_string();
+    let target = proxy_target_for_path(request.uri().path()).unwrap_or("none");
+    let route = route_group_for_path(request.uri().path());
+    let parent_context = opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderExtractor(request.headers()))
+    });
+    let span = tracing::info_span!(
+        "http.server.request",
+        http_method = %method,
+        http_route = %route,
+        http_status_code = tracing::field::Empty,
+        mirrorproxy_target = %target,
+    );
+    if let Err(error) = span.set_parent(parent_context) {
+        tracing::debug!(%error, "failed to attach incoming OpenTelemetry context");
+    }
+
+    async move {
+        let response = next.run(request).await;
+        let status = response.status().as_u16();
+        let elapsed = started.elapsed();
+        tracing::Span::current().record("http_status_code", status);
+        state
+            .observability
+            .observe_http(&method, &route, status, elapsed);
+        tracing::info!(duration_ms = elapsed.as_millis(), "HTTP request completed");
+        response
+    }
+    .instrument(span)
+    .await
+}
+
+fn route_group_for_path(path: &str) -> String {
+    if let Some(target) = proxy_target_for_path(path) {
+        return format!("/proxy/{target}");
+    }
+    if path == "/healthz" {
+        "/healthz".to_string()
+    } else if path == "/metrics" {
+        "/metrics".to_string()
+    } else if path == "/version" {
+        "/version".to_string()
+    } else if path == "/api/sources" {
+        "/api/sources".to_string()
+    } else if path == "/api/config" || path == "/api/public-config" {
+        "/api/public-config".to_string()
+    } else if path.starts_with("/api/admin/") {
+        "/api/admin/:action".to_string()
+    } else {
+        "/static".to_string()
+    }
+}
+
 async fn rate_limit_middleware(
     State(state): State<AppState>,
     request: Request,
@@ -861,6 +969,7 @@ async fn rate_limit_middleware(
             .rate_limiter
             .check(config.rate_limit.requests_per_minute, Instant::now())
     {
+        state.observability.observe_rejection("rate_limit");
         return (
             StatusCode::TOO_MANY_REQUESTS,
             [(header::RETRY_AFTER, HeaderValue::from_static("60"))],
@@ -878,6 +987,7 @@ async fn rate_limit_middleware(
         let (day, month) = quota_period(&config.quota.timezone);
         if config.quota.enabled && quota_exceeded_for_request(&state, &config, &month, &path).await
         {
+            state.observability.observe_rejection("monthly_quota");
             let (status, retry_after) = if config.quota.on_exceeded == "throttle" {
                 (
                     StatusCode::TOO_MANY_REQUESTS,
@@ -913,6 +1023,7 @@ async fn rate_limit_middleware(
             {
                 Ok(true) => QUOTA_RESERVATION_BYTES,
                 Ok(false) | Err(_) => {
+                    state.observability.observe_rejection("monthly_quota");
                     let status = if config.quota.on_exceeded == "throttle" {
                         StatusCode::TOO_MANY_REQUESTS
                     } else {
@@ -932,6 +1043,7 @@ async fn rate_limit_middleware(
         return track_proxy_response(
             response,
             state.database.clone(),
+            state.observability.clone(),
             day,
             month,
             target_code,
@@ -1066,6 +1178,7 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
 fn track_proxy_response(
     response: Response,
     database: Arc<Database>,
+    observability: Arc<Observability>,
     day: String,
     month: String,
     target_code: &'static str,
@@ -1083,6 +1196,7 @@ fn track_proxy_response(
             0_u64,
             false,
             database,
+            observability,
             day,
             month,
             target_code,
@@ -1096,6 +1210,7 @@ fn track_proxy_response(
             response_bytes,
             stream_error,
             database,
+            observability,
             day,
             month,
             target_code,
@@ -1112,6 +1227,7 @@ fn track_proxy_response(
                         response_bytes.saturating_add(chunk.len() as u64),
                         stream_error,
                         database,
+                        observability,
                         day,
                         month,
                         target_code,
@@ -1139,6 +1255,12 @@ fn track_proxy_response(
                     {
                         tracing::error!(%record_error, "failed to record proxy traffic");
                     }
+                    observability.observe_proxy_body(
+                        target_code,
+                        status_code,
+                        response_bytes,
+                        true,
+                    );
                     Some((
                         Err(error),
                         (
@@ -1146,6 +1268,7 @@ fn track_proxy_response(
                             response_bytes,
                             true,
                             database,
+                            observability,
                             day,
                             month,
                             target_code,
@@ -1177,6 +1300,12 @@ fn track_proxy_response(
                     {
                         tracing::error!(%record_error, "failed to record proxy traffic");
                     }
+                    observability.observe_proxy_body(
+                        target_code,
+                        status_code,
+                        response_bytes,
+                        false,
+                    );
                     None
                 }
             }
@@ -1262,6 +1391,29 @@ async fn version() -> impl IntoResponse {
         "commit": option_env!("GIT_COMMIT").unwrap_or("unknown"),
         "built_at": option_env!("BUILD_TIME").unwrap_or("unknown")
     }))
+}
+
+async fn metrics(State(state): State<AppState>) -> Response {
+    match state.observability.encode() {
+        Ok((content_type, output)) => {
+            let content_type = HeaderValue::from_str(&content_type)
+                .unwrap_or_else(|_| HeaderValue::from_static("text/plain; version=0.0.4"));
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, content_type)],
+                output,
+            )
+                .into_response()
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to encode Prometheus metrics");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "failed to encode metrics"})),
+            )
+                .into_response()
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -2038,6 +2190,65 @@ on_exceeded = "stop_proxy"
     }
 
     #[tokio::test]
+    async fn metrics_exports_normalized_http_request_series() {
+        let app = build_router(Config::default()).await.unwrap();
+        let health = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz?token=must-not-appear")
+                    .header(header::AUTHORIZATION, "Bearer must-not-appear")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain"));
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body.contains(
+            "mirrorproxy_http_requests_total{method=\"GET\",route=\"/healthz\",status=\"200\"} 1"
+        ));
+        assert!(!body.contains("must-not-appear"));
+    }
+
+    #[test]
+    fn route_groups_never_include_request_paths_or_queries() {
+        assert_eq!(
+            route_group_for_path("/maven/org/private/artifact.jar"),
+            "/proxy/maven"
+        );
+        assert_eq!(
+            route_group_for_path("/api/admin/config"),
+            "/api/admin/:action"
+        );
+        assert_eq!(route_group_for_path("/unknown/token-value"), "/static");
+    }
+
+    #[tokio::test]
     async fn rate_limit_returns_too_many_requests() {
         let app = build_router(Config {
             rate_limit: crate::config::RateLimitConfig {
@@ -2177,6 +2388,7 @@ on_exceeded = "stop_proxy"
             database: Arc::new(database.clone()),
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
+            observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
             .login("admin", &credentials.password)
@@ -2235,6 +2447,7 @@ on_exceeded = "stop_proxy"
             database: Arc::new(database.clone()),
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
+            observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
             .login("admin", &credentials.password)
@@ -2269,6 +2482,7 @@ on_exceeded = "stop_proxy"
             database: Arc::new(database.clone()),
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
+            observability: Arc::new(Observability::new().unwrap()),
         };
 
         let unauthenticated = admin_audit_log(HeaderMap::new(), State(state.clone())).await;
@@ -2301,6 +2515,7 @@ on_exceeded = "stop_proxy"
             database: Arc::new(database.clone()),
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
+            observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
             .login("admin", &credentials.password)
@@ -2334,6 +2549,7 @@ on_exceeded = "stop_proxy"
     #[tokio::test]
     async fn streamed_proxy_response_records_actual_body_bytes() {
         let (database, _) = Database::open(":memory:").await.unwrap();
+        let observability = Arc::new(Observability::new().unwrap());
         let response = Response::builder()
             .status(StatusCode::OK)
             .body(Body::from("hello"))
@@ -2341,6 +2557,7 @@ on_exceeded = "stop_proxy"
         let response = track_proxy_response(
             response,
             Arc::new(database.clone()),
+            observability.clone(),
             "2026-07-10".to_string(),
             "2026-07".to_string(),
             "npm",
@@ -2355,6 +2572,10 @@ on_exceeded = "stop_proxy"
             "hello"
         );
         assert_eq!(database.monthly_response_bytes("2026-07").await.unwrap(), 5);
+        let (_, metrics) = observability.encode().unwrap();
+        assert!(String::from_utf8(metrics)
+            .unwrap()
+            .contains("mirrorproxy_proxy_response_bytes_total{status=\"200\",target=\"npm\"} 5"));
     }
 
     #[test]

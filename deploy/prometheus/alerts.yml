@@ -1,0 +1,46 @@
+groups:
+  - name: mirrorproxy
+    rules:
+      - alert: MirrorProxyHighServerErrorRate
+        expr: |
+          (
+            sum(rate(mirrorproxy_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(mirrorproxy_http_requests_total[5m])), 0.001)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: MirrorProxy 5xx response rate is above 5%
+          description: More than 5% of MirrorProxy responses have been 5xx for 10 minutes.
+
+      - alert: MirrorProxyProxyStreamErrors
+        expr: sum(increase(mirrorproxy_proxy_stream_errors_total[10m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: MirrorProxy proxy streams are failing
+          description: More than five upstream response streams failed in the last 10 minutes.
+
+      - alert: MirrorProxyQuotaRejections
+        expr: sum(increase(mirrorproxy_rejections_total{reason="monthly_quota"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: MirrorProxy monthly quota has been reached
+          description: Requests are being rejected because the configured monthly quota is exhausted.
+
+      - alert: MirrorProxyTargetUnavailable
+        expr: |
+          sum by (route) (
+            rate(mirrorproxy_http_requests_total{route=~"/proxy/.+",status=~"5.."}[10m])
+          ) > 0.1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: MirrorProxy target has sustained server errors
+          description: "{{ $labels.route }} has returned server errors at more than 0.1 requests per second for 15 minutes."

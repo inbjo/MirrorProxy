@@ -90,7 +90,7 @@ mod tests {
         Router,
     };
 
-    use crate::{config::Config, database::Database, RateLimiter};
+    use crate::{config::Config, database::Database, observability::Observability, RateLimiter};
 
     use super::*;
 
@@ -157,6 +157,7 @@ mod tests {
             database: Arc::new(database),
             client: reqwest::Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
+            observability: Arc::new(Observability::new().unwrap()),
         }
     }
 

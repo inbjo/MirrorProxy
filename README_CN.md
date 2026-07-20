@@ -93,6 +93,9 @@ services:
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       MIRRORPROXY_MAVEN_FALLBACKS: ${MIRRORPROXY_MAVEN_FALLBACKS-https://jcenter.bintray.com}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
     volumes:
       - mirrorproxy-data:/data
@@ -116,6 +119,8 @@ MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
 # MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
 # 可选：逗号分隔的 Maven 后备仓库；空值关闭回退
 # MIRRORPROXY_MAVEN_FALLBACKS=https://jcenter.bintray.com
+# 可选：启用 OTLP/gRPC trace 导出，并采样 10% 的根 trace
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 ```
 
 ```bash
@@ -765,6 +770,41 @@ on_exceeded = "stop_proxy" # 使用 "throttle" 时返回 HTTP 429
 （`stop_proxy`）或 `429`（`throttle`），而公开页面和管理接口仍可用。配置时区进入新
 日历月后会自动使用新的月度统计与配额。
 
+## 可观测性
+
+Prometheus 指标通过 `GET /metrics` 暴露，包括归一化路由、响应状态、请求耗时、
+实际发送的代理流量、流式传输错误、配额/限流拒绝次数和构建信息。指标标签不会包含
+原始 URL、查询参数、请求头、凭据或 Token。
+
+Prometheus 抓取配置示例：
+
+```yaml
+scrape_configs:
+  - job_name: mirrorproxy
+    static_configs:
+      - targets: ["mirrorproxy:3000"]
+```
+
+可直接加载的告警规则位于
+[`deploy/prometheus/alerts.yml`](deploy/prometheus/alerts.yml)，覆盖持续 5xx、
+代理流错误和配额拒绝。生产使用前应根据实际流量调整阈值。
+
+设置 `OTEL_EXPORTER_OTLP_ENDPOINT`（或 trace 专用的
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`）即可启用 OTLP/gRPC trace 导出；两个变量
+均为空时不会导出。标准的 `OTEL_TRACES_SAMPLER` 和
+`OTEL_TRACES_SAMPLER_ARG` 用于控制采样；Compose 在启用导出后默认使用 10% 的
+父级关联采样：
+
+```dotenv
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
+```
+
+MirrorProxy 会提取请求中的 W3C `traceparent`/`tracestate` 上下文，并把当前 trace
+上下文注入上游请求。请求 span 只使用归一化路由名，明确排除原始路径、查询参数、
+`Authorization`、Cookie 和 baggage 值。
+
 ## 开发
 
 构建 Web 控制台：
@@ -908,7 +948,8 @@ v1.x 后续计划：
 - 增加按用户或子域名归属流量及独立配额的能力。
 - 为目录中尚未覆盖的目标补齐真实原生客户端 smoke，重点覆盖 Windows、macOS
   和较少使用的语言生态。
-- 增加 Prometheus/OpenTelemetry 指标、结构化请求追踪和告警示例，同时避免记录凭据。
+- 持续维护 Prometheus/OpenTelemetry 指标、结构化请求追踪和不记录凭据的告警
+  示例，并确保其兼容受支持版本。
 - 为剩余目录目标补齐包管理器专用的本机改源与精确回滚能力。
 - 在保留 SQLite 零依赖默认方案的前提下，评估高可用 metadata 存储。
 

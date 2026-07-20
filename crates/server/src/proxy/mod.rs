@@ -40,10 +40,13 @@ use axum::{
     response::Response,
 };
 use futures_util::TryStreamExt;
+use opentelemetry::global;
+use opentelemetry_http::HeaderInjector;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::{config::CacheConfig, AppState};
 
@@ -168,6 +171,14 @@ fn upstream_request(
             request = request.header(name.as_str(), value.as_bytes());
         }
     }
+    let mut trace_headers = HeaderMap::new();
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(
+            &tracing::Span::current().context(),
+            &mut HeaderInjector(&mut trace_headers),
+        );
+    });
+    request = request.headers(trace_headers);
     if let Some(auth) = config.upstream_auth_for(&url) {
         request = match (&auth.username, &auth.password, &auth.bearer_token) {
             (Some(username), Some(password), None) => request.basic_auth(username, Some(password)),
@@ -346,6 +357,9 @@ pub(super) fn should_forward_request_header(name: &HeaderName) -> bool {
             | "keep-alive"
             | "proxy-authenticate"
             | "proxy-authorization"
+            | "traceparent"
+            | "tracestate"
+            | "baggage"
             | "te"
             | "trailer"
             | "transfer-encoding"
@@ -453,6 +467,15 @@ mod tests {
         assert!(!should_forward_request_header(&header::AUTHORIZATION));
         assert!(!should_forward_request_header(&header::COOKIE));
         assert!(!should_forward_request_header(&header::PROXY_AUTHORIZATION));
+        assert!(!should_forward_request_header(&HeaderName::from_static(
+            "traceparent"
+        )));
+        assert!(!should_forward_request_header(&HeaderName::from_static(
+            "tracestate"
+        )));
+        assert!(!should_forward_request_header(&HeaderName::from_static(
+            "baggage"
+        )));
         assert!(should_forward_request_header(&header::ACCEPT));
     }
 

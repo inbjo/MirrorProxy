@@ -10,6 +10,9 @@ services:
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       MIRRORPROXY_MAVEN_FALLBACKS: ${MIRRORPROXY_MAVEN_FALLBACKS-https://jcenter.bintray.com}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
     volumes:
       - mirrorproxy-data:/data
