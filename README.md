@@ -95,6 +95,9 @@ services:
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       MIRRORPROXY_MAVEN_FALLBACKS: ${MIRRORPROXY_MAVEN_FALLBACKS-https://jcenter.bintray.com}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
     volumes:
       - mirrorproxy-data:/data
@@ -124,6 +127,8 @@ MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1
 # MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
 # Optional: comma-separated Maven fallback repositories; empty disables fallback.
 # MIRRORPROXY_MAVEN_FALLBACKS=https://jcenter.bintray.com
+# Optional: enable OTLP/gRPC trace export and sample 10% of root traces.
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 ```
 
 ```bash
@@ -807,6 +812,44 @@ Once the sent-body total reaches the monthly limit, new proxy requests receive
 surfaces stay available. A new calendar month in the configured timezone starts
 with a fresh quota automatically.
 
+## Observability
+
+Prometheus metrics are available at `GET /metrics`. The endpoint exports
+normalized route, response status, request duration, delivered proxy bytes,
+stream errors, quota/rate-limit rejections, and build information. Labels never
+contain raw URLs, query strings, request headers, credentials, or tokens.
+
+Example Prometheus scrape configuration:
+
+```yaml
+scrape_configs:
+  - job_name: mirrorproxy
+    static_configs:
+      - targets: ["mirrorproxy:3000"]
+```
+
+The ready-to-load alert rules in
+[`deploy/prometheus/alerts.yml`](deploy/prometheus/alerts.yml) cover sustained
+5xx responses, proxy stream errors, and quota rejections. Tune their thresholds
+for the expected traffic volume before production use.
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` (or the trace-specific
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) to enable OTLP/gRPC trace export. Leaving
+both variables empty disables exporting. The standard `OTEL_TRACES_SAMPLER` and
+`OTEL_TRACES_SAMPLER_ARG` variables control sampling; Compose defaults to a 10%
+parent-based ratio when export is enabled:
+
+```dotenv
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
+```
+
+MirrorProxy extracts incoming W3C `traceparent`/`tracestate` context and injects
+the active context into upstream requests. Request spans use normalized route
+names and deliberately exclude raw paths, query strings, `Authorization`,
+cookies, and baggage values.
+
 ## Development
 
 Build the web console:
@@ -1023,8 +1066,8 @@ Planned v1.x work:
 - Add per-user or per-subdomain traffic ownership and independent quotas.
 - Expand real native-client smoke coverage for the remaining catalog targets,
   especially Windows, macOS, and less common language ecosystems.
-- Add Prometheus/OpenTelemetry metrics, structured request tracing, and alerting
-  examples without recording credentials.
+- Keep Prometheus/OpenTelemetry metrics, structured request tracing, and
+  credential-safe alerting examples compatible with supported releases.
 - Complete additional package-manager-specific source editing and rollback
   behavior for the remaining catalog targets.
 - Evaluate high-availability metadata storage while retaining SQLite as the

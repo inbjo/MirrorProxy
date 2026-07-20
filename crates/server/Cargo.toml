@@ -18,6 +18,11 @@ http = "1"
 include_dir = "0.7"
 mime_guess = "2"
 mirrorproxy-catalog = { path = "../catalog" }
+opentelemetry = { version = "0.32", default-features = false, features = ["trace"] }
+opentelemetry-http = { version = "0.32", default-features = false }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["rt-tokio", "trace"] }
+prometheus = "0.14"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "gzip", "brotli", "deflate", "json"] }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
@@ -29,6 +34,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal
 toml = "0.9"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 tracing = "0.1"
+tracing-opentelemetry = { version = "0.33", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2"
 
