@@ -15,6 +15,7 @@ const sources = {
 
 const adminConfig = {
   ...publicConfig,
+  trusted_proxies: ['127.0.0.1'],
   forward_client_authorization: false,
   quota: { ...publicConfig.quota, request_event_retention_days: 30 },
   database_path: 'mirrorproxy.sqlite3',

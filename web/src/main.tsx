@@ -721,7 +721,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     if (configResponse.status === 401 || statsResponse.status === 401 || auditResponse.status === 401) throw new Error('unauthorized')
     if (!configResponse.ok || !statsResponse.ok || !auditResponse.ok) throw new Error('load failed')
     const [config, nextStats, nextAuditLog] = await Promise.all([configResponse.json() as Promise<AdminConfig>, statsResponse.json() as Promise<AdminStats>, auditResponse.json() as Promise<AuditLogEntry[]>])
-    setDraft(config)
+    setDraft({ ...config, trusted_proxies: config.trusted_proxies ?? [] })
     setStats(nextStats)
     setAuditLog(nextAuditLog)
   }, [])
