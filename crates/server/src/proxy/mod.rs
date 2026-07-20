@@ -336,6 +336,10 @@ pub fn metadata_cache_value() -> HeaderValue {
     HeaderValue::from_static("public, max-age=300, stale-while-revalidate=3600")
 }
 
+pub fn metadata_vary_value() -> HeaderValue {
+    HeaderValue::from_static("X-Forwarded-Host, X-Forwarded-Proto")
+}
+
 pub(super) fn should_forward_request_header(name: &HeaderName) -> bool {
     !matches!(
         name.as_str().to_ascii_lowercase().as_str(),

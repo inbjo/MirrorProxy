@@ -91,6 +91,7 @@ services:
       - "${MIRRORPROXY_PORT:-3000}:3000"
     environment:
       MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-}
+      MIRRORPROXY_TRUSTED_PROXIES: ${MIRRORPROXY_TRUSTED_PROXIES:-127.0.0.1,::1}
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
@@ -107,14 +108,17 @@ volumes:
   mirrorproxy-data:
 ```
 
-Optionally set a fixed external URL, host port, and initial administrator
-password in a `.env` file before startup. When the public URL is unset or
-empty, MirrorProxy derives it from the browser request address (including
-`X-Forwarded-Host` and `X-Forwarded-Proto` behind a reverse proxy):
+Optionally set a fixed external URL, host port, initial administrator password,
+and trusted reverse-proxy peers in a `.env` file before startup. When the
+public URL is unset or empty, MirrorProxy derives it from the browser request
+address. Forwarded headers are accepted only from `MIRRORPROXY_TRUSTED_PROXIES`:
 
 ```dotenv
 MIRRORPROXY_PORT=53000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
+# Keep the defaults for a host-local Nginx/Caddy; use the reverse proxy's
+# Docker-network peer IP or CIDR when it runs in another container.
+MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1
 # Optional: uncomment to set the initial admin password yourself.
 # MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
 ```
@@ -137,6 +141,7 @@ Compose:
 docker run -d --name mirrorproxy --restart unless-stopped \
   -p 3000:3000 \
   -e MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com \
+  -e MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1 \
   -e MIRRORPROXY_ADMIN_PASSWORD='replace-with-a-strong-password' \
   -v mirrorproxy-data:/data \
   kudang/mirrorproxy:latest
@@ -701,6 +706,7 @@ MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml
 MIRRORPROXY_DB=/var/lib/mirrorproxy/mirrorproxy.sqlite3
 MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
+MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1,172.18.0.0/16
 MIRRORPROXY_ENABLED_PROXIES=github,composer,oci,npm,nvm,opam,go,maven,rubygems,rustup,nuget,cpan,cran,hackage,julia,luarocks,clojars,cocoapods,pub,anaconda,texlive,winget,elpa,nix,guix,flatpak,homebrew,os,crates,pypi
 MIRRORPROXY_REQUEST_TIMEOUT_SECS=60
 MIRRORPROXY_RATE_LIMIT_ENABLED=true
@@ -849,7 +855,16 @@ Install `musl-tools` first so `musl-gcc` is available.
 
 ## Reverse Proxy Deployment
 
-MirrorProxy should usually run behind a TLS reverse proxy. It automatically uses forwarded host and protocol headers when `public_base_url` is empty; set it to the external HTTPS URL only when a fixed address is required.
+MirrorProxy should usually run behind a TLS reverse proxy. Leave `public_base_url` empty to derive the external scheme and host per request, so changing `a.example.com` to `b.example.com` only requires reloading the reverse proxy. Use a fixed `public_base_url` for path-prefix deployments such as `https://example.com/mirrorproxy`.
+
+Forwarded headers are accepted only from `trusted_proxies`, which defaults to `127.0.0.1` and `::1`. Add the proxy's actual peer IP or CIDR when it runs in another host/container. Configure the proxy to **overwrite** `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto`; never pass client-supplied values through. Keep MirrorProxy's listener private to the proxy where possible.
+
+```toml
+# IPs and CIDRs are supported. This setting takes effect immediately in the admin console.
+trusted_proxies = ["127.0.0.1", "::1", "172.18.0.0/16"]
+```
+
+Equivalent environment setting: `MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1,172.18.0.0/16`.
 
 Nginx example:
 
@@ -868,7 +883,8 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
@@ -877,11 +893,68 @@ Caddy example:
 
 ```caddyfile
 mirror.example.com {
-    reverse_proxy selfhost.com {
+    reverse_proxy 127.0.0.1:3000 {
         flush_interval -1
     }
 }
 ```
+
+Caddy overwrites the standard forwarded headers automatically. For a separate container/network, add Caddy's peer address or subnet to `trusted_proxies`.
+
+Traefik (Docker labels) example:
+
+```yaml
+labels:
+  - traefik.enable=true
+  - traefik.http.routers.mirrorproxy.rule=Host(`mirror.example.com`)
+  - traefik.http.routers.mirrorproxy.entrypoints=websecure
+  - traefik.http.routers.mirrorproxy.tls=true
+  - traefik.http.services.mirrorproxy.loadbalancer.server.port=3000
+```
+
+Traefik supplies `X-Forwarded-Host` and `X-Forwarded-Proto`; set `trusted_proxies` to its Docker-network address/range, not the public client range.
+
+Apache HTTP Server example:
+
+```apache
+ProxyPreserveHost On
+ProxyPass / http://127.0.0.1:3000/
+ProxyPassReverse / http://127.0.0.1:3000/
+RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
+RequestHeader set X-Forwarded-Proto "https"
+```
+
+HAProxy example:
+
+```haproxy
+frontend https_in
+    bind :443 ssl crt /etc/haproxy/certs/mirror.example.com.pem
+    http-request set-header X-Forwarded-Host %[req.hdr(Host)]
+    http-request set-header X-Forwarded-Proto https
+    default_backend mirrorproxy
+
+backend mirrorproxy
+    server app 127.0.0.1:3000
+```
+
+Envoy example:
+
+```yaml
+static_resources:
+  clusters:
+    - name: mirrorproxy
+      connect_timeout: 1s
+      type: STATIC
+      load_assignment:
+        cluster_name: mirrorproxy
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: 127.0.0.1, port_value: 3000 }
+```
+
+Use Envoy's HTTP connection manager with `use_remote_address: true` and ensure its generated `x-forwarded-proto` / authority headers reach MirrorProxy; add Envoy's peer IP to `trusted_proxies`.
 
 For Docker/OCI and large release files, keep request buffering disabled in the reverse proxy so large blobs stream instead of being fully buffered.
 

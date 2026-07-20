@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, net::IpAddr, path::Path};
 
 use chrono_tz::Tz;
 use reqwest::Url;
@@ -12,6 +12,10 @@ pub struct Config {
     pub listen_addr: String,
     #[serde(default)]
     pub public_base_url: String,
+    /// Connections from these IP addresses or CIDR ranges may provide
+    /// X-Forwarded-Host and X-Forwarded-Proto.
+    #[serde(default = "default_trusted_proxies")]
+    pub trusted_proxies: Vec<String>,
     #[serde(default = "default_enabled_proxies")]
     pub enabled_proxies: Vec<String>,
     #[serde(default)]
@@ -206,6 +210,14 @@ impl Config {
         if let Ok(value) = std::env::var("MIRRORPROXY_PUBLIC_BASE_URL") {
             self.public_base_url = value.trim_end_matches('/').to_string();
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_TRUSTED_PROXIES") {
+            self.trusted_proxies = value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect();
+        }
         if let Ok(value) = std::env::var("MIRRORPROXY_ENABLED_PROXIES") {
             self.enabled_proxies = value
                 .split(',')
@@ -287,6 +299,11 @@ impl Config {
         }
         if !self.public_base_url.is_empty() {
             validate_http_url("public_base_url", &self.public_base_url)?;
+        }
+        for proxy in &self.trusted_proxies {
+            parse_trusted_proxy(proxy).map_err(|error| {
+                anyhow::anyhow!("trusted_proxies entry '{proxy}' is invalid: {error}")
+            })?;
         }
         if self.timeout.request_secs == 0 {
             anyhow::bail!("timeout.request_secs must be greater than 0");
@@ -410,6 +427,12 @@ impl Config {
         self.enabled_proxies.iter().any(|item| item == proxy)
     }
 
+    pub fn is_trusted_proxy(&self, address: IpAddr) -> bool {
+        self.trusted_proxies
+            .iter()
+            .any(|proxy| parse_trusted_proxy(proxy).is_ok_and(|network| network.contains(address)))
+    }
+
     pub fn upstream_auth_for(&self, url: &reqwest::Url) -> Option<&UpstreamAuth> {
         self.upstream_auth.iter().find_map(|(name, auth)| {
             let upstream = self.upstream_url(name)?;
@@ -481,6 +504,7 @@ impl Default for Config {
             database_path: default_database_path(),
             listen_addr: default_listen_addr(),
             public_base_url: String::new(),
+            trusted_proxies: default_trusted_proxies(),
             enabled_proxies: default_enabled_proxies(),
             upstreams: Upstreams::default(),
             timeout: TimeoutConfig::default(),
@@ -489,6 +513,72 @@ impl Default for Config {
             quota: QuotaConfig::default(),
             forward_client_authorization: false,
             upstream_auth: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TrustedProxy {
+    V4 { network: u32, prefix: u8 },
+    V6 { network: u128, prefix: u8 },
+}
+
+impl TrustedProxy {
+    fn contains(self, address: IpAddr) -> bool {
+        match (self, address) {
+            (Self::V4 { network, prefix }, IpAddr::V4(address)) => {
+                let mask = if prefix == 0 {
+                    0
+                } else {
+                    u32::MAX << (32 - prefix)
+                };
+                u32::from(address) & mask == network & mask
+            }
+            (Self::V6 { network, prefix }, IpAddr::V6(address)) => {
+                let mask = if prefix == 0 {
+                    0
+                } else {
+                    u128::MAX << (128 - prefix)
+                };
+                u128::from(address) & mask == network & mask
+            }
+            _ => false,
+        }
+    }
+}
+
+fn parse_trusted_proxy(value: &str) -> Result<TrustedProxy, String> {
+    let (address, prefix) = match value.trim().split_once('/') {
+        Some((address, prefix)) => (address, Some(prefix)),
+        None => (value.trim(), None),
+    };
+    let address = address
+        .parse::<IpAddr>()
+        .map_err(|_| "expected an IP address or CIDR range")?;
+    match address {
+        IpAddr::V4(address) => {
+            let prefix = prefix
+                .map_or(Ok(32), str::parse::<u8>)
+                .map_err(|_| "invalid IPv4 prefix")?;
+            if prefix > 32 {
+                return Err("IPv4 prefix must be between 0 and 32".to_string());
+            }
+            Ok(TrustedProxy::V4 {
+                network: u32::from(address),
+                prefix,
+            })
+        }
+        IpAddr::V6(address) => {
+            let prefix = prefix
+                .map_or(Ok(128), str::parse::<u8>)
+                .map_err(|_| "invalid IPv6 prefix")?;
+            if prefix > 128 {
+                return Err("IPv6 prefix must be between 0 and 128".to_string());
+            }
+            Ok(TrustedProxy::V6 {
+                network: u128::from(address),
+                prefix,
+            })
         }
     }
 }
@@ -593,6 +683,10 @@ fn default_listen_addr() -> String {
 
 fn default_database_path() -> String {
     "mirrorproxy.sqlite3".to_string()
+}
+
+fn default_trusted_proxies() -> Vec<String> {
+    vec!["127.0.0.1".to_string(), "::1".to_string()]
 }
 
 fn default_cache_directory() -> String {
@@ -904,6 +998,29 @@ fn validate_http_url(field: &str, value: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trusted_proxies_accept_ips_and_cidrs() {
+        let config = Config {
+            trusted_proxies: vec!["10.10.0.0/16".to_string(), "::1".to_string()],
+            ..Config::default()
+        };
+
+        assert!(config.validate().is_ok());
+        assert!(config.is_trusted_proxy("10.10.4.2".parse().unwrap()));
+        assert!(config.is_trusted_proxy("::1".parse().unwrap()));
+        assert!(!config.is_trusted_proxy("10.11.4.2".parse().unwrap()));
+    }
+
+    #[test]
+    fn rejects_invalid_trusted_proxy() {
+        let config = Config {
+            trusted_proxies: vec!["10.0.0.1/33".to_string()],
+            ..Config::default()
+        };
+
+        assert!(config.validate().is_err());
+    }
 
     #[test]
     fn defaults_texlive_to_official_ctan_multiplexor() {

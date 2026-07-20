@@ -15,7 +15,7 @@ use std::{
 use anyhow::Context;
 use axum::{
     body::Body,
-    extract::{Request, State},
+    extract::{connect_info::ConnectInfo, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -129,7 +129,7 @@ fn request_public_base_url(headers: &HeaderMap) -> Option<String> {
     Some(url.as_str().trim_end_matches('/').to_string())
 }
 
-fn header_value<'a>(headers: &'a HeaderMap, name: header::HeaderName) -> Option<&'a str> {
+fn header_value(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {
     headers
         .get(name)?
         .to_str()
@@ -171,9 +171,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%addr, "starting MirrorProxy");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
@@ -280,6 +283,14 @@ fn set_toml_value(document: &mut toml::Value, key: &str, value: &str) -> anyhow:
         | ConfigValueKind::OptionalHttpUrl
         | ConfigValueKind::NonEmpty
         | ConfigValueKind::QuotaAction => toml::Value::String(value.to_string()),
+        ConfigValueKind::TrustedProxyList => toml::Value::Array(
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| toml::Value::String(item.to_string()))
+                .collect(),
+        ),
     };
 
     let segments: Vec<_> = spec.toml_path.split('.').collect();
@@ -343,6 +354,7 @@ enum ConfigValueKind {
     PositiveU32,
     PositiveU64,
     QuotaAction,
+    TrustedProxyList,
 }
 
 fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
@@ -361,6 +373,11 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             "public_base_url",
             "public_base_url",
             ConfigValueKind::OptionalHttpUrl,
+        ),
+        "trusted_proxies" => (
+            "trusted_proxies",
+            "trusted_proxies",
+            ConfigValueKind::TrustedProxyList,
         ),
         "forward_client_authorization" => (
             "forward_client_authorization",
@@ -479,6 +496,19 @@ fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
                 anyhow::bail!("{key} expects stop_proxy or throttle");
             }
         }
+        ConfigValueKind::TrustedProxyList => {
+            let proxies = value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect();
+            Config {
+                trusted_proxies: proxies,
+                ..Config::default()
+            }
+            .validate()?;
+        }
     }
 
     Ok(())
@@ -493,6 +523,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "database_path" => Some(config.database_path.clone()),
         "listen_addr" => Some(config.listen_addr.clone()),
         "public_base_url" => Some(config.public_base_url.clone()),
+        "trusted_proxies" => Some(config.trusted_proxies.join(",")),
         "forward_client_authorization" => Some(config.forward_client_authorization.to_string()),
         "enabled_proxies" => Some(config.enabled_proxies.join(",")),
         "timeout.request_secs" => Some(config.timeout.request_secs.to_string()),
@@ -564,6 +595,7 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
         "database_path",
         "listen_addr",
         "public_base_url",
+        "trusted_proxies",
         "forward_client_authorization",
         "enabled_proxies",
         "timeout.request_secs",
@@ -848,9 +880,29 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             state.clone(),
             rate_limit_middleware,
         ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            strip_untrusted_forwarded_headers,
+        ))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state))
+}
+
+async fn strip_untrusted_forwarded_headers(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let trusted = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .is_some_and(|peer| state.config().is_trusted_proxy(peer.0.ip()));
+    if !trusted {
+        request.headers_mut().remove("x-forwarded-host");
+        request.headers_mut().remove("x-forwarded-proto");
+    }
+    next.run(request).await
 }
 
 fn initial_admin_password_log(username: &str, password: &str) -> String {
@@ -2084,17 +2136,16 @@ on_exceeded = "stop_proxy"
     #[tokio::test]
     async fn exposes_public_config() {
         let app = build_router(Config::default()).await.unwrap();
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/public-config")
-                    .header("host", "mirror.example:8443")
-                    .header("x-forwarded-proto", "https")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
+        let mut request = Request::builder()
+            .uri("/api/public-config")
+            .header("host", "mirror.example:8443")
+            .header("x-forwarded-proto", "https")
+            .body(Body::empty())
             .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo("127.0.0.1:4242".parse::<SocketAddr>().unwrap()));
+        let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -2634,17 +2685,16 @@ on_exceeded = "stop_proxy"
     #[tokio::test]
     async fn crates_index_config_points_to_local_downloads() {
         let app = build_router(Config::default()).await.unwrap();
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/crates-index/config.json")
-                    .header("host", "mirror.example")
-                    .header("x-forwarded-proto", "https")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
+        let mut request = Request::builder()
+            .uri("/crates-index/config.json")
+            .header("host", "mirror.example")
+            .header("x-forwarded-proto", "https")
+            .body(Body::empty())
             .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo("127.0.0.1:4242".parse::<SocketAddr>().unwrap()));
+        let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -2654,9 +2704,35 @@ on_exceeded = "stop_proxy"
                 .unwrap(),
             "public, max-age=300, stale-while-revalidate=3600"
         );
+        assert_eq!(
+            response.headers().get(axum::http::header::VARY),
+            Some(&HeaderValue::from_static(
+                "X-Forwarded-Host, X-Forwarded-Proto"
+            ))
+        );
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["dl"], "https://mirror.example/crates/api/v1/crates");
+    }
+
+    #[tokio::test]
+    async fn ignores_forwarded_headers_from_an_untrusted_peer() {
+        let app = build_router(Config::default()).await.unwrap();
+        let mut request = Request::builder()
+            .uri("/api/public-config")
+            .header("host", "mirror.example")
+            .header("x-forwarded-host", "attacker.example")
+            .header("x-forwarded-proto", "https")
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "198.51.100.10:4242".parse::<SocketAddr>().unwrap(),
+        ));
+
+        let response = app.oneshot(request).await.unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["public_base_url"], "http://mirror.example");
     }
 
     #[tokio::test]

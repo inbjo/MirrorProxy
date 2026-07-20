@@ -90,6 +90,7 @@ services:
       - "${MIRRORPROXY_PORT:-3000}:3000"
     environment:
       MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-}
+      MIRRORPROXY_TRUSTED_PROXIES: ${MIRRORPROXY_TRUSTED_PROXIES:-127.0.0.1,::1}
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
@@ -819,7 +820,16 @@ OS 测试不只刷新索引，还至少下载一个真实包，例如 Debian/Ubu
 
 ## 反向代理部署
 
-MirrorProxy 通常应部署在 TLS 反向代理之后。当 `public_base_url` 为空时会自动使用转发的主机和协议头；只有需要固定地址时才设置为用户实际访问的外部 HTTPS 地址。
+MirrorProxy 通常应部署在 TLS 反向代理之后。将 `public_base_url` 留空时，服务会按请求推导外部协议和域名；因此从 `a.example.com` 切换到 `b.example.com` 时，只需重载反向代理。若以 `https://example.com/mirrorproxy` 这类路径前缀部署，请配置固定的 `public_base_url`。
+
+只有来自 `trusted_proxies` 的连接才会使用 `X-Forwarded-Host` 和 `X-Forwarded-Proto`；默认仅信任 `127.0.0.1` 与 `::1`。反向代理运行在其他主机或容器网络时，需加入其实际对端 IP 或 CIDR。反代必须**覆盖** `Host`、`X-Forwarded-Host`、`X-Forwarded-Proto`，不可透传客户端给出的值；并应尽量将 MirrorProxy 监听端口限制为仅反代可访问。
+
+```toml
+# 支持 IP 和 CIDR；可在管理页面即时修改。
+trusted_proxies = ["127.0.0.1", "::1", "172.18.0.0/16"]
+```
+
+等价的环境变量：`MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1,172.18.0.0/16`。
 
 Nginx 示例：
 
@@ -838,7 +848,8 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
@@ -847,11 +858,51 @@ Caddy 示例：
 
 ```caddyfile
 mirror.example.com {
-    reverse_proxy selfhost.com {
+    reverse_proxy 127.0.0.1:3000 {
         flush_interval -1
     }
 }
 ```
+
+Caddy 会自动覆盖标准转发头；若 Caddy 位于独立容器或网络，请将其对端 IP/网段加入 `trusted_proxies`。
+
+Traefik（Docker labels）示例：
+
+```yaml
+labels:
+  - traefik.enable=true
+  - traefik.http.routers.mirrorproxy.rule=Host(`mirror.example.com`)
+  - traefik.http.routers.mirrorproxy.entrypoints=websecure
+  - traefik.http.routers.mirrorproxy.tls=true
+  - traefik.http.services.mirrorproxy.loadbalancer.server.port=3000
+```
+
+Traefik 会写入 `X-Forwarded-Host` 与 `X-Forwarded-Proto`；应信任其 Docker 网络地址或网段，而不是公网客户端网段。
+
+Apache HTTP Server 示例：
+
+```apache
+ProxyPreserveHost On
+ProxyPass / http://127.0.0.1:3000/
+ProxyPassReverse / http://127.0.0.1:3000/
+RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
+RequestHeader set X-Forwarded-Proto "https"
+```
+
+HAProxy 示例：
+
+```haproxy
+frontend https_in
+    bind :443 ssl crt /etc/haproxy/certs/mirror.example.com.pem
+    http-request set-header X-Forwarded-Host %[req.hdr(Host)]
+    http-request set-header X-Forwarded-Proto https
+    default_backend mirrorproxy
+
+backend mirrorproxy
+    server app 127.0.0.1:3000
+```
+
+Envoy 示例：将 Envoy 的 HTTP connection manager 配置为 `use_remote_address: true`，并确保它生成的 `x-forwarded-proto` 和 authority 头传递至 MirrorProxy；再将 Envoy 的对端 IP 加入 `trusted_proxies`。
 
 Docker/OCI blob 和 GitHub release 大文件建议关闭反向代理请求缓冲，确保大文件流式转发，而不是先完整缓存在反向代理中。
 

@@ -61,6 +61,7 @@ pub async fn service_index(
         return Response::builder()
             .status(status)
             .header(header::CACHE_CONTROL, proxy::metadata_cache_value())
+            .header(header::VARY, proxy::metadata_vary_value())
             .header(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/json; charset=utf-8"),

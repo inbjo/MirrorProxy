@@ -75,6 +75,7 @@ async fn proxy_index_path(
         return Response::builder()
             .status(200)
             .header(header::CACHE_CONTROL, super::metadata_cache_value())
+            .header(header::VARY, super::metadata_vary_value())
             .header(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/json"),
