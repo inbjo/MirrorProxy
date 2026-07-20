@@ -17,6 +17,8 @@ nvm = "https://nodejs.org/dist"
 opam = "https://opam.ocaml.org"
 go_proxy = "https://proxy.golang.org"
 maven = "https://repo.maven.apache.org/maven2"
+# Tried in order only when the primary repository returns HTTP 404.
+maven_fallbacks = ["https://jcenter.bintray.com"]
 rubygems = "https://rubygems.org"
 rustup = "https://static.rust-lang.org"
 nuget = "https://api.nuget.org"

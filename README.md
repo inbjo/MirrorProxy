@@ -93,6 +93,7 @@ services:
       MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
+      MIRRORPROXY_MAVEN_FALLBACKS: ${MIRRORPROXY_MAVEN_FALLBACKS-https://jcenter.bintray.com}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
     volumes:
       - mirrorproxy-data:/data
@@ -115,6 +116,8 @@ MIRRORPROXY_PORT=53000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
 # Optional: uncomment to set the initial admin password yourself.
 # MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
+# Optional: comma-separated Maven fallback repositories; empty disables fallback.
+# MIRRORPROXY_MAVEN_FALLBACKS=https://jcenter.bintray.com
 ```
 
 ```bash
@@ -314,7 +317,22 @@ mirrorproxy set maven --mirror mirrorproxy --base-url http://selfhost.com
 mvn dependency:resolve
 ```
 
-The Maven adapter streams Maven2 repository paths, including POMs, metadata, artifacts, checksums, and signatures, from Maven Central.
+The Maven adapter streams Maven2 repository paths, including POMs, metadata,
+artifacts, checksums, and signatures. A client still configures only the single
+`/maven/` endpoint; MirrorProxy tries the primary `upstreams.maven` repository
+first and advances through `upstreams.maven_fallbacks` only for an explicit
+HTTP 404. Authentication failures, rate limits, server errors, and transport
+errors are not hidden by fallback. The default order is Maven Central followed
+by the read-only JCenter repository. Set an empty list to disable fallback:
+
+```toml
+[upstreams]
+maven = "https://repo.maven.apache.org/maven2"
+maven_fallbacks = ["https://jcenter.bintray.com"]
+```
+
+For containers, set the ordered fallback list as comma-separated URLs with
+`MIRRORPROXY_MAVEN_FALLBACKS`; an empty value disables fallback.
 
 ## RubyGems Proxy
 
@@ -668,6 +686,8 @@ nvm = "https://nodejs.org/dist"
 opam = "https://opam.ocaml.org"
 go_proxy = "https://proxy.golang.org"
 maven = "https://repo.maven.apache.org/maven2"
+# Tried in order only when the primary repository returns HTTP 404.
+maven_fallbacks = ["https://jcenter.bintray.com"]
 rubygems = "https://rubygems.org"
 rustup = "https://static.rust-lang.org"
 nuget = "https://api.nuget.org"

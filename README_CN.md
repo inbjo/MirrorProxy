@@ -92,6 +92,7 @@ services:
       MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
+      MIRRORPROXY_MAVEN_FALLBACKS: ${MIRRORPROXY_MAVEN_FALLBACKS-https://jcenter.bintray.com}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
     volumes:
       - mirrorproxy-data:/data
@@ -113,6 +114,8 @@ MIRRORPROXY_PORT=53000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
 # 可选：取消下一行注释可手动设置初始管理员密码
 # MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
+# 可选：逗号分隔的 Maven 后备仓库；空值关闭回退
+# MIRRORPROXY_MAVEN_FALLBACKS=https://jcenter.bintray.com
 ```
 
 ```bash
@@ -304,7 +307,20 @@ mirrorproxy set maven --mirror mirrorproxy --base-url http://selfhost.com
 mvn dependency:resolve
 ```
 
-Maven adapter 会从 Maven Central 流式转发 Maven2 路径，包括 POM、metadata、artifact、checksum 和签名文件。
+Maven adapter 会流式转发 Maven2 路径，包括 POM、metadata、artifact、checksum 和
+签名文件。客户端只需配置一个 `/maven/` 地址；MirrorProxy 先请求
+`upstreams.maven`，仅在收到明确的 HTTP 404 时才按顺序尝试
+`upstreams.maven_fallbacks`。认证失败、限流、服务器错误和网络错误不会被回退逻辑
+掩盖。默认顺序是 Maven Central，然后是只读 JCenter。设置空数组可关闭聚合回退：
+
+```toml
+[upstreams]
+maven = "https://repo.maven.apache.org/maven2"
+maven_fallbacks = ["https://jcenter.bintray.com"]
+```
+
+容器部署可通过 `MIRRORPROXY_MAVEN_FALLBACKS` 传入逗号分隔的有序 URL；设置为空
+即可关闭回退。
 
 ## RubyGems 代理
 
@@ -644,6 +660,8 @@ nvm = "https://nodejs.org/dist"
 opam = "https://opam.ocaml.org"
 go_proxy = "https://proxy.golang.org"
 maven = "https://repo.maven.apache.org/maven2"
+# 仅在主仓库返回 HTTP 404 时，按顺序尝试以下仓库。
+maven_fallbacks = ["https://jcenter.bintray.com"]
 rubygems = "https://rubygems.org"
 rustup = "https://static.rust-lang.org"
 nuget = "https://api.nuget.org"
