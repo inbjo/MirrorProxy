@@ -140,6 +140,20 @@ docker run -d --name mirrorproxy --restart unless-stopped \
   kudang/mirrorproxy:latest
 ```
 
+Tagged multi-architecture images are published with an SPDX SBOM, a
+BuildKit `mode=max` provenance attestation, and a keyless Sigstore signature
+issued to the GitHub Actions workflow. Verify a released image by immutable
+digest:
+
+```bash
+IMAGE=kudang/mirrorproxy:1.0.2
+DIGEST="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')"
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/inbjo/MirrorProxy/\.github/workflows/docker\.yml@refs/tags/v[0-9].*$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "kudang/mirrorproxy@${DIGEST}"
+```
+
 The named volume is recommended. If you replace it with a host bind mount such
 as `/srv/mirrorproxy/data:/data`, that directory must be writable by container
 UID/GID `10001:10001`:
@@ -909,8 +923,8 @@ Docker deployment support.
 
 Planned v1.x work:
 
-- Maintain signed multi-architecture Docker Hub images with SBOM and provenance
-  attestations.
+- Keep signed multi-architecture Docker Hub images with SBOM and provenance
+  attestations verifiable as part of every tagged release.
 - Add per-user or per-subdomain traffic ownership and independent quotas.
 - Expand real native-client smoke coverage for the remaining catalog targets,
   especially Windows, macOS, and less common language ecosystems.
