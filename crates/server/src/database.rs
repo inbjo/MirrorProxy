@@ -138,13 +138,8 @@ impl Database {
             return Ok(None);
         }
 
-        let (password, generated) = match std::env::var("MIRRORPROXY_ADMIN_PASSWORD")
-            .ok()
-            .filter(|password| !password.is_empty())
-        {
-            Some(password) => (password, false),
-            None => (random_secret(28), true),
-        };
+        let (password, generated) =
+            initial_admin_password(std::env::var("MIRRORPROXY_ADMIN_PASSWORD").ok());
         let password_hash = hash_password(&password)?;
         let now = unix_timestamp();
         sqlx::query(
@@ -529,6 +524,13 @@ fn random_secret(length: usize) -> String {
         .collect()
 }
 
+fn initial_admin_password(configured_password: Option<String>) -> (String, bool) {
+    match configured_password.filter(|password| !password.is_empty()) {
+        Some(password) => (password, false),
+        None => (random_secret(28), true),
+    }
+}
+
 fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -553,6 +555,25 @@ const MIGRATIONS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_or_empty_initial_admin_password_generates_a_random_password() {
+        for configured_password in [None, Some(String::new())] {
+            let (password, generated) = initial_admin_password(configured_password);
+            assert!(generated);
+            assert_eq!(password.len(), 28);
+            assert!(password
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric()));
+        }
+    }
+
+    #[test]
+    fn configured_initial_admin_password_is_used_without_policy_validation() {
+        let (password, generated) = initial_admin_password(Some("x".to_string()));
+        assert!(!generated);
+        assert_eq!(password, "x");
+    }
 
     #[tokio::test]
     async fn initializes_admin_and_manages_sessions() {

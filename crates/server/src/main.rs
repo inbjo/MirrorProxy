@@ -607,9 +607,8 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     if let Some(credentials) = initial_admin {
         if credentials.generated {
             tracing::warn!(
-                username = credentials.username,
-                password = credentials.password,
-                "created initial MirrorProxy administrator; save this password now because it is not shown again"
+                "{}",
+                initial_admin_password_log(credentials.username, &credentials.password)
             );
         } else {
             tracing::info!(
@@ -784,6 +783,12 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state))
+}
+
+fn initial_admin_password_log(username: &str, password: &str) -> String {
+    format!(
+        "\nINITIAL ADMIN PASSWORD: {password}\nMIRRORPROXY_ADMIN_PASSWORD is empty or unset; generated a random password for username {username}.\nSave this password now; it will not be shown again."
+    )
 }
 
 impl RateLimiter {
@@ -1712,6 +1717,24 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[test]
+    fn generated_admin_password_log_starts_with_password_and_explains_fallback() {
+        let message = initial_admin_password_log("admin", "generated-password");
+
+        let mut lines = message.lines();
+        assert_eq!(lines.next(), Some(""));
+        assert_eq!(
+            lines.next(),
+            Some("INITIAL ADMIN PASSWORD: generated-password")
+        );
+        assert_eq!(
+            lines.next(),
+            Some(
+                "MIRRORPROXY_ADMIN_PASSWORD is empty or unset; generated a random password for username admin."
+            )
+        );
+    }
 
     #[test]
     fn config_value_reads_effective_config_keys() {
