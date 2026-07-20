@@ -445,7 +445,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "LuaRocks",
         category: SourceCategory::Language,
         aliases: &["luarocks"],
-        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -653,7 +653,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "WinGet",
         category: SourceCategory::Repository,
         aliases: &[],
-        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -677,7 +677,7 @@ pub const SOURCE_TARGETS: &[SourceTarget] = &[
         name: "Nix",
         category: SourceCategory::Repository,
         aliases: &[],
-        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::TemplateOnly],
+        supported_modes: &[SourceMode::ProxyAdapter, SourceMode::LocalConfig],
         default_scope: SourceScope::User,
     },
     SourceTarget {
@@ -1310,6 +1310,13 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         requires_sudo: false,
     },
     SourceTemplate {
+        target_code: "nix",
+        os_family: "linux",
+        scope: SourceScope::User,
+        template: "substituters = {repo_url}",
+        requires_sudo: false,
+    },
+    SourceTemplate {
         target_code: "apt",
         os_family: "debian",
         scope: SourceScope::System,
@@ -1523,5 +1530,9 @@ mod tests {
         assert!(templates_for_target("winget")[0]
             .template
             .contains("Microsoft.PreIndexed.Package"));
+        assert_eq!(
+            templates_for_target("nix")[0].template,
+            "substituters = {repo_url}"
+        );
     }
 }

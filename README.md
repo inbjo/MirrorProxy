@@ -622,8 +622,9 @@ mirrorproxy set bun --mirror mirrorproxy --base-url https://sina.dev --scope use
 
 `set` writes supported user-level package-manager configuration, including npm,
 pip, Cargo, GitHub HTTPS Git URL rewriting, Go, Composer, Maven, RubyGems,
-NuGet, CPAN, CRAN, Hackage, Clojars, and Anaconda, without invoking the
-package-manager executable. Before its first change it
+NuGet, CPAN, CRAN, Hackage, Clojars, Anaconda, LuaRocks, Homebrew bottles, and
+Nix binary caches, without invoking the package-manager executable. Before its
+first change it
 records the complete previous file in the platform-native user state directory
 (`~/.local/state/mirrorproxy/sources/` by default on Linux); `reset` restores
 that exact file. A non-empty configuration is never
@@ -634,8 +635,14 @@ was changed after the command.
 mirrorproxy set npm --mirror mirrorproxy --base-url http://selfhost.com
 mirrorproxy set cargo --mirror mirrorproxy --base-url http://selfhost.com
 mirrorproxy set github --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy set lua --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy set homebrew --mirror mirrorproxy --base-url http://selfhost.com
+mirrorproxy set nix --mirror mirrorproxy --base-url http://selfhost.com
 mirrorproxy reset npm
 mirrorproxy reset github
+mirrorproxy reset lua
+mirrorproxy reset homebrew
+mirrorproxy reset nix
 ```
 
 `set github` appends a `url.<MirrorProxy>.insteadOf` rule to the user's
@@ -875,6 +882,11 @@ For a local real-client protocol check (Git, npm/yarn/pnpm, Go, Cargo, pip, CPAN
 ```
 
 The script starts a temporary local server, uses temporary client homes/caches, and removes them on exit.
+CI additionally enables `MIRRORPROXY_SMOKE_NATIVE_EXTENDED=1`: the standalone
+CLI writes and precisely rolls back LuaRocks, Nix, and Homebrew configuration;
+their native clients then access MirrorProxy, and `rustup check` verifies the
+Rustup distribution/update endpoints. This mode requires `brew`, `nix`,
+`rustup`, and `luarocks`.
 
 ### Verified platforms and clients
 
@@ -886,7 +898,7 @@ index refreshes, and a real package download.
 
 | Verification level | Verified targets |
 | --- | --- |
-| Native language/development clients | Git, npm, Yarn, pnpm, Go modules, Cargo, pip, CPAN/cpanm, RubyGems, Maven, NuGet, CRAN/R, Cabal/Hackage, LuaRocks, Composer, and Docker/OCI |
+| Native language/development clients | Git, npm, Yarn, pnpm, Go modules, Cargo, pip, CPAN/cpanm, RubyGems, Maven, NuGet, CRAN/R, Cabal/Hackage, LuaRocks (including CLI-written config), Composer, Rustup, Nix, Homebrew, and Docker/OCI |
 | Native package manager in the matching OS container | Debian 12 APT, Ubuntu 24.04 APT, Fedora 42 DNF, Arch Linux pacman, Alpine 3.21 apk, openSUSE Leap 15.6 zypper, Void Linux xbps, Gentoo emerge, Kali rolling APT, Rocky Linux 9 DNF, AlmaLinux 9 DNF, Manjaro pacman, openEuler 24.03 LTS DNF, Anolis OS 8.8 DNF, Deepin 23 APT, ROS 2 Jazzy APT, OpenWrt 24.10.5 opkg, and Termux x86_64 APT |
 | Compatible package-manager container | Linux Mint, Trisquel, and Linux Lite through APT; Raspberry Pi OS and Armbian through arm64 APT indexes and packages; MSYS2 through its mingw64 repository with pacman |
 | Public protocol endpoint only | FreeBSD, Solus, NetBSD, and OpenBSD; their native userlands/kernels cannot run on a Linux Docker daemon, so these are not labelled native package-manager tests |
@@ -989,12 +1001,13 @@ Planned v1.x work:
 - Keep signed multi-architecture Docker Hub images with SBOM and provenance
   attestations verifiable as part of every tagged release.
 - Add per-user or per-subdomain traffic ownership and independent quotas.
-- Expand real native-client smoke coverage for the remaining catalog targets,
-  especially Windows, macOS, and less common language ecosystems.
+- Keep native-client smoke coverage current across Linux, Windows, macOS, Nix,
+  Homebrew, Rustup, and less common language ecosystems.
 - Keep Prometheus/OpenTelemetry metrics, structured request tracing, and
   credential-safe alerting examples compatible with supported releases.
-- Complete additional package-manager-specific source editing and rollback
-  behavior for the remaining catalog targets.
+- Maintain package-manager-specific source editing and exact rollback for every
+  target that advertises `local-config`; keep command/state-database targets
+  explicitly marked as templates.
 - Evaluate high-availability metadata storage while retaining SQLite as the
   zero-dependency default.
 

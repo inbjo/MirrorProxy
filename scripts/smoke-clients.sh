@@ -21,7 +21,9 @@ server_log="${work}/server.log"
 pid=""
 
 cleanup() {
-  [[ -n "${pid}" ]] && kill "${pid}" 2>/dev/null || true
+  if [[ -n "${pid}" ]]; then
+    kill "${pid}" 2>/dev/null || true
+  fi
   rm -rf "${work}"
 }
 trap cleanup EXIT
@@ -207,6 +209,37 @@ if [[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]]; then
   docker pull "127.0.0.1:${port}/library/busybox:1.36.1" >/dev/null
 fi
 
+if [[ "${MIRRORPROXY_SMOKE_NATIVE_EXTENDED:-0}" == "1" ]]; then
+  command -v brew >/dev/null
+  command -v nix >/dev/null
+  command -v rustup >/dev/null
+
+  cargo build --quiet --package mirrorproxy-cli --bin mirrorproxy
+  client="${root}/target/debug/mirrorproxy"
+
+  lua_home="${work}/lua-home"
+  "${client}" set lua --mirror mirrorproxy --base-url "${base}" --config-root "${lua_home}" >/dev/null
+  HOME="${lua_home}" luarocks --tree "${work}/luarocks-configured" install luafilesystem 1.8.0-1 >/dev/null
+  "${client}" reset lua --config-root "${lua_home}" >/dev/null
+
+  nix_home="${work}/nix-home"
+  "${client}" set nix --mirror mirrorproxy --base-url "${base}" --config-root "${nix_home}" >/dev/null
+  NIX_USER_CONF_FILES="${nix_home}/.config/nix/nix.conf" \
+    nix --extra-experimental-features nix-command config show substituters |
+    grep --fixed-strings "${base}/nix" >/dev/null
+  nix --extra-experimental-features nix-command store ping --store "${base}/nix/" >/dev/null
+  "${client}" reset nix --config-root "${nix_home}" >/dev/null
+
+  brew_home="${work}/brew-home"
+  "${client}" set homebrew --mirror mirrorproxy --base-url "${base}" --config-root "${brew_home}" >/dev/null
+  HOME="${brew_home}" HOMEBREW_CACHE="${work}/homebrew-cache" brew fetch --force-bottle hello >/dev/null
+  "${client}" reset homebrew --config-root "${brew_home}" >/dev/null
+
+  RUSTUP_DIST_SERVER="${base}/rustup" \
+    RUSTUP_UPDATE_ROOT="${base}/rustup/rustup" \
+    rustup check >/dev/null
+fi
+
 # Some adapters do not have a lightweight client available on every CI image.
 # Exercise their real public protocol entry points through the running proxy so
 # route wiring, upstream selection, streaming, and path validation stay covered.
@@ -227,5 +260,12 @@ if [[ "${MIRRORPROXY_SMOKE_EXTENDED:-0}" == "1" ]]; then
   smoke_curl "${base}/os/debian/dists/stable/Release"
 fi
 
+smoke_targets=""
+if [[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]]; then
+  smoke_targets+=" docker"
+fi
+if [[ "${MIRRORPROXY_SMOKE_NATIVE_EXTENDED:-0}" == "1" ]]; then
+  smoke_targets+=" configured-luarocks nix homebrew rustup"
+fi
 printf 'client smoke passed: git npm yarn pnpm go cargo pip cpanm rubygems maven nuget cran cabal luarocks composer%s\n' \
-  "$([[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]] && printf ' docker' || true)"
+  "${smoke_targets}"
