@@ -90,7 +90,7 @@ services:
     ports:
       - "${MIRRORPROXY_PORT:-3000}:3000"
     environment:
-      MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-}
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
@@ -107,8 +107,10 @@ volumes:
   mirrorproxy-data:
 ```
 
-Set the external URL, optional host port, and optional initial administrator
-password in a `.env` file before startup:
+Optionally set a fixed external URL, host port, and initial administrator
+password in a `.env` file before startup. When the public URL is unset or
+empty, MirrorProxy derives it from the browser request address (including
+`X-Forwarded-Host` and `X-Forwarded-Proto` behind a reverse proxy):
 
 ```dotenv
 MIRRORPROXY_PORT=53000
@@ -690,7 +692,7 @@ pypi_simple = "https://pypi.org/simple"
 pypi_files = "https://files.pythonhosted.org"
 ```
 
-`public_base_url` is used by the web console and metadata rewriters. Set it to the externally reachable URL, especially when MirrorProxy is behind Nginx, Caddy, Traefik, or another reverse proxy.
+`public_base_url` is used by the web console and metadata rewriters. When it is unset or empty, MirrorProxy derives it from each browser request's host and scheme (including `X-Forwarded-Host` and `X-Forwarded-Proto`). Set it to an external URL to use one fixed address instead.
 
 Common environment overrides:
 
@@ -708,7 +710,7 @@ MIRRORPROXY_CACHE_DIRECTORY=/var/cache/mirrorproxy
 MIRRORPROXY_CACHE_MAX_ENTRY_MB=8
 ```
 
-MirrorProxy validates `public_base_url`, all upstream URLs, enabled proxy names, and timeout values during startup. Invalid configuration fails fast with a field-specific error.
+MirrorProxy validates a non-empty `public_base_url`, all upstream URLs, enabled proxy names, and timeout values during startup. Invalid configuration fails fast with a field-specific error.
 
 Optional disk caching is disabled by default. When enabled, it stores only successful public GET responses with an explicit `Content-Length` no larger than `cache.max_entry_mb`; `cache.max_total_mb` bounds disk usage and evicts least-recently-used entries. Requests carrying `Authorization`, `Cookie`, or `Range` bypass the cache. Large or unknown-length responses stay streamed and are never buffered for caching.
 
@@ -847,7 +849,7 @@ Install `musl-tools` first so `musl-gcc` is available.
 
 ## Reverse Proxy Deployment
 
-MirrorProxy should usually run behind a TLS reverse proxy. Set `public_base_url` to the external HTTPS URL, not the internal bind address.
+MirrorProxy should usually run behind a TLS reverse proxy. It automatically uses forwarded host and protocol headers when `public_base_url` is empty; set it to the external HTTPS URL only when a fixed address is required.
 
 Nginx example:
 

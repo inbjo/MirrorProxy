@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, HeaderValue},
+    http::{header, HeaderMap, HeaderValue},
     response::Response,
 };
 use serde_json::json;
@@ -10,8 +10,12 @@ use crate::{proxy, AppState};
 
 use super::ProxyError;
 
-pub async fn index_root(State(state): State<AppState>) -> Result<Response, ProxyError> {
-    proxy_index_path(state, "config.json", None, None).await
+pub async fn index_root(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ProxyError> {
+    let public_base_url = state.public_base_url(&headers);
+    proxy_index_path(state, "config.json", None, public_base_url, None).await
 }
 
 pub async fn index(
@@ -20,7 +24,15 @@ pub async fn index(
     request: axum::extract::Request,
 ) -> Result<Response, ProxyError> {
     let query = request.uri().query().map(ToString::to_string);
-    proxy_index_path(state, &path, query.as_deref(), Some(request)).await
+    let public_base_url = state.public_base_url(request.headers());
+    proxy_index_path(
+        state,
+        &path,
+        query.as_deref(),
+        public_base_url,
+        Some(request),
+    )
+    .await
 }
 
 pub async fn download(
@@ -45,6 +57,7 @@ async fn proxy_index_path(
     state: AppState,
     path: &str,
     query: Option<&str>,
+    public_base_url: String,
     request: Option<axum::extract::Request>,
 ) -> Result<Response, ProxyError> {
     let config = state.config();
@@ -55,8 +68,8 @@ async fn proxy_index_path(
     let clean_path = sanitize_index_path(path)?;
     if clean_path == "config.json" {
         let body = json!({
-            "dl": format!("{}/crates/api/v1/crates", config.public_base_url),
-            "api": config.public_base_url,
+            "dl": format!("{public_base_url}/crates/api/v1/crates"),
+            "api": public_base_url,
         });
 
         return Response::builder()

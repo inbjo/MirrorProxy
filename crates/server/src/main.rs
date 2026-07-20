@@ -33,7 +33,7 @@ use proxy::{
     hackage, homebrew, julia, luarocks, maven, nix, npm, nuget, nvm, oci, opam, os, pub_repository,
     pypi, rubygems, rustup, texlive, winget, ProxyError,
 };
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -92,6 +92,61 @@ impl AppState {
             .expect("runtime config lock poisoned")
             .clone()
     }
+
+    /// Uses the configured external URL when present. Otherwise, URLs embedded
+    /// in proxy metadata point back to the address used by the current client.
+    pub fn public_base_url(&self, headers: &HeaderMap) -> String {
+        let configured = self.config().public_base_url;
+        if configured.is_empty() {
+            request_public_base_url(headers).unwrap_or_default()
+        } else {
+            configured
+        }
+    }
+}
+
+fn request_public_base_url(headers: &HeaderMap) -> Option<String> {
+    let host = forwarded_header_value(headers, "x-forwarded-host")
+        .or_else(|| header_value(headers, header::HOST))?;
+    let scheme = forwarded_header_value(headers, "x-forwarded-proto")
+        .filter(|scheme| {
+            scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+        })
+        .unwrap_or("http");
+    let scheme = scheme.to_ascii_lowercase();
+    let url = Url::parse(&format!("{scheme}://{host}")).ok()?;
+
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.host_str().is_none()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+
+    Some(url.as_str().trim_end_matches('/').to_string())
+}
+
+fn header_value<'a>(headers: &'a HeaderMap, name: header::HeaderName) -> Option<&'a str> {
+    headers
+        .get(name)?
+        .to_str()
+        .ok()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn forwarded_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)?
+        .to_str()
+        .ok()?
+        .split(',')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 #[tokio::main]
@@ -221,9 +276,10 @@ fn set_toml_value(document: &mut toml::Value, key: &str, value: &str) -> anyhow:
         ConfigValueKind::Bool => toml::Value::Boolean(value.parse()?),
         ConfigValueKind::U64 | ConfigValueKind::PositiveU64 => toml::Value::Integer(value.parse()?),
         ConfigValueKind::PositiveU32 => toml::Value::Integer(i64::from(value.parse::<u32>()?)),
-        ConfigValueKind::HttpUrl | ConfigValueKind::NonEmpty | ConfigValueKind::QuotaAction => {
-            toml::Value::String(value.to_string())
-        }
+        ConfigValueKind::HttpUrl
+        | ConfigValueKind::OptionalHttpUrl
+        | ConfigValueKind::NonEmpty
+        | ConfigValueKind::QuotaAction => toml::Value::String(value.to_string()),
     };
 
     let segments: Vec<_> = spec.toml_path.split('.').collect();
@@ -281,6 +337,7 @@ struct ConfigSetSpec {
 enum ConfigValueKind {
     Bool,
     HttpUrl,
+    OptionalHttpUrl,
     NonEmpty,
     U64,
     PositiveU32,
@@ -303,7 +360,7 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
         "public_base_url" => (
             "public_base_url",
             "public_base_url",
-            ConfigValueKind::HttpUrl,
+            ConfigValueKind::OptionalHttpUrl,
         ),
         "forward_client_authorization" => (
             "forward_client_authorization",
@@ -385,6 +442,17 @@ fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
                     "http" | "https" => anyhow::bail!("{key} must include a host"),
                     scheme => anyhow::bail!("{key} must use http or https, got {scheme}"),
                 })?;
+        }
+        ConfigValueKind::OptionalHttpUrl => {
+            if !value.is_empty() {
+                reqwest::Url::parse(value)
+                    .map_err(|error| anyhow::anyhow!("{key} is invalid: {error}"))
+                    .and_then(|url| match url.scheme() {
+                        "http" | "https" if url.host_str().is_some() => Ok(()),
+                        "http" | "https" => anyhow::bail!("{key} must include a host"),
+                        scheme => anyhow::bail!("{key} must use http or https, got {scheme}"),
+                    })?;
+            }
         }
         ConfigValueKind::NonEmpty => {
             if value.trim().is_empty() {
@@ -1243,10 +1311,10 @@ struct PublicQuotaConfig {
     on_exceeded: String,
 }
 
-async fn public_config(State(state): State<AppState>) -> impl IntoResponse {
+async fn public_config(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let config = state.config();
     Json(PublicConfig {
-        public_base_url: config.public_base_url.clone(),
+        public_base_url: state.public_base_url(&headers),
         enabled_proxies: config.enabled_proxies.clone(),
         quota: PublicQuotaConfig {
             enabled: config.quota.enabled,
@@ -1712,7 +1780,7 @@ impl IntoResponse for ProxyError {
 mod tests {
     use axum::{
         body::{to_bytes, Body},
-        http::{Request, StatusCode},
+        http::{HeaderMap, HeaderValue, Request, StatusCode},
     };
     use tower::ServiceExt;
 
@@ -1744,10 +1812,7 @@ mod tests {
             config_value(&config, "database_path").unwrap(),
             "mirrorproxy.sqlite3"
         );
-        assert_eq!(
-            config_value(&config, "public_base_url").unwrap(),
-            "http://127.0.0.1:3000"
-        );
+        assert_eq!(config_value(&config, "public_base_url").unwrap(), "");
         assert_eq!(config_value(&config, "quota.monthly_gb").unwrap(), "500");
         assert_eq!(config_value(&config, "cache.max_entry_mb").unwrap(), "8");
         assert_eq!(
@@ -1787,6 +1852,30 @@ mod tests {
             "https://cpan.metacpan.org"
         );
         assert!(config_value(&config, "missing.key").is_none());
+    }
+
+    #[test]
+    fn derives_public_base_url_from_request_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("internal:3000"));
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("mirror.example:8443, internal:3000"),
+        );
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+
+        assert_eq!(
+            request_public_base_url(&headers).as_deref(),
+            Some("https://mirror.example:8443")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_request_public_base_url() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("mirror.example/path"));
+
+        assert!(request_public_base_url(&headers).is_none());
     }
 
     #[test]
@@ -1837,8 +1926,9 @@ mod tests {
 
         assert_eq!(change.key, "public_base_url");
         assert_eq!(change.toml_path, "public_base_url");
-        assert_eq!(change.current_value, "http://127.0.0.1:3000");
+        assert_eq!(change.current_value, "");
         assert_eq!(change.next_value, "https://mirror.example");
+        assert!(plan_config_set(&config, "public_base_url", "").is_ok());
 
         let upstream =
             plan_config_set(&config, "upstreams.opam", "https://mirror.example/opam").unwrap();
@@ -1998,6 +2088,8 @@ on_exceeded = "stop_proxy"
             .oneshot(
                 Request::builder()
                     .uri("/api/public-config")
+                    .header("host", "mirror.example:8443")
+                    .header("x-forwarded-proto", "https")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2007,7 +2099,7 @@ on_exceeded = "stop_proxy"
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["public_base_url"], "http://127.0.0.1:3000");
+        assert_eq!(value["public_base_url"], "https://mirror.example:8443");
         assert_eq!(value["enabled_proxies"][0], "github");
         assert!(value["enabled_proxies"]
             .as_array()
@@ -2546,6 +2638,8 @@ on_exceeded = "stop_proxy"
             .oneshot(
                 Request::builder()
                     .uri("/crates-index/config.json")
+                    .header("host", "mirror.example")
+                    .header("x-forwarded-proto", "https")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2562,7 +2656,7 @@ on_exceeded = "stop_proxy"
         );
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["dl"], "http://127.0.0.1:3000/crates/api/v1/crates");
+        assert_eq!(value["dl"], "https://mirror.example/crates/api/v1/crates");
     }
 
     #[tokio::test]

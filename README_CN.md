@@ -89,7 +89,7 @@ services:
     ports:
       - "${MIRRORPROXY_PORT:-3000}:3000"
     environment:
-      MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-}
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
@@ -106,7 +106,7 @@ volumes:
   mirrorproxy-data:
 ```
 
-启动前可使用 `.env` 设置外部访问地址、宿主机端口和可选的初始管理员密码：
+启动前可选择在 `.env` 中设置固定的外部访问地址、宿主机端口和初始管理员密码。未设置或设置为空时，MirrorProxy 会根据浏览器访问地址自动推导（反向代理场景也支持 `X-Forwarded-Host` 和 `X-Forwarded-Proto`）：
 
 ```dotenv
 MIRRORPROXY_PORT=53000
@@ -667,7 +667,7 @@ pypi_simple = "https://pypi.org/simple"
 pypi_files = "https://files.pythonhosted.org"
 ```
 
-`public_base_url` 会用于 Web 控制台和元数据重写。部署在 Nginx、Caddy、Traefik 等反向代理后时，请设置为用户实际访问的外部地址。
+`public_base_url` 会用于 Web 控制台和元数据重写。未设置或设置为空时，MirrorProxy 会根据每次浏览器请求的主机和协议自动推导（支持 `X-Forwarded-Host` 和 `X-Forwarded-Proto`）；如需固定地址，再设置为用户实际访问的外部地址。
 
 常用环境变量覆盖：
 
@@ -685,7 +685,7 @@ MIRRORPROXY_CACHE_DIRECTORY=/var/cache/mirrorproxy
 MIRRORPROXY_CACHE_MAX_ENTRY_MB=8
 ```
 
-MirrorProxy 会在启动时校验 `public_base_url`、所有上游 URL、启用的代理名称和超时配置。配置非法会快速失败，并提示具体字段。
+MirrorProxy 会在启动时校验非空的 `public_base_url`、所有上游 URL、启用的代理名称和超时配置。配置非法会快速失败，并提示具体字段。
 
 可选磁盘缓存默认关闭。启用后，仅缓存带明确 `Content-Length` 且不大于 `cache.max_entry_mb` 的成功公开 GET 响应；`cache.max_total_mb` 限制总磁盘用量并按最近最少使用淘汰。携带 `Authorization`、`Cookie` 或 `Range` 的请求会绕过缓存。大文件或长度未知的响应保持流式转发，绝不会为了缓存整块读入内存。
 
@@ -819,7 +819,7 @@ OS 测试不只刷新索引，还至少下载一个真实包，例如 Debian/Ubu
 
 ## 反向代理部署
 
-MirrorProxy 通常应部署在 TLS 反向代理之后。`public_base_url` 请设置为用户实际访问的外部 HTTPS 地址，而不是内部监听地址。
+MirrorProxy 通常应部署在 TLS 反向代理之后。当 `public_base_url` 为空时会自动使用转发的主机和协议头；只有需要固定地址时才设置为用户实际访问的外部 HTTPS 地址。
 
 Nginx 示例：
 

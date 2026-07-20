@@ -56,7 +56,7 @@ pub async fn proxy(
     if status.is_success() && content_type.contains("json") {
         let mut value: Value =
             serde_json::from_slice(&bytes).map_err(|_| ProxyError::InvalidUrl)?;
-        rewrite_archive_urls(&mut value, &config.public_base_url);
+        rewrite_archive_urls(&mut value, &state.public_base_url(request.headers()));
         return Response::builder()
             .status(status)
             .header(header::CACHE_CONTROL, proxy::metadata_cache_value())

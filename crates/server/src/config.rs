@@ -10,7 +10,7 @@ pub struct Config {
     pub database_path: String,
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
-    #[serde(default = "default_public_base_url")]
+    #[serde(default)]
     pub public_base_url: String,
     #[serde(default = "default_enabled_proxies")]
     pub enabled_proxies: Vec<String>,
@@ -282,13 +282,12 @@ impl Config {
     }
 
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
-        if self.public_base_url.is_empty() {
-            anyhow::bail!("public_base_url cannot be empty");
-        }
         if self.database_path.trim().is_empty() {
             anyhow::bail!("database_path cannot be empty");
         }
-        validate_http_url("public_base_url", &self.public_base_url)?;
+        if !self.public_base_url.is_empty() {
+            validate_http_url("public_base_url", &self.public_base_url)?;
+        }
         if self.timeout.request_secs == 0 {
             anyhow::bail!("timeout.request_secs must be greater than 0");
         }
@@ -481,7 +480,7 @@ impl Default for Config {
         Self {
             database_path: default_database_path(),
             listen_addr: default_listen_addr(),
-            public_base_url: default_public_base_url(),
+            public_base_url: String::new(),
             enabled_proxies: default_enabled_proxies(),
             upstreams: Upstreams::default(),
             timeout: TimeoutConfig::default(),
@@ -604,10 +603,6 @@ fn default_cache_max_entry_mb() -> u64 {
 }
 fn default_cache_max_total_mb() -> u64 {
     256
-}
-
-fn default_public_base_url() -> String {
-    "http://127.0.0.1:3000".to_string()
 }
 
 fn default_enabled_proxies() -> Vec<String> {
@@ -942,6 +937,14 @@ mod tests {
         };
 
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn allows_an_empty_public_base_url_for_request_based_resolution() {
+        let config = Config::default();
+
+        assert!(config.public_base_url.is_empty());
+        assert!(config.validate().is_ok());
     }
 
     #[test]
