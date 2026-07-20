@@ -137,6 +137,19 @@ docker run -d --name mirrorproxy --restart unless-stopped \
   kudang/mirrorproxy:latest
 ```
 
+带版本标签的多架构镜像会同时发布 SPDX SBOM、BuildKit `mode=max` provenance
+证明，以及由 GitHub Actions 工作流通过 OIDC 获取的无密钥 Sigstore 签名。可以按
+不可变 digest 验证正式镜像：
+
+```bash
+IMAGE=kudang/mirrorproxy:1.0.2
+DIGEST="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')"
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/inbjo/MirrorProxy/\.github/workflows/docker\.yml@refs/tags/v[0-9].*$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "kudang/mirrorproxy@${DIGEST}"
+```
+
 推荐使用 named volume。如果改为 `/srv/mirrorproxy/data:/data` 这样的宿主机目录挂载，
 必须保证容器 UID/GID `10001:10001` 可以写入：
 
@@ -923,7 +936,8 @@ v1.0 已包含多生态与操作系统仓库 adapter、SQLite 管理与流量统
 
 v1.x 后续计划：
 
-- 持续发布带签名、SBOM 和 provenance 证明的 Docker Hub 多架构镜像。
+- 保证每次带版本标签的发布都生成可验证的 Docker Hub 多架构镜像签名、SBOM 和
+  provenance 证明。
 - 增加按用户或子域名归属流量及独立配额的能力。
 - 为目录中尚未覆盖的目标补齐真实原生客户端 smoke，重点覆盖 Windows、macOS
   和较少使用的语言生态。
