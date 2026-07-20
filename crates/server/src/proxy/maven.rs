@@ -35,8 +35,27 @@ pub async fn proxy(
     }
 
     let clean_path = sanitize_repository_path(&path)?;
-    let url = repository_url(&config.upstreams.maven, &clean_path, request.uri().query())?;
-    proxy::forward(&state, request.method().clone(), url, request.headers()).await
+    let repositories = std::iter::once(&config.upstreams.maven)
+        .chain(config.upstreams.maven_fallbacks.iter())
+        .collect::<Vec<_>>();
+    let method = request.method().clone();
+    let query = request.uri().query();
+    for (index, repository) in repositories.iter().enumerate() {
+        let url = repository_url(repository, &clean_path, query)?;
+        let response = proxy::forward(&state, method.clone(), url, request.headers()).await?;
+        if response.status() != axum::http::StatusCode::NOT_FOUND || index + 1 == repositories.len()
+        {
+            return Ok(response);
+        }
+        tracing::info!(
+            path = %clean_path,
+            upstream = %repository,
+            next_upstream = %repositories[index + 1],
+            "Maven artifact was not found; trying the next configured repository"
+        );
+    }
+
+    unreachable!("the primary Maven repository is always present")
 }
 
 fn sanitize_repository_path(path: &str) -> Result<String, ProxyError> {
@@ -62,6 +81,17 @@ fn repository_url(base: &str, path: &str, query: Option<&str>) -> Result<reqwest
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex, RwLock};
+
+    use axum::{
+        body::to_bytes,
+        http::{Request, StatusCode},
+        routing::any,
+        Router,
+    };
+
+    use crate::{config::Config, database::Database, RateLimiter};
+
     use super::*;
 
     #[test]
@@ -91,5 +121,120 @@ mod tests {
             .as_str(),
             "https://repo.maven.apache.org/maven2/org/slf4j/slf4j-api/maven-metadata.xml?a=1"
         );
+    }
+
+    async fn spawn_upstream(
+        status: StatusCode,
+        body: &'static str,
+    ) -> (String, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&requests);
+        let app = Router::new().fallback(any(move |request: Request<Body>| {
+            let observed = Arc::clone(&observed);
+            async move {
+                observed.lock().expect("mock request lock poisoned").push(
+                    request
+                        .uri()
+                        .path_and_query()
+                        .map(ToString::to_string)
+                        .unwrap_or_default(),
+                );
+                (status, body)
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{address}/repository"), requests, task)
+    }
+
+    async fn test_state(config: Config) -> AppState {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        AppState {
+            config: Arc::new(RwLock::new(config)),
+            database: Arc::new(database),
+            client: reqwest::Client::new(),
+            rate_limiter: Arc::new(RateLimiter::new()),
+        }
+    }
+
+    #[tokio::test]
+    async fn falls_back_in_order_only_when_an_artifact_is_not_found() {
+        let (primary, primary_requests, primary_task) =
+            spawn_upstream(StatusCode::NOT_FOUND, "missing").await;
+        let (fallback, fallback_requests, fallback_task) =
+            spawn_upstream(StatusCode::OK, "fallback artifact").await;
+        let state = test_state(Config {
+            upstreams: crate::config::Upstreams {
+                maven: primary,
+                maven_fallbacks: vec![fallback],
+                ..crate::config::Upstreams::default()
+            },
+            ..Config::default()
+        })
+        .await;
+
+        let response = proxy(
+            State(state),
+            Path("org/example/demo/1.0/demo-1.0.jar".to_string()),
+            Request::builder()
+                .uri("/maven/org/example/demo/1.0/demo-1.0.jar?download=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            "fallback artifact"
+        );
+        assert_eq!(
+            *primary_requests.lock().unwrap(),
+            ["/repository/org/example/demo/1.0/demo-1.0.jar?download=true"]
+        );
+        assert_eq!(
+            *fallback_requests.lock().unwrap(),
+            ["/repository/org/example/demo/1.0/demo-1.0.jar?download=true"]
+        );
+        primary_task.abort();
+        fallback_task.abort();
+    }
+
+    #[tokio::test]
+    async fn does_not_hide_primary_upstream_failures_with_a_fallback() {
+        let (primary, primary_requests, primary_task) =
+            spawn_upstream(StatusCode::INTERNAL_SERVER_ERROR, "broken").await;
+        let (fallback, fallback_requests, fallback_task) =
+            spawn_upstream(StatusCode::OK, "must not be used").await;
+        let state = test_state(Config {
+            upstreams: crate::config::Upstreams {
+                maven: primary,
+                maven_fallbacks: vec![fallback],
+                ..crate::config::Upstreams::default()
+            },
+            ..Config::default()
+        })
+        .await;
+
+        let response = proxy(
+            State(state),
+            Path("org/example/demo/maven-metadata.xml".to_string()),
+            Request::builder()
+                .uri("/maven/org/example/demo/maven-metadata.xml")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(primary_requests.lock().unwrap().len(), 1);
+        assert!(fallback_requests.lock().unwrap().is_empty());
+        primary_task.abort();
+        fallback_task.abort();
     }
 }

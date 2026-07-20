@@ -72,6 +72,8 @@ pub struct Upstreams {
     pub go_proxy: String,
     #[serde(default = "default_maven_repository")]
     pub maven: String,
+    #[serde(default = "default_maven_fallback_repositories")]
+    pub maven_fallbacks: Vec<String>,
     #[serde(default = "default_rubygems_repository")]
     pub rubygems: String,
     #[serde(default = "default_rustup_repository")]
@@ -231,6 +233,9 @@ impl Config {
                 self.timeout.request_secs = timeout;
             }
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_MAVEN_FALLBACKS") {
+            self.upstreams.maven_fallbacks = parse_url_list(&value);
+        }
         if let Ok(value) = std::env::var("MIRRORPROXY_RATE_LIMIT_ENABLED") {
             self.rate_limit.enabled = matches!(
                 value.to_ascii_lowercase().as_str(),
@@ -382,6 +387,18 @@ impl Config {
         validate_http_url("upstreams.opam", &self.upstreams.opam)?;
         validate_http_url("upstreams.go_proxy", &self.upstreams.go_proxy)?;
         validate_http_url("upstreams.maven", &self.upstreams.maven)?;
+        for (index, fallback) in self.upstreams.maven_fallbacks.iter().enumerate() {
+            validate_http_url(&format!("upstreams.maven_fallbacks[{index}]"), fallback)?;
+            if fallback.trim_end_matches('/') == self.upstreams.maven.trim_end_matches('/') {
+                anyhow::bail!("upstreams.maven_fallbacks cannot repeat upstreams.maven");
+            }
+            if self.upstreams.maven_fallbacks[..index]
+                .iter()
+                .any(|candidate| candidate.trim_end_matches('/') == fallback.trim_end_matches('/'))
+            {
+                anyhow::bail!("upstreams.maven_fallbacks cannot contain duplicate repositories");
+            }
+        }
         validate_http_url("upstreams.rubygems", &self.upstreams.rubygems)?;
         validate_http_url("upstreams.rustup", &self.upstreams.rustup)?;
         validate_http_url("upstreams.nuget", &self.upstreams.nuget)?;
@@ -446,6 +463,13 @@ impl Config {
 
     fn upstream_url(&self, name: &str) -> Option<&str> {
         let upstreams = &self.upstreams;
+        if let Some(index) = name
+            .strip_prefix("maven_fallback_")
+            .and_then(|value| value.parse::<usize>().ok())
+            .and_then(|value| value.checked_sub(1))
+        {
+            return upstreams.maven_fallbacks.get(index).map(String::as_str);
+        }
         Some(match name {
             "github" => &upstreams.github,
             "github_raw" => &upstreams.github_raw,
@@ -598,6 +622,7 @@ impl Default for Upstreams {
             opam: default_opam_repository(),
             go_proxy: default_go_proxy(),
             maven: default_maven_repository(),
+            maven_fallbacks: default_maven_fallback_repositories(),
             rubygems: default_rubygems_repository(),
             rustup: default_rustup_repository(),
             nuget: default_nuget_repository(),
@@ -777,6 +802,10 @@ fn default_go_proxy() -> String {
 
 fn default_maven_repository() -> String {
     "https://repo.maven.apache.org/maven2".to_string()
+}
+
+fn default_maven_fallback_repositories() -> Vec<String> {
+    vec!["https://jcenter.bintray.com".to_string()]
 }
 
 fn default_rubygems_repository() -> String {
@@ -995,6 +1024,15 @@ fn validate_http_url(field: &str, value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn parse_url_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1150,6 +1188,49 @@ mod tests {
             },
         );
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validates_ordered_maven_fallback_repositories() {
+        let config = Config::default();
+        assert_eq!(
+            config.upstreams.maven_fallbacks,
+            ["https://jcenter.bintray.com"]
+        );
+        assert!(config.validate().is_ok());
+
+        let mut duplicate_primary = Config::default();
+        duplicate_primary.upstreams.maven_fallbacks =
+            vec!["https://repo.maven.apache.org/maven2/".to_string()];
+        assert!(duplicate_primary.validate().is_err());
+
+        let mut duplicate_fallback = Config::default();
+        duplicate_fallback.upstreams.maven_fallbacks = vec![
+            "https://repo.example/maven".to_string(),
+            "https://repo.example/maven/".to_string(),
+        ];
+        assert!(duplicate_fallback.validate().is_err());
+
+        let mut invalid = Config::default();
+        invalid.upstreams.maven_fallbacks = vec!["file:///tmp/maven".to_string()];
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn supports_credentials_for_numbered_maven_fallbacks() {
+        let mut config = Config::default();
+        config.upstream_auth.insert(
+            "maven_fallback_1".to_string(),
+            UpstreamAuth {
+                username: Some("mirror".to_string()),
+                password: Some("secret".to_string()),
+                bearer_token: None,
+            },
+        );
+
+        assert!(config.validate().is_ok());
+        let fallback = reqwest::Url::parse(&config.upstreams.maven_fallbacks[0]).unwrap();
+        assert!(config.upstream_auth_for(&fallback).is_some());
     }
 
     #[test]

@@ -10,6 +10,7 @@ services:
       MIRRORPROXY_TRUSTED_PROXIES: ${MIRRORPROXY_TRUSTED_PROXIES:-127.0.0.1,::1}
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
+      MIRRORPROXY_MAVEN_FALLBACKS: ${MIRRORPROXY_MAVEN_FALLBACKS-https://jcenter.bintray.com}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
     volumes:
       - mirrorproxy-data:/data

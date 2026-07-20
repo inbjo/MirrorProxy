@@ -283,7 +283,7 @@ fn set_toml_value(document: &mut toml::Value, key: &str, value: &str) -> anyhow:
         | ConfigValueKind::OptionalHttpUrl
         | ConfigValueKind::NonEmpty
         | ConfigValueKind::QuotaAction => toml::Value::String(value.to_string()),
-        ConfigValueKind::TrustedProxyList => toml::Value::Array(
+        ConfigValueKind::HttpUrlList | ConfigValueKind::TrustedProxyList => toml::Value::Array(
             value
                 .split(',')
                 .map(str::trim)
@@ -349,6 +349,7 @@ enum ConfigValueKind {
     Bool,
     HttpUrl,
     OptionalHttpUrl,
+    HttpUrlList,
     NonEmpty,
     U64,
     PositiveU32,
@@ -358,6 +359,13 @@ enum ConfigValueKind {
 }
 
 fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
+    if key == "upstreams.maven_fallbacks" {
+        return Some(ConfigSetSpec {
+            key: key.to_string(),
+            toml_path: key.to_string(),
+            value_kind: ConfigValueKind::HttpUrlList,
+        });
+    }
     if key.starts_with("upstreams.") && config_value(&Config::default(), key).is_some() {
         return Some(ConfigSetSpec {
             key: key.to_string(),
@@ -471,6 +479,24 @@ fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
                     })?;
             }
         }
+        ConfigValueKind::HttpUrlList => {
+            for (index, item) in value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .enumerate()
+            {
+                reqwest::Url::parse(item)
+                    .map_err(|error| anyhow::anyhow!("{key}[{index}] is invalid: {error}"))
+                    .and_then(|url| match url.scheme() {
+                        "http" | "https" if url.host_str().is_some() => Ok(()),
+                        "http" | "https" => anyhow::bail!("{key}[{index}] must include a host"),
+                        scheme => {
+                            anyhow::bail!("{key}[{index}] must use http or https, got {scheme}")
+                        }
+                    })?;
+            }
+        }
         ConfigValueKind::NonEmpty => {
             if value.trim().is_empty() {
                 anyhow::bail!("{key} cannot be empty");
@@ -552,6 +578,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.opam" => Some(config.upstreams.opam.clone()),
         "upstreams.go_proxy" => Some(config.upstreams.go_proxy.clone()),
         "upstreams.maven" => Some(config.upstreams.maven.clone()),
+        "upstreams.maven_fallbacks" => Some(config.upstreams.maven_fallbacks.join(",")),
         "upstreams.rubygems" => Some(config.upstreams.rubygems.clone()),
         "upstreams.rustup" => Some(config.upstreams.rustup.clone()),
         "upstreams.nuget" => Some(config.upstreams.nuget.clone()),
@@ -622,6 +649,7 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
         "upstreams.opam",
         "upstreams.go_proxy",
         "upstreams.maven",
+        "upstreams.maven_fallbacks",
         "upstreams.rubygems",
         "upstreams.rustup",
         "upstreams.nuget",
@@ -1952,6 +1980,10 @@ mod tests {
             && value == "https://repo.maven.apache.org/maven2"));
         assert!(entries
             .iter()
+            .any(|(key, value)| key == "upstreams.maven_fallbacks"
+                && value == "https://jcenter.bintray.com"));
+        assert!(entries
+            .iter()
             .any(|(key, value)| key == "upstreams.rubygems" && value == "https://rubygems.org"));
         assert!(entries
             .iter()
@@ -1994,6 +2026,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(os_upstream.toml_path, "upstreams.additional_os.kali");
+
+        let maven_fallbacks = plan_config_set(
+            &config,
+            "upstreams.maven_fallbacks",
+            "https://first.example/maven, https://second.example/maven",
+        )
+        .unwrap();
+        assert_eq!(maven_fallbacks.current_value, "https://jcenter.bintray.com");
     }
 
     #[test]
@@ -2007,6 +2047,13 @@ mod tests {
         assert!(plan_config_set(&config, "quota.on_exceeded", "drop").is_err());
         assert!(plan_config_set(&config, "timeout.request_secs", "0").is_err());
         assert!(plan_config_set(&config, "quota.monthly_gb", "0").is_ok());
+        assert!(plan_config_set(
+            &config,
+            "upstreams.maven_fallbacks",
+            "https://repo.example/maven,ftp://invalid.example/maven",
+        )
+        .is_err());
+        assert!(plan_config_set(&config, "upstreams.maven_fallbacks", "").is_ok());
     }
 
     #[test]
@@ -2068,6 +2115,40 @@ on_exceeded = "stop_proxy"
         assert_eq!(
             updated.upstreams.additional_os.get("kali").unwrap(),
             "https://mirror.example/kali"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn persist_config_set_writes_maven_fallbacks_as_a_toml_array() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrorproxy-maven-fallback-config-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let config_path = directory.join("config.toml");
+        fs::write(
+            &config_path,
+            "[upstreams]\nmaven = \"https://repo.maven.apache.org/maven2\"\n",
+        )
+        .unwrap();
+
+        let change = plan_config_set(
+            &Config::load(Some(&config_path)).unwrap(),
+            "upstreams.maven_fallbacks",
+            "https://first.example/maven,https://second.example/maven",
+        )
+        .unwrap();
+        persist_config_set(&config_path, &change).unwrap();
+
+        let updated = Config::load(Some(&config_path)).unwrap();
+        assert_eq!(
+            updated.upstreams.maven_fallbacks,
+            [
+                "https://first.example/maven",
+                "https://second.example/maven"
+            ]
         );
         fs::remove_dir_all(directory).unwrap();
     }
