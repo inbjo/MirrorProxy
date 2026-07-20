@@ -56,7 +56,7 @@ pub async fn service_index(
         rewrite_upstream_urls(
             &mut document,
             &config.upstreams.nuget,
-            &config.public_base_url,
+            &state.public_base_url(request.headers()),
         );
         return Response::builder()
             .status(status)

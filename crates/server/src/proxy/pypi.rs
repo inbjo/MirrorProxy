@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, HeaderValue},
+    http::{header, HeaderMap, HeaderValue},
     response::Response,
 };
 
@@ -9,8 +9,12 @@ use crate::{proxy, AppState};
 
 use super::ProxyError;
 
-pub async fn simple_root(State(state): State<AppState>) -> Result<Response, ProxyError> {
-    proxy_simple_path(state, "", None, None).await
+pub async fn simple_root(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ProxyError> {
+    let public_base_url = state.public_base_url(&headers);
+    proxy_simple_path(state, "", None, public_base_url, None).await
 }
 
 pub async fn simple(
@@ -19,7 +23,15 @@ pub async fn simple(
     request: axum::extract::Request,
 ) -> Result<Response, ProxyError> {
     let query = request.uri().query().map(ToString::to_string);
-    proxy_simple_path(state, &path, query.as_deref(), Some(request)).await
+    let public_base_url = state.public_base_url(request.headers());
+    proxy_simple_path(
+        state,
+        &path,
+        query.as_deref(),
+        public_base_url,
+        Some(request),
+    )
+    .await
 }
 
 pub async fn file(
@@ -47,6 +59,7 @@ async fn proxy_simple_path(
     state: AppState,
     path: &str,
     query: Option<&str>,
+    public_base_url: String,
     request: Option<axum::extract::Request>,
 ) -> Result<Response, ProxyError> {
     let config = state.config();
@@ -73,7 +86,7 @@ async fn proxy_simple_path(
 
     if status.is_success() && content_type.contains("html") {
         let html = String::from_utf8_lossy(&bytes);
-        let body = rewrite_file_links(&html, &config.public_base_url);
+        let body = rewrite_file_links(&html, &public_base_url);
         return Response::builder()
             .status(status)
             .header(header::CACHE_CONTROL, super::metadata_cache_value())

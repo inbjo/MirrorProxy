@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, HeaderValue},
+    http::{header, HeaderMap, HeaderValue},
     response::Response,
 };
 use bytes::Bytes;
@@ -12,8 +12,12 @@ use crate::{proxy, AppState};
 
 use super::ProxyError;
 
-pub async fn root(State(state): State<AppState>) -> Result<Response, ProxyError> {
-    proxy_npm_path(state, "", None, None).await
+pub async fn root(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ProxyError> {
+    let public_base_url = state.public_base_url(&headers);
+    proxy_npm_path(state, "", None, public_base_url, None).await
 }
 
 pub async fn proxy(
@@ -22,13 +26,22 @@ pub async fn proxy(
     request: axum::extract::Request,
 ) -> Result<Response, ProxyError> {
     let query = request.uri().query().map(ToString::to_string);
-    proxy_npm_path(state, &path, query.as_deref(), Some(request)).await
+    let public_base_url = state.public_base_url(request.headers());
+    proxy_npm_path(
+        state,
+        &path,
+        query.as_deref(),
+        public_base_url,
+        Some(request),
+    )
+    .await
 }
 
 async fn proxy_npm_path(
     state: AppState,
     path: &str,
     query: Option<&str>,
+    public_base_url: String,
     request: Option<axum::extract::Request>,
 ) -> Result<Response, ProxyError> {
     let config = state.config();
@@ -65,7 +78,7 @@ async fn proxy_npm_path(
         let bytes = response.bytes().await?;
 
         if status.is_success() && is_json {
-            return rewrite_json_response(&state, status, bytes);
+            return rewrite_json_response(status, bytes, &public_base_url);
         }
 
         return Response::builder()
@@ -94,12 +107,12 @@ fn sanitize_npm_path(path: &str) -> Result<String, ProxyError> {
 }
 
 fn rewrite_json_response(
-    state: &AppState,
     status: reqwest::StatusCode,
     bytes: Bytes,
+    public_base_url: &str,
 ) -> Result<Response, ProxyError> {
     let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| ProxyError::InvalidUrl)?;
-    rewrite_tarball_urls(&mut value, &state.config().public_base_url);
+    rewrite_tarball_urls(&mut value, public_base_url);
     let body = serde_json::to_vec(&value).map_err(|_| ProxyError::InvalidUrl)?;
 
     Response::builder()
