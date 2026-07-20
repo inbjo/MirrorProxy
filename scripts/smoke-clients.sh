@@ -81,6 +81,18 @@ wait_for_server() {
   return 1
 }
 
+smoke_curl() {
+  curl \
+    --fail \
+    --silent \
+    --show-error \
+    --retry 3 \
+    --retry-delay 2 \
+    --retry-all-errors \
+    --output /dev/null \
+    "$1"
+}
+
 cat >"${config}" <<EOF
 listen_addr = "127.0.0.1:${port}"
 database_path = "${work}/mirrorproxy.sqlite3"
@@ -199,20 +211,20 @@ fi
 # Exercise their real public protocol entry points through the running proxy so
 # route wiring, upstream selection, streaming, and path validation stay covered.
 if [[ "${MIRRORPROXY_SMOKE_EXTENDED:-0}" == "1" ]]; then
-  curl --fail --silent --show-error --output /dev/null "${base}/nvm/index.json"
-  curl --fail --silent --show-error --output /dev/null "${base}/opam/repo"
-  curl --fail --silent --show-error --output /dev/null "${base}/rustup/dist/channel-rust-stable.toml"
-  curl --fail --silent --show-error --output /dev/null "${base}/julia/registries"
-  curl --fail --silent --show-error --output /dev/null "${base}/cocoapods/all_pods_versions_2_0_0.txt"
-  curl --fail --silent --show-error --output /dev/null "${base}/pub/api/packages/http"
-  curl --fail --silent --show-error --output /dev/null "${base}/anaconda/main/noarch/repodata.json"
-  curl --fail --silent --show-error --output /dev/null "${base}/texlive/tlpkg/texlive.tlpdb"
-  curl --fail --silent --show-error --output /dev/null "${base}/elpa/archive-contents"
-  curl --fail --silent --show-error --output /dev/null "${base}/nix/nix-cache-info"
-  curl --fail --silent --show-error --output /dev/null "${base}/guix/nix-cache-info"
-  curl --fail --silent --show-error --output /dev/null "${base}/flatpak/summary"
-  curl --fail --silent --show-error --output /dev/null "${base}/homebrew/curl/tags/list"
-  curl --fail --silent --show-error --output /dev/null "${base}/os/debian/dists/stable/Release"
+  smoke_curl "${base}/nvm/index.json"
+  smoke_curl "${base}/opam/repo"
+  smoke_curl "${base}/rustup/dist/channel-rust-stable.toml"
+  smoke_curl "${base}/julia/registries"
+  smoke_curl "${base}/cocoapods/all_pods_versions_2_0_0.txt"
+  smoke_curl "${base}/pub/api/packages/http"
+  smoke_curl "${base}/anaconda/main/noarch/repodata.json"
+  smoke_curl "${base}/texlive/tlpkg/texlive.tlpdb"
+  smoke_curl "${base}/elpa/archive-contents"
+  smoke_curl "${base}/nix/nix-cache-info"
+  smoke_curl "${base}/guix/nix-cache-info"
+  smoke_curl "${base}/flatpak/summary"
+  smoke_curl "${base}/homebrew/curl/tags/list"
+  smoke_curl "${base}/os/debian/dists/stable/Release"
 fi
 
 printf 'client smoke passed: git npm yarn pnpm go cargo pip cpanm rubygems maven nuget cran cabal luarocks composer%s\n' \

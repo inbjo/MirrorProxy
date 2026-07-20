@@ -735,7 +735,7 @@ fn default_anaconda_repository() -> String {
 }
 
 fn default_texlive_repository() -> String {
-    "https://mirror.ctan.org/systems/texlive/tlnet".to_string()
+    "https://mirrors.ctan.org/systems/texlive/tlnet".to_string()
 }
 
 fn default_winget_repository() -> String {
@@ -909,6 +909,14 @@ fn validate_http_url(field: &str, value: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn defaults_texlive_to_official_ctan_multiplexor() {
+        assert_eq!(
+            Config::default().upstreams.texlive,
+            "https://mirrors.ctan.org/systems/texlive/tlnet"
+        );
+    }
 
     #[test]
     fn defaults_linuxmint_to_reachable_https_mirror() {

@@ -91,6 +91,7 @@ services:
     environment:
       MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
+      MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
     volumes:
       - mirrorproxy-data:/data
@@ -105,11 +106,13 @@ volumes:
   mirrorproxy-data:
 ```
 
-启动前可使用 `.env` 设置外部访问地址和宿主机端口：
+启动前可使用 `.env` 设置外部访问地址、宿主机端口和可选的初始管理员密码：
 
 ```dotenv
 MIRRORPROXY_PORT=53000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
+# 可选：取消下一行注释可手动设置初始管理员密码
+# MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
 ```
 
 ```bash
@@ -118,9 +121,11 @@ docker compose logs mirrorproxy
 curl http://127.0.0.1:3000/healthz
 ```
 
-首次启动日志会输出一次性的随机 `admin` 密码。如果 `MIRRORPROXY_ADMIN_PASSWORD`
-有值，则会改用该值且不会写入日志。升级时请保留命名卷 `mirrorproxy-data`。
-不使用 Compose 也可以直接启动：
+首次初始化 SQLite 数据库时，如果没有设置 `MIRRORPROXY_ADMIN_PASSWORD` 或变量值
+为空，MirrorProxy 会自动生成随机 `admin` 密码，并在启动日志中醒目输出。如果变量
+为非空值，则直接使用手动配置的密码，且不会把该密码写入日志。该变量不会重置已有
+数据库中的管理员密码。升级时请保留命名卷 `mirrorproxy-data`。不使用 Compose
+也可以直接启动：
 
 ```bash
 docker run -d --name mirrorproxy --restart unless-stopped \
@@ -638,7 +643,7 @@ clojars = "https://repo.clojars.org"
 cocoapods = "https://cdn.cocoapods.org"
 pub_repository = "https://pub.dev"
 anaconda = "https://repo.anaconda.com/pkgs"
-texlive = "https://mirror.ctan.org/systems/texlive/tlnet"
+texlive = "https://mirrors.ctan.org/systems/texlive/tlnet"
 winget = "https://cdn.winget.microsoft.com"
 elpa = "https://elpa.gnu.org/packages"
 nix = "https://cache.nixos.org"

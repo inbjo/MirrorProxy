@@ -92,6 +92,7 @@ services:
     environment:
       MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
+      MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
     volumes:
       - mirrorproxy-data:/data
@@ -106,11 +107,14 @@ volumes:
   mirrorproxy-data:
 ```
 
-Set the external URL and optional host port in a `.env` file before startup:
+Set the external URL, optional host port, and optional initial administrator
+password in a `.env` file before startup:
 
 ```dotenv
 MIRRORPROXY_PORT=53000
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
+# Optional: uncomment to set the initial admin password yourself.
+# MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
 ```
 
 ```bash
@@ -119,10 +123,13 @@ docker compose logs mirrorproxy
 curl http://127.0.0.1:3000/healthz
 ```
 
-The first startup log contains the one-time random `admin` password. If
-`MIRRORPROXY_ADMIN_PASSWORD` has a value, that value is used instead and is not
-printed in the log. Keep the named `mirrorproxy-data` volume when upgrading. To
-run without Compose:
+When the SQLite database is initialized for the first time, an unset or empty
+`MIRRORPROXY_ADMIN_PASSWORD` makes MirrorProxy generate a random `admin`
+password and print it prominently in the startup log. Set the variable to a
+non-empty value to use that password instead; manually configured passwords are
+not printed. The variable does not reset the password in an existing database.
+Keep the named `mirrorproxy-data` volume when upgrading. To run without
+Compose:
 
 ```bash
 docker run -d --name mirrorproxy --restart unless-stopped \
@@ -659,7 +666,7 @@ clojars = "https://repo.clojars.org"
 cocoapods = "https://cdn.cocoapods.org"
 pub_repository = "https://pub.dev"
 anaconda = "https://repo.anaconda.com/pkgs"
-texlive = "https://mirror.ctan.org/systems/texlive/tlnet"
+texlive = "https://mirrors.ctan.org/systems/texlive/tlnet"
 winget = "https://cdn.winget.microsoft.com"
 elpa = "https://elpa.gnu.org/packages"
 nix = "https://cache.nixos.org"
