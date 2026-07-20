@@ -19,8 +19,8 @@
 未完成或需要重做的部分：
 
 - 仍缺少部分计划中的生态 adapter；主流 Linux 发行版（含 Debian、Ubuntu、Fedora、Arch、openSUSE、Void、Gentoo、FreeBSD）已加入受限 OS 静态目录代理，Homebrew bottles 已通过 `/homebrew` 提供 GHCR OCI bottle 流式代理，GNU Guix substitute cache 已通过 `/guix` 提供受限流式代理，Rustup、NVM/Node.js 发行包、LuaRocks 与 opam 已提供受限流式代理。
-- chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚覆盖 npm、pip、cargo、GitHub HTTPS Git URL 重写、go、composer、docker、APT（Ubuntu/Debian）、Alpine apk、Void xbps、openSUSE zypper、Gentoo、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Anaconda；Guix 会生成官方 `--substitute-urls` 单次命令，其他登记目标明确标为仅配置/计划中。
-- 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip、Docker、CPAN cpanm、RubyGems、Maven、NuGet、CRAN、Cabal/Hackage 和 LuaRocks；其余生态客户端仍待补齐，并需持续保留路由/单元测试。
+- chsrc 主要目标现已完成 catalog 登记；当前 CLI 写入/回滚覆盖 npm、pip、cargo、GitHub HTTPS Git URL 重写、go、composer、docker、APT（Ubuntu/Debian）、Alpine apk、Void xbps、openSUSE zypper、Gentoo、dnf、pacman、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Clojars、Anaconda、LuaRocks、Homebrew bottles 和 Nix binary cache；Guix 会生成官方 `--substitute-urls` 单次命令，依赖包管理器命令或内部状态数据库的登记目标明确标为模板。
+- 真实客户端 smoke 已在 CI 覆盖 Git、Composer、npm/yarn/pnpm、Go、Cargo、pip、Docker、CPAN cpanm、RubyGems、Maven、NuGet、CRAN、Cabal/Hackage、LuaRocks、Rustup、Nix 和 Homebrew；CLI 写入的 LuaRocks、Nix、Homebrew 配置会在真实客户端访问后执行精确回滚，其余生态仍保留路由/单元测试。
 - 小对象可选磁盘缓存已完成（默认关闭，跳过认证、Cookie 与 Range 请求），并具备总容量限制与 LRU 淘汰；私有 registry 已支持服务 TOML 中的静态 Basic/Bearer 凭据并且不会写入 SQLite 或管理 API。当前版本采用全站月度总流量闸；后续如需用户配额，以“分配用户子域名（如 `user-id.abc.com`）→ 按 Host 归属流量和配额”的模型扩展。月配额已使用 SQLite 原子预留窗口控制并发超卖，超大单流仍按流式计量结算。
 
 当前完成度估算：
@@ -30,7 +30,7 @@
 - 代理服务基础能力：约 98%（主流开发生态、LuaRocks、Rustup、NVM/Node.js 发行包、CocoaPods CDN、GNU Guix substitute cache 与主要 Linux 静态仓库已覆盖，Homebrew bottles 已接入；其余生态 adapter 尚缺）。
 - Web 控制台：约 94%（公开说明、源目录、登录、设置、统计、审计已完成；已覆盖语言/主题偏好、命令复制及管理控制台登录、配置加载与保存、密码更新和统计刷新的 Chromium 浏览器端到端测试）。
 - 配置持久化与管理后台：约 85%。
-- CLI 改源能力：约 73%（已覆盖计划中首批目标、Bun、uv、Alpine apk、Void xbps、openSUSE zypper、Gentoo 与常用 Linux 配置并具备回滚；尚未覆盖更多生态细节）。
+- CLI 改源能力：约 82%（所有声明 `local-config` 的目标都有安全路径、写入器和 reset；已补齐 LuaRocks、Homebrew 和 Nix，依赖命令或内部状态数据库的目标保持模板模式）。
 - SQLite 统计与月流量限制：约 95%（持久统计、全站月度封停、并发原子预留、可配置请求明细保留和缓存容量控制已完成；用户子域名配额作为后续独立扩展）。
 - 对齐 chsrc 支持源范围：约 86%，主要目标已登记且更多语言协议可代理，但 OS/软件仓库 adapter 仍有明显缺口。
 - 整体按本计划口径估算：约 98%。

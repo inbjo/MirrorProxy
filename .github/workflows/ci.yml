@@ -97,6 +97,7 @@ jobs:
         with:
           php-version: "8.3"
           tools: composer
+      - uses: cachix/install-nix-action@v31
       - name: Install repository clients
         run: sudo apt-get update && sudo apt-get install -y cabal-install cpanminus luarocks maven r-base
       - name: Build web console
@@ -108,4 +109,5 @@ jobs:
         env:
           MIRRORPROXY_SMOKE_DOCKER: "1"
           MIRRORPROXY_SMOKE_EXTENDED: "1"
+          MIRRORPROXY_SMOKE_NATIVE_EXTENDED: "1"
         run: ./scripts/smoke-clients.sh

@@ -397,6 +397,11 @@ fn default_user_source_config_path(target_code: &str) -> anyhow::Result<PathBuf>
 
     #[cfg(target_os = "macos")]
     {
+        if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from) {
+            if let Some(path) = xdg_user_config_path(target_code, &config_home) {
+                return Ok(path);
+            }
+        }
         let application_support = home.join("Library/Application Support");
         let path = match target_code {
             "pip" => application_support.join("pip/pip.conf"),
@@ -430,6 +435,8 @@ fn xdg_user_config_path(target_code: &str, config_home: &Path) -> Option<PathBuf
         "uv" => "uv/uv.toml",
         "go" => "go/env",
         "composer" => "composer/config.json",
+        "homebrew" => "homebrew/brew.env",
+        "nix" => "nix/nix.conf",
         _ => return None,
     };
     Some(config_home.join(relative))
@@ -705,6 +712,15 @@ fn user_source_config_path(target_code: &str) -> anyhow::Result<&'static str> {
         "hackage" => ".cabal/config",
         "clojars" => ".clojure/deps.edn",
         "anaconda" => ".condarc",
+        "lua" => ".luarocks/config.lua",
+        "homebrew" if cfg!(windows) => {
+            anyhow::bail!("homebrew user configuration is not supported on Windows")
+        }
+        "homebrew" => ".homebrew/brew.env",
+        "nix" if cfg!(windows) => {
+            anyhow::bail!("Nix user configuration is not supported on Windows")
+        }
+        "nix" => ".config/nix/nix.conf",
         "composer" if cfg!(windows) => "Composer/config.json",
         "composer" if cfg!(target_os = "macos") => ".composer/config.json",
         "composer" => ".config/composer/config.json",
@@ -771,6 +787,17 @@ fn user_source_config_content(target_code: &str, repo_url: &str) -> anyhow::Resu
         "anaconda" => source_config_command("anaconda", repo_url)
             .map(|content| format!("# Managed by MirrorProxy\n{content}\n"))
             .ok_or_else(|| anyhow::anyhow!("missing Anaconda configuration template")),
+        "lua" => Ok(format!(
+            "-- Managed by MirrorProxy\nrocks_servers = {{ \"{repo_url}\" }}\n"
+        )),
+        "homebrew" => Ok(format!(
+            "# Managed by MirrorProxy\nHOMEBREW_BOTTLE_DOMAIN={}\n",
+            repo_url.trim_end_matches('/')
+        )),
+        "nix" => Ok(format!(
+            "# Managed by MirrorProxy\nsubstituters = {}\n",
+            repo_url.trim_end_matches('/')
+        )),
         "composer" => Ok(serde_json::to_string_pretty(&serde_json::json!({
             "repositories": {
                 "packagist": { "type": "composer", "url": repo_url }
@@ -1074,6 +1101,9 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         "hackage" => "Restore the previous Cabal repository setting",
         "clojars" => "Restore the previous Clojure repository setting",
         "anaconda" => "Restore the previous Conda channel setting",
+        "lua" => "Restore the previous LuaRocks rocks_servers configuration",
+        "homebrew" => "Restore the previous Homebrew user environment file",
+        "nix" => "Restore the previous Nix user configuration",
         "composer" => "composer config --unset repos.packagist",
         "docker" => {
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
@@ -1377,6 +1407,32 @@ mod tests {
     }
 
     #[test]
+    fn every_local_config_target_has_a_writer_and_reset_preview() {
+        let root = Path::new("/tmp/mirrorproxy-config-root");
+        for target in catalog::list_targets(None)
+            .filter(|target| target.supported_modes.contains(&SourceMode::LocalConfig))
+        {
+            if cfg!(windows) && matches!(target.code, "homebrew" | "nix") {
+                continue;
+            }
+            let scope = match target.default_scope {
+                catalog::SourceScope::User => CliSourceScope::User,
+                catalog::SourceScope::System => CliSourceScope::System,
+            };
+            assert!(
+                source_config_path(target.code, scope, root).is_ok(),
+                "{} advertises local config without a safe path",
+                target.code
+            );
+            assert!(
+                source_reset_command(target.code).is_some(),
+                "{} advertises local config without a reset preview",
+                target.code
+            );
+        }
+    }
+
+    #[test]
     fn plan_source_set_command_builds_dry_run_commands() {
         let npm =
             plan_source_set_command("npm", "mirrorproxy", Some("https://mirror.example")).unwrap();
@@ -1394,6 +1450,14 @@ mod tests {
             pip.command,
             "pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple"
         );
+
+        for target_code in ["lua", "homebrew", "nix"] {
+            let command =
+                plan_source_set_command(target_code, "mirrorproxy", Some("https://mirror.example"))
+                    .unwrap();
+            assert_eq!(command.target_code, target_code);
+            assert!(command.command.contains("mirror.example"));
+        }
 
         assert!(plan_source_set_command("npm", "missing", None).is_err());
     }
@@ -1414,6 +1478,12 @@ mod tests {
         let github = plan_source_reset_command("github").unwrap();
         assert_eq!(github.target_code, "github");
         assert!(github.command.contains("insteadOf"));
+        for target_code in ["lua", "homebrew", "nix"] {
+            assert_eq!(
+                plan_source_reset_command(target_code).unwrap().target_code,
+                target_code
+            );
+        }
         assert!(plan_source_reset_command("missing").is_err());
     }
 
@@ -1463,7 +1533,7 @@ mod tests {
 
         for target_code in [
             "npm", "bun", "pip", "pdm", "uv", "cargo", "go", "maven", "rubygems", "nuget", "cpan",
-            "cran", "hackage", "clojars", "anaconda", "composer",
+            "cran", "hackage", "clojars", "anaconda", "lua", "homebrew", "nix", "composer",
         ] {
             let command = PlannedSourceCommand {
                 target_code,
@@ -1929,6 +1999,14 @@ mod tests {
         assert_eq!(
             xdg_user_config_path("composer", config_home).unwrap(),
             config_home.join("composer/config.json")
+        );
+        assert_eq!(
+            xdg_user_config_path("homebrew", config_home).unwrap(),
+            config_home.join("homebrew/brew.env")
+        );
+        assert_eq!(
+            xdg_user_config_path("nix", config_home).unwrap(),
+            config_home.join("nix/nix.conf")
         );
         assert!(xdg_user_config_path("bun", config_home).is_none());
     }
