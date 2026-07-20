@@ -28,6 +28,7 @@ pub struct Database {
 pub struct InitialAdminCredentials {
     pub username: &'static str,
     pub password: String,
+    pub generated: bool,
 }
 
 pub struct AdminSession {
@@ -137,7 +138,13 @@ impl Database {
             return Ok(None);
         }
 
-        let password = random_secret(28);
+        let (password, generated) = match std::env::var("MIRRORPROXY_ADMIN_PASSWORD")
+            .ok()
+            .filter(|password| !password.is_empty())
+        {
+            Some(password) => (password, false),
+            None => (random_secret(28), true),
+        };
         let password_hash = hash_password(&password)?;
         let now = unix_timestamp();
         sqlx::query(
@@ -152,6 +159,7 @@ impl Database {
         Ok(Some(InitialAdminCredentials {
             username: "admin",
             password,
+            generated,
         }))
     }
 

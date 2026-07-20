@@ -119,13 +119,16 @@ docker compose logs mirrorproxy
 curl http://127.0.0.1:3000/healthz
 ```
 
-The first startup log contains the one-time random `admin` password. Keep the
-named `mirrorproxy-data` volume when upgrading. To run without Compose:
+The first startup log contains the one-time random `admin` password. If
+`MIRRORPROXY_ADMIN_PASSWORD` has a value, that value is used instead and is not
+printed in the log. Keep the named `mirrorproxy-data` volume when upgrading. To
+run without Compose:
 
 ```bash
 docker run -d --name mirrorproxy --restart unless-stopped \
   -p 3000:3000 \
   -e MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com \
+  -e MIRRORPROXY_ADMIN_PASSWORD='replace-with-a-strong-password' \
   -v mirrorproxy-data:/data \
   kudang/mirrorproxy:latest
 ```
@@ -703,10 +706,12 @@ MirrorProxy validates `public_base_url`, all upstream URLs, enabled proxy names,
 Optional disk caching is disabled by default. When enabled, it stores only successful public GET responses with an explicit `Content-Length` no larger than `cache.max_entry_mb`; `cache.max_total_mb` bounds disk usage and evicts least-recently-used entries. Requests carrying `Authorization`, `Cookie`, or `Range` bypass the cache. Large or unknown-length responses stay streamed and are never buffered for caching.
 
 On the first startup, MirrorProxy creates its SQLite database and prints a one-time
-random password for the `admin` account in the local startup log. Use it with
-`POST /api/admin/login`, then send the returned token as `Authorization: Bearer
-<token>` to protected endpoints such as `GET /api/admin/config`. The password is
-stored only as an Argon2 hash; keep the startup output private.
+random password for the `admin` account in the local startup log. When
+`MIRRORPROXY_ADMIN_PASSWORD` has a value, it uses that value instead. Use the
+password with `POST /api/admin/login`, then send the returned token as
+`Authorization: Bearer <token>` to protected endpoints such as `GET
+/api/admin/config`. The password is stored only as an Argon2 hash; keep the
+startup output private.
 
 `PUT /api/admin/config` accepts a validated full configuration document and
 persists it in SQLite with an audit record. Public URL, enabled adapters,
