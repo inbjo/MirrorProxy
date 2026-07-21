@@ -79,6 +79,8 @@ type AuditLogEntry = {
   action: string
   detail: string
 }
+type AdminIdentity = { username: string; role: string }
+type AdminAccount = AdminIdentity & { disabled: boolean; created_at: number; updated_at: number }
 type SourceCatalog = {
   providers: MirrorProvider[]
   targets: SourceTarget[]
@@ -306,6 +308,12 @@ const messages = {
 } satisfies Record<Locale, Record<string, string>>
 
 export function App() {
+  return window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')
+    ? <AdminPage />
+    : <PublicApp />
+}
+
+function PublicApp() {
   const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en', ['en', 'zh']))
   const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light', ['light', 'dark']))
   const [config, setConfig] = React.useState<PublicConfig>({
@@ -319,7 +327,6 @@ export function App() {
     },
   })
   const [catalog, setCatalog] = React.useState<SourceCatalog | null>(null)
-  const [adminVisible, setAdminVisible] = React.useState(false)
   const [copied, setCopied] = React.useState<string | null>(null)
   const t = messages[locale]
 
@@ -387,13 +394,8 @@ export function App() {
           <button className="icon-button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Theme">
             {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
           </button>
-          <button className="admin-trigger" onClick={() => setAdminVisible((visible) => !visible)}>
-            <ShieldCheck size={17} /> {t.console}
-          </button>
         </div>
       </header>
-
-      {adminVisible ? <AdminConsole locale={locale} catalog={catalog} onClose={() => setAdminVisible(false)} /> : null}
 
       <AccelerationWorkbench baseUrl={baseUrl} config={config} catalog={catalog} labels={t} onCopy={copyCommand} copied={copied} />
 
@@ -675,10 +677,39 @@ const byteLabel = (bytes: number | null) => {
   return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
 }
 
+function AdminPage() {
+  const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en', ['en', 'zh']))
+  const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light', ['light', 'dark']))
+  const [catalog, setCatalog] = React.useState<SourceCatalog | null>(null)
+
+  React.useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('mirrorproxy.theme', theme)
+  }, [theme])
+  React.useEffect(() => localStorage.setItem('mirrorproxy.locale', locale), [locale])
+  React.useEffect(() => {
+    fetch('/api/sources')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('source catalog unavailable')))
+      .then((value: SourceCatalog) => setCatalog(value))
+      .catch(() => undefined)
+  }, [])
+
+  return <main className="admin-page">
+    <header className="topbar admin-page-header">
+      <a className="brand-mark" href="/"><ServerCog size={18} /> MirrorProxy Admin</a>
+      <div className="toolbar">
+        <button className="icon-button" onClick={() => setLocale(locale === 'en' ? 'zh' : 'en')} title="Language"><Languages size={18} /></button>
+        <button className="icon-button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Theme">{theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}</button>
+      </div>
+    </header>
+    <AdminConsole locale={locale} catalog={catalog} onClose={() => { window.location.href = '/' }} />
+  </main>
+}
+
 function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: SourceCatalog | null; onClose: () => void }) {
   const text: Record<string, string> = locale === 'zh'
     ? {
-        title: '运行控制台', login: '管理员登录', password: '管理员密码', signIn: '登录', signOut: '退出登录',
+        title: '运行控制台', login: '管理员登录', username: '管理员账号', password: '管理员密码', signIn: '登录', signOut: '退出登录',
         overview: '本月概览', sent: '已发送', remaining: '配额剩余', requests: '请求', errors: '错误',
         configuration: '运行时配置', publicUrl: '公开地址', trustedProxies: '可信反向代理', trustedProxiesHint: '逗号分隔的 IP 或 CIDR；只有这些来源的 X-Forwarded-* 头会被使用。', quota: '启用月度配额', quotaGb: '月度 GB', retentionDays: '明细保留天数', timezone: '时区', cache: '启用小对象磁盘缓存', cacheDirectory: '缓存目录', cacheMaxEntry: '单项上限（MB）',
         action: '超限动作', forwardAuth: '转发客户端认证头', rate: '启用请求限流', rpm: '每分钟请求数', adapters: '启用代理', upstreams: '上游地址',
@@ -686,10 +717,11 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         close: '关闭控制台', badLogin: '登录失败，请检查管理员密码。', saveError: '配置保存失败。', restart: '以下字段将在重启后生效：',
         quotaStopped: '代理已因月流量上限停止', noData: '本月尚无代理流量。', passwordHint: '首次启动时密码只会出现在本机日志中。',
         security: '安全', currentPassword: '当前密码', newPassword: '新密码（至少 12 位）', changePassword: '修改密码并退出所有会话', passwordChanged: '密码已修改，请使用新密码重新登录。', passwordError: '密码修改失败，请确认当前密码。', passwordConfirm: '修改密码将使所有管理员会话失效，确定继续吗？',
+        administrators: '管理员账号', createAdministrator: '创建管理员', role: '角色', disable: '禁用', enable: '启用', adminCreateError: '管理员创建失败。',
         generator: 'CLI 改源命令', target: '目标', mirror: '镜像站', scope: '作用域', distribution: '发行版代号', ready: '可直接执行', guidance: '当前仅生成配置指引', copyCommand: '复制命令', copiedCommand: '已复制',
       }
     : {
-        title: 'Operations console', login: 'Administrator sign in', password: 'Administrator password', signIn: 'Sign in', signOut: 'Sign out',
+        title: 'Operations console', login: 'Administrator sign in', username: 'Administrator username', password: 'Administrator password', signIn: 'Sign in', signOut: 'Sign out',
         overview: 'Month at a glance', sent: 'Sent', remaining: 'Quota remaining', requests: 'Requests', errors: 'Errors',
         configuration: 'Runtime configuration', publicUrl: 'Public URL', trustedProxies: 'Trusted reverse proxies', trustedProxiesHint: 'Comma-separated IPs or CIDRs. Only these peers may supply X-Forwarded-* headers.', quota: 'Enable monthly quota', quotaGb: 'Monthly GB', retentionDays: 'Event retention (days)', timezone: 'Timezone', cache: 'Enable small-response disk cache', cacheDirectory: 'Cache directory', cacheMaxEntry: 'Per-entry limit (MB)',
         action: 'Exceeded action', forwardAuth: 'Forward client authorization', rate: 'Enable request rate limit', rpm: 'Requests / minute', adapters: 'Enabled adapters', upstreams: 'Upstream endpoints',
@@ -697,9 +729,12 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         close: 'Close console', badLogin: 'Sign in failed. Check the administrator password.', saveError: 'Configuration save failed.', restart: 'These fields apply after restart:',
         quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is printed only in the local startup log.',
         security: 'Security', currentPassword: 'Current password', newPassword: 'New password (12 characters minimum)', changePassword: 'Change password and revoke all sessions', passwordChanged: 'Password changed. Sign in again with the new password.', passwordError: 'Password update failed. Check the current password.', passwordConfirm: 'This revokes every administrator session. Continue?',
+        administrators: 'Administrators', createAdministrator: 'Create administrator', role: 'Role', disable: 'Disable', enable: 'Enable', adminCreateError: 'Administrator creation failed.',
         generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', distribution: 'Distribution codename', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied', auditLog: 'Audit log', noAudit: 'No audit entries yet.',
       }
-  const [token, setToken] = React.useState<string | null>(() => sessionStorage.getItem('mirrorproxy.admin-token'))
+  const [token, setToken] = React.useState<string | null>(null)
+  const [identity, setIdentity] = React.useState<AdminIdentity | null>(null)
+  const [username, setUsername] = React.useState('admin')
   const [password, setPassword] = React.useState('')
   const [draft, setDraft] = React.useState<AdminConfig | null>(null)
   const [stats, setStats] = React.useState<AdminStats | null>(null)
@@ -710,13 +745,16 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
   const [currentPassword, setCurrentPassword] = React.useState('')
   const [newPassword, setNewPassword] = React.useState('')
   const [restartRequired, setRestartRequired] = React.useState<string[]>([])
+  const [admins, setAdmins] = React.useState<AdminAccount[]>([])
+  const [newAdminUsername, setNewAdminUsername] = React.useState('')
+  const [newAdminPassword, setNewAdminPassword] = React.useState('')
+  const [newAdminRole, setNewAdminRole] = React.useState('admin')
 
-  const load = React.useCallback(async (activeToken: string) => {
-    const headers = { Authorization: `Bearer ${activeToken}` }
+  const load = React.useCallback(async (_activeToken: string) => {
     const [configResponse, statsResponse, auditResponse] = await Promise.all([
-      fetch('/api/admin/config', { headers }),
-      fetch('/api/admin/stats', { headers }),
-      fetch('/api/admin/audit-log', { headers }),
+      fetch('/admin/api/config'),
+      fetch('/admin/api/stats'),
+      fetch('/admin/api/audit-log'),
     ])
     if (configResponse.status === 401 || statsResponse.status === 401 || auditResponse.status === 401) throw new Error('unauthorized')
     if (!configResponse.ok || !statsResponse.ok || !auditResponse.ok) throw new Error('load failed')
@@ -726,39 +764,51 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     setAuditLog(nextAuditLog)
   }, [])
 
+  const loadAdmins = React.useCallback(async () => {
+    const response = await fetch('/admin/api/admins')
+    if (response.status === 403) { setAdmins([]); return }
+    if (!response.ok) throw new Error('administrator list unavailable')
+    setAdmins(await response.json() as AdminAccount[])
+  }, [])
+
   React.useEffect(() => {
     if (!token) return
     load(token).catch(() => {
-      sessionStorage.removeItem('mirrorproxy.admin-token')
       setToken(null)
       setError(text.badLogin)
     })
-  }, [load, text.badLogin, token])
+    loadAdmins().catch(() => undefined)
+  }, [load, loadAdmins, text.badLogin, token])
+
+  React.useEffect(() => {
+    fetch('/admin/api/auth/session')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('unauthorized')))
+      .then((value: AdminIdentity) => { setIdentity(value); setToken('cookie') })
+      .catch(() => undefined)
+  }, [])
 
   const signIn = async (event: React.FormEvent) => {
     event.preventDefault()
     setError(null)
-    const response = await fetch('/api/admin/login', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }),
+    const response = await fetch('/admin/api/auth/login', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }),
     })
     if (!response.ok) { setError(text.badLogin); return }
-    const value = await response.json() as { token: string }
-    sessionStorage.setItem('mirrorproxy.admin-token', value.token)
-    setToken(value.token)
+    const value = await response.json() as AdminIdentity
+    setIdentity(value); setToken('cookie')
     setPassword('')
   }
 
   const signOut = async () => {
-    if (token) await fetch('/api/admin/logout', { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => undefined)
-    sessionStorage.removeItem('mirrorproxy.admin-token')
-    setToken(null); setDraft(null); setStats(null); setAuditLog([]); setRestartRequired([])
+    if (token) await fetch('/admin/api/auth/logout', { method: 'POST' }).catch(() => undefined)
+    setIdentity(null); setToken(null); setDraft(null); setStats(null); setAuditLog([]); setAdmins([]); setRestartRequired([])
   }
 
   const save = async () => {
     if (!token || !draft) return
     setSaving(true); setError(null)
-    const response = await fetch('/api/admin/config', {
-      method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(draft),
+    const response = await fetch('/admin/api/config', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft),
     })
     setSaving(false)
     if (!response.ok) { setError(text.saveError); return }
@@ -771,8 +821,8 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     event.preventDefault()
     if (!token || !window.confirm(text.passwordConfirm)) return
     setPasswordBusy(true); setError(null)
-    const response = await fetch('/api/admin/password', {
-      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    const response = await fetch('/admin/api/password', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     })
     setPasswordBusy(false)
@@ -780,6 +830,26 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     setCurrentPassword(''); setNewPassword('')
     await signOut()
     setError(text.passwordChanged)
+  }
+
+  const createAdministrator = async (event: React.FormEvent) => {
+    event.preventDefault(); setError(null)
+    const response = await fetch('/admin/api/admins', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: newAdminUsername, password: newAdminPassword, role: newAdminRole }),
+    })
+    if (!response.ok) { setError(text.adminCreateError); return }
+    setNewAdminUsername(''); setNewAdminPassword(''); setNewAdminRole('admin')
+    await loadAdmins()
+  }
+
+  const setAdministratorDisabled = async (account: AdminAccount, disabled: boolean) => {
+    setError(null)
+    const response = await fetch(`/admin/api/admins/${encodeURIComponent(account.username)}/status`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ disabled }),
+    })
+    if (!response.ok) { setError(text.adminCreateError); return }
+    await loadAdmins()
   }
 
   const update = <K extends keyof AdminConfig>(key: K, value: AdminConfig[K]) => setDraft((current) => current ? { ...current, [key]: value } : current)
@@ -807,7 +877,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
   return (
     <section className="admin-console" aria-label={text.title}>
       <div className="console-head"><div><span className="console-kicker"><ShieldCheck size={15} /> ADMIN / SQLITE</span><h2>{text.title}</h2></div><button className="console-close" onClick={onClose}>{text.close} ×</button></div>
-      {!token ? <form className="login-card" onSubmit={signIn}><div><h3>{text.login}</h3><p>{text.passwordHint}</p></div><label>{text.password}<input autoFocus required type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error ? <p className="form-error">{error}</p> : null}<button className="primary-button" type="submit"><LogIn size={16} /> {text.signIn}</button></form> : null}
+      {!token ? <form className="login-card" onSubmit={signIn}><div><h3>{text.login}</h3><p>{text.passwordHint}</p></div><label>{text.username}<input autoFocus required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>{text.password}<input required autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error ? <p className="form-error">{error}</p> : null}<button className="primary-button" type="submit"><LogIn size={16} /> {text.signIn}</button></form> : null}
       {token && draft && stats ? <div className="console-grid">
         <section className="console-overview"><div className="console-section-head"><div><h3>{text.overview}</h3><p>{stats.month} · {stats.quota.timezone}</p></div><div className="console-actions"><button onClick={() => load(token).catch(() => setError(text.saveError))}>{text.refresh}</button><button onClick={signOut}><LogOut size={15} /> {text.signOut}</button></div></div>
           {stats.quota.exceeded ? <div className="quota-alert"><ChartNoAxesCombined size={18} /> {text.quotaStopped}</div> : null}
@@ -820,6 +890,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
           <h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><input type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div>
           <h4>{text.upstreams}</h4><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : Object.entries(value).map(([target, url]) => <label key={`${key}.${target}`}><span>{key}.{target}</span><input value={url} onChange={(event) => updateAdditionalOsUpstream(target, event.target.value)} /></label>))}</div>
           {catalog ? <SourceCommandGenerator catalog={catalog} baseUrl={draft.public_base_url} text={text} /> : null}
+          {identity?.role === 'super_admin' ? <section className="administrator-management"><h4>{text.administrators}</h4><div className="admin-account-list">{admins.map((account) => <div className="admin-account-row" key={account.username}><span><strong>{account.username}</strong><small>{account.role}</small></span><button disabled={account.username === identity.username} onClick={() => setAdministratorDisabled(account, !account.disabled)}>{account.disabled ? text.enable : text.disable}</button></div>)}</div><form className="security-form" onSubmit={createAdministrator}><label>{text.username}<input required value={newAdminUsername} onChange={(event) => setNewAdminUsername(event.target.value)} /></label><label>{text.password}<input required minLength={12} type="password" value={newAdminPassword} onChange={(event) => setNewAdminPassword(event.target.value)} /></label><label>{text.role}<select value={newAdminRole} onChange={(event) => setNewAdminRole(event.target.value)}><option value="admin">admin</option><option value="super_admin">super_admin</option></select></label><button className="primary-button" type="submit">{text.createAdministrator}</button></form></section> : null}
           <form className="security-form" onSubmit={changePassword}><div><h4><KeyRound size={14} /> {text.security}</h4><p>{text.passwordHint}</p></div><label>{text.currentPassword}<input required autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>{text.newPassword}<input required minLength={12} autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label><button className="danger-button" disabled={passwordBusy} type="submit"><KeyRound size={16} /> {text.changePassword}</button></form>
           <section className="audit-log"><h4>{'auditLog' in text ? text.auditLog : 'Audit log'}</h4>{auditLog.length ? auditLog.slice(0, 8).map((entry) => <div className="audit-row" key={`${entry.created_at}-${entry.username}-${entry.action}`}><span>{new Date(entry.created_at * 1000).toLocaleString()}</span><strong>{entry.action}</strong><small>{entry.username} / {entry.detail}</small></div>) : <p className="empty-stat">{'noAudit' in text ? text.noAudit : 'No audit entries yet.'}</p>}</section>
         </section>

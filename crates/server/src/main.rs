@@ -5,8 +5,9 @@ mod proxy;
 mod static_assets;
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fs,
+    io::{self, BufRead},
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
@@ -16,7 +17,7 @@ use std::{
 use anyhow::Context;
 use axum::{
     body::Body,
-    extract::{connect_info::ConnectInfo, Request, State},
+    extract::{connect_info::ConnectInfo, Path as AxumPath, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -47,6 +48,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const QUOTA_RESERVATION_BYTES: u64 = 8 * 1024 * 1024;
+const ADMIN_SESSION_COOKIE: &str = "mirrorproxy_admin_session";
+const SESSION_COOKIE_MAX_AGE_SECS: i64 = 24 * 60 * 60;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "MirrorProxy server")]
@@ -66,6 +69,17 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Recover local administrator access without starting the HTTP service.
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AdminCommand {
+    /// Read a replacement password from stdin and revoke all sessions.
+    ResetPassword { username: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -87,11 +101,16 @@ pub struct AppState {
     database: Arc<Database>,
     client: Client,
     rate_limiter: Arc<RateLimiter>,
+    admin_login_limiter: Arc<AdminLoginRateLimiter>,
     observability: Arc<Observability>,
 }
 
 pub struct RateLimiter {
     window: Mutex<VecDeque<Instant>>,
+}
+
+pub struct AdminLoginRateLimiter {
+    attempts: Mutex<HashMap<String, VecDeque<Instant>>>,
 }
 
 impl AppState {
@@ -167,6 +186,10 @@ async fn main() -> anyhow::Result<()> {
             let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
             return run_config_command(command, &config, cli.config.as_deref());
         }
+        Some(Command::Admin { command }) => {
+            let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
+            return run_admin_command(command, &config).await;
+        }
         Some(Command::Serve) | None => {}
     }
 
@@ -232,6 +255,32 @@ fn run_config_command(
         }
     }
 
+    Ok(())
+}
+
+async fn run_admin_command(command: AdminCommand, config: &Config) -> anyhow::Result<()> {
+    match command {
+        AdminCommand::ResetPassword { username } => {
+            let username = username.trim();
+            validate_admin_username(username)?;
+            eprint!("New password for {username}: ");
+            let mut password = String::new();
+            io::stdin()
+                .lock()
+                .read_line(&mut password)
+                .context("failed to read password from stdin")?;
+            let password = password.trim_end_matches(['\r', '\n']);
+            validate_admin_password(username, password)?;
+            let (database, _) = Database::open(&config.database_path).await?;
+            if !database
+                .reset_admin_password("cli", username, password)
+                .await?
+            {
+                anyhow::bail!("administrator '{username}' does not exist");
+            }
+            println!("Reset password for administrator '{username}' and revoked all sessions.");
+        }
+    }
     Ok(())
 }
 
@@ -842,6 +891,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
 
     let state = AppState {
         rate_limiter: Arc::new(RateLimiter::new()),
+        admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         config: Arc::new(RwLock::new(config)),
         database: Arc::new(database),
         client,
@@ -863,6 +913,25 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         )
         .route("/api/admin/stats", get(admin_stats))
         .route("/api/admin/audit-log", get(admin_audit_log))
+        .route("/admin/api/auth/login", post(admin_cookie_login))
+        .route("/admin/api/auth/logout", post(admin_cookie_logout))
+        .route("/admin/api/auth/session", get(admin_session))
+        .route("/admin/api/password", post(change_admin_password))
+        .route(
+            "/admin/api/config",
+            get(admin_config).put(update_admin_config),
+        )
+        .route("/admin/api/stats", get(admin_stats))
+        .route("/admin/api/audit-log", get(admin_audit_log))
+        .route("/admin/api/admins", get(list_admins).post(create_admin))
+        .route(
+            "/admin/api/admins/{username}/status",
+            post(update_admin_status),
+        )
+        .route(
+            "/admin/api/admins/{username}/password",
+            post(reset_admin_password),
+        )
         .route("/api/sources", get(source_catalog))
         .route("/composer", get(composer::root))
         .route("/composer/", get(composer::root))
@@ -1088,6 +1157,50 @@ impl RateLimiter {
     }
 }
 
+impl AdminLoginRateLimiter {
+    fn new() -> Self {
+        Self {
+            attempts: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn is_limited(&self, key: &str, limit: usize, now: Instant) -> bool {
+        let cutoff = now - Duration::from_secs(15 * 60);
+        let mut attempts = self
+            .attempts
+            .lock()
+            .expect("administrator login rate limit mutex poisoned");
+        attempts.retain(|_, entries| {
+            while entries
+                .front()
+                .is_some_and(|timestamp| *timestamp <= cutoff)
+            {
+                entries.pop_front();
+            }
+            !entries.is_empty()
+        });
+        attempts
+            .get(key)
+            .is_some_and(|entries| entries.len() >= limit)
+    }
+
+    fn record(&self, key: &str, now: Instant) {
+        self.attempts
+            .lock()
+            .expect("administrator login rate limit mutex poisoned")
+            .entry(key.to_string())
+            .or_default()
+            .push_back(now);
+    }
+
+    fn clear(&self, key: &str) {
+        self.attempts
+            .lock()
+            .expect("administrator login rate limit mutex poisoned")
+            .remove(key);
+    }
+}
+
 async fn observability_middleware(
     State(state): State<AppState>,
     request: Request,
@@ -1142,6 +1255,10 @@ fn route_group_for_path(path: &str) -> String {
         "/api/public-config".to_string()
     } else if path.starts_with("/api/admin/") {
         "/api/admin/:action".to_string()
+    } else if path.starts_with("/admin/api/") {
+        "/admin/api/:resource".to_string()
+    } else if path == "/admin" || path.starts_with("/admin/") {
+        "/admin".to_string()
     } else {
         "/static".to_string()
     }
@@ -1655,20 +1772,71 @@ async fn admin_login(
     State(state): State<AppState>,
     Json(request): Json<AdminLoginRequest>,
 ) -> Response {
-    if request.password.is_empty() {
+    admin_login_response(&state, request, "unknown", false).await
+}
+
+async fn admin_cookie_login(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(request): Json<AdminLoginRequest>,
+) -> Response {
+    let source = peer.ip().to_string();
+    admin_login_response(&state, request, &source, true).await
+}
+
+async fn admin_login_response(
+    state: &AppState,
+    request: AdminLoginRequest,
+    source: &str,
+    cookie_session: bool,
+) -> Response {
+    let username = request.username.trim();
+    if username.is_empty() || request.password.is_empty() {
         return unauthorized_response();
     }
-    match state
-        .database
-        .login(&request.username, &request.password)
-        .await
+    let now = Instant::now();
+    let username_key = format!("username:{}", username.to_ascii_lowercase());
+    let source_key = format!("source:{source}");
+    if state.admin_login_limiter.is_limited(&username_key, 5, now)
+        || state.admin_login_limiter.is_limited(&source_key, 30, now)
     {
-        Ok(Some(session)) => Json(AdminLoginResponse {
-            token: session.token,
-            expires_at: session.expires_at,
-        })
-        .into_response(),
-        Ok(None) => unauthorized_response(),
+        return too_many_login_attempts_response(15 * 60);
+    }
+    let outcome = state
+        .database
+        .login_with_context(username, &request.password, source)
+        .await;
+    match outcome {
+        Ok(database::AdminLoginOutcome::Success(session)) if cookie_session => {
+            state.admin_login_limiter.clear(&username_key);
+            let cookie = admin_session_cookie(&session.token, SESSION_COOKIE_MAX_AGE_SECS);
+            let mut response = Json(serde_json::json!({
+                "username": session.username,
+                "role": session.role,
+                "expires_at": session.expires_at
+            }))
+            .into_response();
+            response.headers_mut().insert(header::SET_COOKIE, cookie);
+            response
+        }
+        Ok(database::AdminLoginOutcome::Success(session)) => {
+            state.admin_login_limiter.clear(&username_key);
+            Json(AdminLoginResponse {
+                token: session.token,
+                expires_at: session.expires_at,
+            })
+            .into_response()
+        }
+        Ok(database::AdminLoginOutcome::Invalid) => {
+            state.admin_login_limiter.record(&username_key, now);
+            state.admin_login_limiter.record(&source_key, now);
+            unauthorized_response()
+        }
+        Ok(database::AdminLoginOutcome::Locked { retry_after_secs }) => {
+            state.admin_login_limiter.record(&username_key, now);
+            state.admin_login_limiter.record(&source_key, now);
+            too_many_login_attempts_response(retry_after_secs)
+        }
         Err(error) => {
             tracing::error!(%error, "administrator login query failed");
             internal_error_response()
@@ -1677,13 +1845,33 @@ async fn admin_login(
 }
 
 async fn admin_logout(headers: HeaderMap, State(state): State<AppState>) -> Response {
-    let Some(token) = bearer_token(&headers) else {
+    let Some(token) = admin_token(&headers) else {
         return unauthorized_response();
     };
     match state.database.logout(token).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => {
             tracing::error!(%error, "administrator logout query failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn admin_cookie_logout(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let response = admin_logout(headers, State(state)).await;
+    let mut response = response.into_response();
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, clear_admin_session_cookie());
+    response
+}
+
+async fn admin_session(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match authenticated_admin(&headers, &state).await {
+        Ok(Some(identity)) => Json(identity).into_response(),
+        Ok(None) => unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator session query failed");
             internal_error_response()
         }
     }
@@ -1700,17 +1888,16 @@ async fn change_admin_password(
     State(state): State<AppState>,
     Json(request): Json<AdminPasswordChangeRequest>,
 ) -> Response {
-    let Some(token) = bearer_token(&headers) else {
-        return unauthorized_response();
+    let identity = match authenticated_admin(&headers, &state).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator authorization query failed");
+            return internal_error_response();
+        }
     };
-    if request.new_password.len() < 12 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({ "error": "new password must contain at least 12 characters" }),
-            ),
-        )
-            .into_response();
+    if let Err(error) = validate_admin_password(&identity.username, &request.new_password) {
+        return bad_request_response(error.to_string());
     }
     if request.current_password == request.new_password {
         return (
@@ -1719,17 +1906,13 @@ async fn change_admin_password(
         )
             .into_response();
     }
-    match state.database.authorize(token).await {
-        Ok(true) => {}
-        Ok(false) => return unauthorized_response(),
-        Err(error) => {
-            tracing::error!(%error, "administrator authorization query failed");
-            return internal_error_response();
-        }
-    }
     match state
         .database
-        .change_admin_password("admin", &request.current_password, &request.new_password)
+        .change_admin_password(
+            &identity.username,
+            &request.current_password,
+            &request.new_password,
+        )
         .await
     {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
@@ -1851,19 +2034,14 @@ async fn update_admin_config(
     State(state): State<AppState>,
     Json(mut next_config): Json<Config>,
 ) -> Response {
-    let Some(token) = bearer_token(&headers) else {
-        return unauthorized_response();
-    };
-    let authorized = match state.database.authorize(token).await {
-        Ok(authorized) => authorized,
+    let identity = match authenticated_admin(&headers, &state).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return unauthorized_response(),
         Err(error) => {
             tracing::error!(%error, "administrator authorization query failed");
             return internal_error_response();
         }
     };
-    if !authorized {
-        return unauthorized_response();
-    }
 
     if let Err(error) = next_config.validate() {
         return (
@@ -1894,7 +2072,11 @@ async fn update_admin_config(
         .collect::<Vec<_>>();
     if let Err(error) = state
         .database
-        .save_runtime_config("admin", &next_config, "update runtime configuration")
+        .save_runtime_config(
+            &identity.username,
+            &next_config,
+            "update runtime configuration",
+        )
         .await
     {
         tracing::error!(%error, "failed to save runtime configuration");
@@ -1908,11 +2090,178 @@ async fn update_admin_config(
     .into_response()
 }
 
-async fn is_admin_authorized(headers: &HeaderMap, state: &AppState) -> anyhow::Result<bool> {
-    let Some(token) = bearer_token(headers) else {
-        return Ok(false);
+#[derive(Deserialize)]
+struct CreateAdminRequest {
+    username: String,
+    password: String,
+    #[serde(default = "default_admin_role")]
+    role: String,
+}
+
+fn default_admin_role() -> String {
+    "admin".to_string()
+}
+
+async fn list_admins(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
     };
-    state.database.authorize(token).await
+    match state.database.list_admins().await {
+        Ok(admins) => {
+            tracing::debug!(actor = identity.username, "listed administrator accounts");
+            Json(admins).into_response()
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to list administrator accounts");
+            internal_error_response()
+        }
+    }
+}
+
+async fn create_admin(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<CreateAdminRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    let username = request.username.trim();
+    if let Err(error) = validate_admin_username(username) {
+        return bad_request_response(error.to_string());
+    }
+    if request.role != "admin" && request.role != "super_admin" {
+        return bad_request_response("role must be admin or super_admin".to_string());
+    }
+    if let Err(error) = validate_admin_password(username, &request.password) {
+        return bad_request_response(error.to_string());
+    }
+    match state
+        .database
+        .create_admin(
+            &identity.username,
+            username,
+            &request.password,
+            &request.role,
+        )
+        .await
+    {
+        Ok(true) => StatusCode::CREATED.into_response(),
+        Ok(false) => conflict_response("administrator username already exists"),
+        Err(error) => {
+            tracing::error!(%error, "failed to create administrator");
+            internal_error_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct AdminStatusRequest {
+    disabled: bool,
+}
+
+async fn update_admin_status(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(username): AxumPath<String>,
+    Json(request): Json<AdminStatusRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    if identity.username == username && request.disabled {
+        return conflict_response("cannot disable the current administrator");
+    }
+    match state
+        .database
+        .set_admin_disabled(&identity.username, &username, request.disabled)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => conflict_response(
+            "administrator does not exist or is the last active super administrator",
+        ),
+        Err(error) => {
+            tracing::error!(%error, "failed to update administrator status");
+            internal_error_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct AdminPasswordResetRequest {
+    new_password: String,
+}
+
+async fn reset_admin_password(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(username): AxumPath<String>,
+    Json(request): Json<AdminPasswordResetRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    if let Err(error) = validate_admin_password(&username, &request.new_password) {
+        return bad_request_response(error.to_string());
+    }
+    match state
+        .database
+        .reset_admin_password(&identity.username, &username, &request.new_password)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "administrator not found"
+            })),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to reset administrator password");
+            internal_error_response()
+        }
+    }
+}
+
+async fn require_super_admin(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<database::AdminIdentity, Response> {
+    match authenticated_admin(headers, state).await {
+        Ok(Some(identity)) if identity.role == "super_admin" => Ok(identity),
+        Ok(Some(_)) => Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "super administrator access required"
+            })),
+        )
+            .into_response()),
+        Ok(None) => Err(unauthorized_response()),
+        Err(error) => {
+            tracing::error!(%error, "administrator authorization query failed");
+            Err(internal_error_response())
+        }
+    }
+}
+
+async fn is_admin_authorized(headers: &HeaderMap, state: &AppState) -> anyhow::Result<bool> {
+    Ok(authenticated_admin(headers, state).await?.is_some())
+}
+
+async fn authenticated_admin(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> anyhow::Result<Option<database::AdminIdentity>> {
+    let Some(token) = admin_token(headers) else {
+        return Ok(None);
+    };
+    state.database.authenticate_session(token).await
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
@@ -1922,6 +2271,98 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .ok()?
         .strip_prefix("Bearer ")
         .filter(|token| !token.is_empty())
+}
+
+fn admin_token(headers: &HeaderMap) -> Option<&str> {
+    cookie_value(headers, ADMIN_SESSION_COOKIE).or_else(|| bearer_token(headers))
+}
+
+fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .filter_map(|item| item.trim().split_once('='))
+        .find_map(|(cookie_name, value)| {
+            (cookie_name == name && !value.is_empty()).then_some(value)
+        })
+}
+
+fn admin_session_cookie(token: &str, max_age_secs: i64) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{ADMIN_SESSION_COOKIE}={token}; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age={max_age_secs}"
+    ))
+    .expect("generated administrator session cookie is valid")
+}
+
+fn clear_admin_session_cookie() -> HeaderValue {
+    HeaderValue::from_static(
+        "mirrorproxy_admin_session=; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=0",
+    )
+}
+
+fn validate_admin_username(username: &str) -> anyhow::Result<()> {
+    if !(3..=64).contains(&username.len())
+        || !username
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        anyhow::bail!(
+            "administrator username must contain 3 to 64 ASCII letters, numbers, dots, underscores, or hyphens"
+        );
+    }
+    Ok(())
+}
+
+fn validate_admin_password(username: &str, password: &str) -> anyhow::Result<()> {
+    if password.chars().count() < 12 {
+        anyhow::bail!("administrator password must contain at least 12 characters");
+    }
+    if password.eq_ignore_ascii_case(username) {
+        anyhow::bail!("administrator password must not equal the username");
+    }
+    let normalized = password.to_ascii_lowercase();
+    const COMMON_PASSWORDS: &[&str] = &[
+        "123456789012",
+        "administrator",
+        "adminpassword",
+        "password1234",
+        "qwertyuiop12",
+        "mirrorproxy",
+    ];
+    if COMMON_PASSWORDS.contains(&normalized.as_str()) {
+        anyhow::bail!("administrator password is too common");
+    }
+    Ok(())
+}
+
+fn too_many_login_attempts_response(retry_after_secs: u64) -> Response {
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(serde_json::json!({ "error": "administrator sign in temporarily unavailable" })),
+    )
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
+}
+
+fn bad_request_response(error: String) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": error })),
+    )
+        .into_response()
+}
+
+fn conflict_response(error: &str) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({ "error": error })),
+    )
+        .into_response()
 }
 
 fn unauthorized_response() -> Response {
@@ -2100,6 +2541,19 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    async fn admin_test_state() -> (AppState, database::InitialAdminCredentials) {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let state = AppState {
+            config: Arc::new(RwLock::new(Config::default())),
+            database: Arc::new(database),
+            client: Client::new(),
+            rate_limiter: Arc::new(RateLimiter::new()),
+            admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+            observability: Arc::new(Observability::new().unwrap()),
+        };
+        (state, credentials.unwrap())
+    }
 
     async fn read_http_headers(stream: &mut TcpStream) -> String {
         let mut bytes = Vec::new();
@@ -2924,6 +3378,7 @@ on_exceeded = "stop_proxy"
             database: Arc::new(database.clone()),
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
+            admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
@@ -2983,6 +3438,7 @@ on_exceeded = "stop_proxy"
             database: Arc::new(database.clone()),
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
+            admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
@@ -3018,6 +3474,7 @@ on_exceeded = "stop_proxy"
             database: Arc::new(database.clone()),
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
+            admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             observability: Arc::new(Observability::new().unwrap()),
         };
 
@@ -3038,8 +3495,11 @@ on_exceeded = "stop_proxy"
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value[0]["username"], "admin");
-        assert_eq!(value[0]["detail"], "runtime_config");
+        assert!(value
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| { entry["username"] == "admin" && entry["detail"] == "runtime_config" }));
     }
 
     #[tokio::test]
@@ -3051,6 +3511,7 @@ on_exceeded = "stop_proxy"
             database: Arc::new(database.clone()),
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
+            admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
@@ -3080,6 +3541,101 @@ on_exceeded = "stop_proxy"
             .await
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn admin_cookie_login_sets_a_strict_path_scoped_session() {
+        let (state, credentials) = admin_test_state().await;
+        let response = admin_cookie_login(
+            State(state.clone()),
+            ConnectInfo("127.0.0.1:41000".parse().unwrap()),
+            Json(AdminLoginRequest {
+                username: "admin".to_string(),
+                password: credentials.password,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let set_cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.starts_with("mirrorproxy_admin_session="));
+        assert!(set_cookie.contains("Path=/admin"));
+        assert!(set_cookie.contains("HttpOnly"));
+        assert!(set_cookie.contains("Secure"));
+        assert!(set_cookie.contains("SameSite=Strict"));
+
+        let cookie_pair = set_cookie.split(';').next().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, cookie_pair.parse().unwrap());
+        let response = admin_session(headers, State(state)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["username"], "admin");
+        assert_eq!(value["role"], "super_admin");
+    }
+
+    #[tokio::test]
+    async fn administrator_login_is_limited_by_username_and_source() {
+        let (state, _) = admin_test_state().await;
+        for attempt in 0..5 {
+            let response = admin_cookie_login(
+                State(state.clone()),
+                ConnectInfo("192.0.2.10:41000".parse().unwrap()),
+                Json(AdminLoginRequest {
+                    username: "admin".to_string(),
+                    password: "wrong-password".to_string(),
+                }),
+            )
+            .await;
+            if attempt < 4 {
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            } else {
+                assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            }
+        }
+        let response = admin_cookie_login(
+            State(state),
+            ConnectInfo("192.0.2.10:41001".parse().unwrap()),
+            Json(AdminLoginRequest {
+                username: "admin".to_string(),
+                password: "still-wrong".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "900");
+    }
+
+    #[tokio::test]
+    async fn successful_administrator_logins_do_not_consume_failure_limit() {
+        let (state, credentials) = admin_test_state().await;
+        for port in 41000..41006 {
+            let response = admin_cookie_login(
+                State(state.clone()),
+                ConnectInfo(format!("192.0.2.11:{port}").parse().unwrap()),
+                Json(AdminLoginRequest {
+                    username: "admin".to_string(),
+                    password: credentials.password.clone(),
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    }
+
+    #[test]
+    fn administrator_password_policy_rejects_weak_values() {
+        assert!(validate_admin_username("ops.admin").is_ok());
+        assert!(validate_admin_username("bad name").is_err());
+        assert!(validate_admin_password("admin", "a-long-unique-passphrase").is_ok());
+        assert!(validate_admin_password("admin", "short").is_err());
+        assert!(validate_admin_password("administrator", "administrator").is_err());
+        assert!(validate_admin_password("admin", "password1234").is_err());
     }
 
     #[tokio::test]

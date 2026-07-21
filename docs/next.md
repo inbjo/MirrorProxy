@@ -534,6 +534,11 @@ feat: support a global outbound proxy
 
 ### 14.2 管理入口和管理员认证
 
+状态：已完成。已实现独立 `/admin` 页面和 `/admin/api/*` Cookie API、多管理员与
+超级管理员保护、密码策略、登录限速和锁定、安全审计、Session 撤销及 CLI 应急重置；
+旧 `/api/admin/*` Bearer API 暂时保留兼容。服务端、前端单元测试、生产构建和
+Playwright 浏览器测试均已通过。
+
 建议 Commit：
 
 ```text

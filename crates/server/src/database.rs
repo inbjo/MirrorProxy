@@ -19,6 +19,8 @@ use sqlx::{
 use crate::config::Config;
 
 const SESSION_LIFETIME_SECS: i64 = 24 * 60 * 60;
+const ADMIN_LOGIN_FAILURE_LIMIT: i64 = 5;
+const ADMIN_LOGIN_LOCK_SECS: i64 = 15 * 60;
 
 #[derive(Clone)]
 pub struct Database {
@@ -31,9 +33,34 @@ pub struct InitialAdminCredentials {
     pub generated: bool,
 }
 
+#[derive(Debug)]
 pub struct AdminSession {
     pub token: String,
     pub expires_at: i64,
+    pub username: String,
+    pub role: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct AdminIdentity {
+    pub username: String,
+    pub role: String,
+}
+
+#[derive(Debug)]
+pub enum AdminLoginOutcome {
+    Success(AdminSession),
+    Invalid,
+    Locked { retry_after_secs: u64 },
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminAccount {
+    pub username: String,
+    pub role: String,
+    pub disabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 pub struct ProxyTrafficRecord<'a> {
@@ -126,6 +153,43 @@ impl Database {
             .await
             .context("failed to add traffic reservation column")?;
         }
+        self.ensure_admin_columns().await?;
+        Ok(())
+    }
+
+    async fn ensure_admin_columns(&self) -> anyhow::Result<()> {
+        let rows = sqlx::query("PRAGMA table_info(admin_users)")
+            .fetch_all(&self.pool)
+            .await?;
+        let columns = rows
+            .iter()
+            .filter_map(|row| row.try_get::<String, _>("name").ok())
+            .collect::<Vec<_>>();
+        for (column, statement) in [
+            (
+                "role",
+                "ALTER TABLE admin_users ADD COLUMN role TEXT NOT NULL DEFAULT 'super_admin'",
+            ),
+            (
+                "disabled",
+                "ALTER TABLE admin_users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "failed_login_count",
+                "ALTER TABLE admin_users ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "locked_until",
+                "ALTER TABLE admin_users ADD COLUMN locked_until INTEGER",
+            ),
+        ] {
+            if !columns.iter().any(|existing| existing == column) {
+                sqlx::query(statement)
+                    .execute(&self.pool)
+                    .await
+                    .with_context(|| format!("failed to add admin_users.{column}"))?;
+            }
+        }
         Ok(())
     }
 
@@ -158,26 +222,86 @@ impl Database {
         }))
     }
 
+    #[cfg(test)]
     pub async fn login(
         &self,
         username: &str,
         password: &str,
     ) -> anyhow::Result<Option<AdminSession>> {
-        let row = sqlx::query("SELECT password_hash FROM admin_users WHERE username = ?")
+        match self
+            .login_with_context(username, password, "unknown")
+            .await?
+        {
+            AdminLoginOutcome::Success(session) => Ok(Some(session)),
+            AdminLoginOutcome::Invalid | AdminLoginOutcome::Locked { .. } => Ok(None),
+        }
+    }
+
+    pub async fn login_with_context(
+        &self,
+        username: &str,
+        password: &str,
+        source: &str,
+    ) -> anyhow::Result<AdminLoginOutcome> {
+        let username = username.trim();
+        let row = sqlx::query(
+            "SELECT password_hash, role, disabled, failed_login_count, locked_until FROM admin_users WHERE username = ?",
+        )
             .bind(username)
             .fetch_optional(&self.pool)
             .await?;
         let Some(row) = row else {
-            return Ok(None);
+            self.write_security_audit(username, "admin_login_failed", source)
+                .await?;
+            return Ok(AdminLoginOutcome::Invalid);
         };
+        let now = unix_timestamp();
+        let disabled: bool = row.try_get("disabled")?;
+        let locked_until: Option<i64> = row.try_get("locked_until")?;
+        if disabled {
+            self.write_security_audit(username, "admin_login_failed", source)
+                .await?;
+            return Ok(AdminLoginOutcome::Invalid);
+        }
+        if locked_until.is_some_and(|until| until > now) {
+            self.write_security_audit(username, "admin_login_locked", source)
+                .await?;
+            return Ok(AdminLoginOutcome::Locked {
+                retry_after_secs: locked_until.unwrap_or(now).saturating_sub(now) as u64,
+            });
+        }
         let password_hash: String = row.try_get("password_hash")?;
         if !verify_password(password, &password_hash) {
-            return Ok(None);
+            let previous_failures: i64 = row.try_get("failed_login_count")?;
+            let failures = if locked_until.is_some() {
+                1
+            } else {
+                previous_failures + 1
+            };
+            let next_locked_until =
+                (failures >= ADMIN_LOGIN_FAILURE_LIMIT).then_some(now + ADMIN_LOGIN_LOCK_SECS);
+            sqlx::query(
+                "UPDATE admin_users SET failed_login_count = ?, locked_until = ?, updated_at = ? WHERE username = ?",
+            )
+            .bind(failures)
+            .bind(next_locked_until)
+            .bind(now)
+            .bind(username)
+            .execute(&self.pool)
+            .await?;
+            self.write_security_audit(username, "admin_login_failed", source)
+                .await?;
+            return Ok(next_locked_until.map_or(AdminLoginOutcome::Invalid, |_| {
+                AdminLoginOutcome::Locked {
+                    retry_after_secs: ADMIN_LOGIN_LOCK_SECS as u64,
+                }
+            }));
         }
 
-        let now = unix_timestamp();
+        let role: String = row.try_get("role")?;
         let expires_at = now + SESSION_LIFETIME_SECS;
         let token = random_secret(48);
+        let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO admin_sessions (token_hash, username, created_at, expires_at, last_used_at) VALUES (?, ?, ?, ?, ?)",
         )
@@ -186,26 +310,61 @@ impl Database {
         .bind(now)
         .bind(expires_at)
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        Ok(Some(AdminSession { token, expires_at }))
+        sqlx::query(
+            "UPDATE admin_users SET failed_login_count = 0, locked_until = NULL, updated_at = ? WHERE username = ?",
+        )
+        .bind(now)
+        .bind(username)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'admin_login_succeeded', ?)",
+        )
+        .bind(now)
+        .bind(username)
+        .bind(source)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(AdminLoginOutcome::Success(AdminSession {
+            token,
+            expires_at,
+            username: username.to_string(),
+            role,
+        }))
     }
 
+    #[cfg(test)]
     pub async fn authorize(&self, token: &str) -> anyhow::Result<bool> {
+        Ok(self.authenticate_session(token).await?.is_some())
+    }
+
+    pub async fn authenticate_session(&self, token: &str) -> anyhow::Result<Option<AdminIdentity>> {
         let now = unix_timestamp();
         sqlx::query("DELETE FROM admin_sessions WHERE expires_at <= ?")
             .bind(now)
             .execute(&self.pool)
             .await?;
-        let result = sqlx::query(
-            "UPDATE admin_sessions SET last_used_at = ? WHERE token_hash = ? AND expires_at > ?",
+        let row = sqlx::query(
+            "SELECT s.username, u.role FROM admin_sessions s JOIN admin_users u ON u.username = s.username WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0",
         )
-        .bind(now)
         .bind(hash_token(token))
         .bind(now)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
-        Ok(result.rows_affected() == 1)
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let username: String = row.try_get("username")?;
+        let role: String = row.try_get("role")?;
+        sqlx::query("UPDATE admin_sessions SET last_used_at = ? WHERE token_hash = ?")
+            .bind(now)
+            .bind(hash_token(token))
+            .execute(&self.pool)
+            .await?;
+        Ok(Some(AdminIdentity { username, role }))
     }
 
     pub async fn logout(&self, token: &str) -> anyhow::Result<()> {
@@ -256,6 +415,160 @@ impl Database {
         .await?;
         transaction.commit().await?;
         Ok(true)
+    }
+
+    pub async fn list_admins(&self) -> anyhow::Result<Vec<AdminAccount>> {
+        sqlx::query(
+            "SELECT username, role, disabled, created_at, updated_at FROM admin_users ORDER BY username",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(AdminAccount {
+                username: row.try_get("username")?,
+                role: row.try_get("role")?,
+                disabled: row.try_get("disabled")?,
+                created_at: row.try_get("created_at")?,
+                updated_at: row.try_get("updated_at")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(Into::into)
+    }
+
+    pub async fn create_admin(
+        &self,
+        actor: &str,
+        username: &str,
+        password: &str,
+        role: &str,
+    ) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO admin_users (username, password_hash, role, disabled, failed_login_count, created_at, updated_at) VALUES (?, ?, ?, 0, 0, ?, ?)",
+        )
+        .bind(username)
+        .bind(hash_password(password)?)
+        .bind(role)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Ok(false);
+        }
+        self.write_security_audit(
+            actor,
+            "admin_created",
+            &format!("username={username}; role={role}"),
+        )
+        .await?;
+        Ok(true)
+    }
+
+    pub async fn set_admin_disabled(
+        &self,
+        actor: &str,
+        username: &str,
+        disabled: bool,
+    ) -> anyhow::Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query("SELECT role, disabled FROM admin_users WHERE username = ?")
+            .bind(username)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let role: String = row.try_get("role")?;
+        let was_disabled: bool = row.try_get("disabled")?;
+        if disabled && !was_disabled && role == "super_admin" {
+            let row = sqlx::query(
+                "SELECT COUNT(*) AS count FROM admin_users WHERE role = 'super_admin' AND disabled = 0",
+            )
+            .fetch_one(&mut *transaction)
+            .await?;
+            if row.try_get::<i64, _>("count")? <= 1 {
+                return Ok(false);
+            }
+        }
+        let result =
+            sqlx::query("UPDATE admin_users SET disabled = ?, updated_at = ? WHERE username = ?")
+                .bind(disabled)
+                .bind(unix_timestamp())
+                .bind(username)
+                .execute(&mut *transaction)
+                .await?;
+        if disabled {
+            sqlx::query("DELETE FROM admin_sessions WHERE username = ?")
+                .bind(username)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'admin_status_changed', ?)",
+        )
+        .bind(unix_timestamp())
+        .bind(actor)
+        .bind(format!("username={username}; disabled={disabled}"))
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn reset_admin_password(
+        &self,
+        actor: &str,
+        username: &str,
+        password: &str,
+    ) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query(
+            "UPDATE admin_users SET password_hash = ?, failed_login_count = 0, locked_until = NULL, updated_at = ? WHERE username = ?",
+        )
+        .bind(hash_password(password)?)
+        .bind(now)
+        .bind(username)
+        .execute(&mut *transaction)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM admin_sessions WHERE username = ?")
+            .bind(username)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'admin_password_reset', ?)",
+        )
+        .bind(now)
+        .bind(actor)
+        .bind(format!("username={username}; all sessions revoked"))
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    async fn write_security_audit(
+        &self,
+        username: &str,
+        action: &str,
+        detail: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, ?, ?)",
+        )
+        .bind(unix_timestamp())
+        .bind(if username.is_empty() { "unknown" } else { username })
+        .bind(action)
+        .bind(detail)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn load_or_seed_runtime_config(&self, fallback: Config) -> anyhow::Result<Config> {
@@ -541,7 +854,7 @@ fn unix_timestamp() -> i64 {
 const MIGRATIONS: &[&str] = &[
     "PRAGMA journal_mode = WAL",
     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS admin_users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS admin_users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'super_admin', disabled INTEGER NOT NULL DEFAULT 0, failed_login_count INTEGER NOT NULL DEFAULT 0, locked_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS admin_sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS proxy_targets (code TEXT PRIMARY KEY, enabled INTEGER NOT NULL, upstream_url TEXT NOT NULL, route_prefix TEXT NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS traffic_daily (day TEXT NOT NULL, target_code TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, target_code))",
@@ -616,6 +929,89 @@ mod tests {
         assert!(!database.authorize(&session.token).await.unwrap());
         assert!(database
             .login("admin", "next-password-123")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn locks_an_administrator_after_repeated_failures() {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let credentials = credentials.unwrap();
+        for attempt in 0..ADMIN_LOGIN_FAILURE_LIMIT {
+            let outcome = database
+                .login_with_context("admin", "wrong-password", "192.0.2.1")
+                .await
+                .unwrap();
+            if attempt + 1 < ADMIN_LOGIN_FAILURE_LIMIT {
+                assert!(matches!(outcome, AdminLoginOutcome::Invalid));
+            } else {
+                assert!(matches!(outcome, AdminLoginOutcome::Locked { .. }));
+            }
+        }
+        assert!(matches!(
+            database
+                .login_with_context("admin", &credentials.password, "192.0.2.1")
+                .await
+                .unwrap(),
+            AdminLoginOutcome::Locked { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn manages_multiple_admins_and_protects_the_last_super_admin() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        assert!(database
+            .create_admin("admin", "operator", "operator-password-123", "admin")
+            .await
+            .unwrap());
+        assert!(!database
+            .create_admin("admin", "operator", "another-password-123", "admin")
+            .await
+            .unwrap());
+        assert!(!database
+            .set_admin_disabled("admin", "admin", true)
+            .await
+            .unwrap());
+        assert!(database
+            .create_admin("admin", "recovery", "recovery-password-123", "super_admin",)
+            .await
+            .unwrap());
+        assert!(database
+            .set_admin_disabled("admin", "recovery", true)
+            .await
+            .unwrap());
+        assert!(database
+            .login("recovery", "recovery-password-123")
+            .await
+            .unwrap()
+            .is_none());
+        let admins = database.list_admins().await.unwrap();
+        assert_eq!(admins.len(), 3);
+        assert!(admins
+            .iter()
+            .any(|account| account.username == "operator" && account.role == "admin"));
+    }
+
+    #[tokio::test]
+    async fn super_admin_password_reset_revokes_target_sessions() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        database
+            .create_admin("admin", "operator", "operator-password-123", "admin")
+            .await
+            .unwrap();
+        let session = database
+            .login("operator", "operator-password-123")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(database
+            .reset_admin_password("admin", "operator", "replacement-password-123")
+            .await
+            .unwrap());
+        assert!(!database.authorize(&session.token).await.unwrap());
+        assert!(database
+            .login("operator", "replacement-password-123")
             .await
             .unwrap()
             .is_some());

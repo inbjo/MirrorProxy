@@ -15,7 +15,7 @@ The project uses an adapter-based proxy core and already ships adapters for GitH
 
 ## Features
 
-- Embedded public and authenticated administration web console at `/`
+- Embedded public portal at `/` and an independent administration portal at `/admin`
 - Health endpoint at `/healthz`
 - Runtime public config endpoint at `/api/config`
 - Source catalog endpoint at `/api/sources`
@@ -797,24 +797,38 @@ Optional disk caching is disabled by default. When enabled, it stores only succe
 
 On the first startup, MirrorProxy creates its SQLite database and prints a one-time
 random password for the `admin` account in the local startup log. When
-`MIRRORPROXY_ADMIN_PASSWORD` has a value, it uses that value instead. Use the
-password with `POST /api/admin/login`, then send the returned token as
-`Authorization: Bearer <token>` to protected endpoints such as `GET
-/api/admin/config`. The password is stored only as an Argon2 hash; keep the
-startup output private.
+`MIRRORPROXY_ADMIN_PASSWORD` has a value, it uses that value instead. Open
+`/admin` and sign in with the username and password. The independent admin portal
+uses an `HttpOnly`, `Secure`, `SameSite=Strict` cookie scoped to `/admin`; deploy
+it behind HTTPS. Passwords are stored only as Argon2id hashes, and successful and
+failed sign-ins are audited. Repeated failures are rate-limited and temporarily
+lock the administrator account.
 
-`PUT /api/admin/config` accepts a validated full configuration document and
+Super administrators can create and disable additional `admin` or `super_admin`
+accounts. MirrorProxy refuses to disable the last active super administrator.
+Disabling an account, changing its password, or resetting its password revokes
+its sessions. For local break-glass recovery, pass a new password on stdin:
+
+```bash
+mirrorproxy-server --config config.toml admin reset-password admin
+```
+
+The new cookie APIs live under `/admin/api/*`. The former `/api/admin/*` Bearer
+APIs remain available for migration compatibility but are no longer used by the
+web portal.
+
+`PUT /admin/api/config` accepts a validated full configuration document and
 persists it in SQLite with an audit record. Public URL, enabled adapters,
 upstreams, quota, and rate-limit settings apply to new requests immediately.
 Changing `timeout.request_secs` is persisted but reported as restart-required;
 `listen_addr` and `database_path` must be changed in the service configuration
 and cannot be changed through this API.
 
-`GET /api/admin/stats` returns the current configured-month summary, quota
+`GET /admin/api/stats` returns the current configured-month summary, quota
 remaining bytes, per-day/per-target traffic points, and the ten busiest proxy
-targets. It requires the same administrator Bearer token.
+targets. It requires the administrator session cookie.
 
-`POST /api/admin/password` accepts `current_password` and a new password of at
+`POST /admin/api/password` accepts `current_password` and a new password of at
 least 12 characters. A successful change revokes every administrator session,
 including the one that made the request.
 

@@ -38,13 +38,15 @@ test.beforeEach(async ({ page, context }) => {
   await page.route('**/api/sources', route => route.fulfill({ json: sources }))
 })
 
-test('renders runtime configuration and opens the admin console', async ({ page }) => {
+test('keeps the administrator portal on an independent entry', async ({ page }) => {
   await page.goto('/')
 
   await expect(page.locator('.brand-mark')).toContainText('MirrorProxy')
   await expect(page.getByText('https://mirror.example', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Admin console' }).click()
+  await expect(page.getByRole('button', { name: 'Admin console' })).toHaveCount(0)
+  await page.goto('/admin')
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
+  await expect(page.getByLabel('Administrator username')).toBeVisible()
   await expect(page.getByLabel('Administrator password')).toBeVisible()
 })
 
@@ -84,13 +86,15 @@ test('copies a generated proxy command', async ({ page }) => {
 
 test('signs in and saves an updated runtime configuration', async ({ page }) => {
   let savedConfig: typeof adminConfig | undefined
-  await page.route('**/api/admin/login', async route => {
-    expect(route.request().postDataJSON()).toEqual({ password: 'correct-password' })
-    await route.fulfill({ json: { token: 'test-session' } })
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/admin/api/auth/login', async route => {
+    expect(route.request().postDataJSON()).toEqual({ username: 'admin', password: 'correct-password' })
+    await route.fulfill({ json: { username: 'admin', role: 'super_admin' } })
   })
-  await page.route('**/api/admin/stats', route => route.fulfill({ json: adminStats }))
-  await page.route('**/api/admin/audit-log', route => route.fulfill({ json: [] }))
-  await page.route('**/api/admin/config', async route => {
+  await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
+  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/config', async route => {
     if (route.request().method() === 'PUT') {
       savedConfig = route.request().postDataJSON() as typeof adminConfig
       await route.fulfill({ json: { config: savedConfig, restart_required: ['listen_addr'] } })
@@ -99,8 +103,7 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
     await route.fulfill({ json: savedConfig ?? adminConfig })
   })
 
-  await page.goto('/')
-  await page.getByRole('button', { name: 'Admin console' }).click()
+  await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByRole('heading', { name: 'Runtime configuration' })).toBeVisible()
@@ -113,16 +116,17 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
 
 test('refreshes statistics from the admin console', async ({ page }) => {
   let statsRequests = 0
-  await page.route('**/api/admin/login', route => route.fulfill({ json: { token: 'test-session' } }))
-  await page.route('**/api/admin/config', route => route.fulfill({ json: adminConfig }))
-  await page.route('**/api/admin/audit-log', route => route.fulfill({ json: [] }))
-  await page.route('**/api/admin/stats', route => {
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
+  await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
+  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/stats', route => {
     statsRequests += 1
     return route.fulfill({ json: { ...adminStats, request_count: statsRequests } })
   })
 
-  await page.goto('/')
-  await page.getByRole('button', { name: 'Admin console' }).click()
+  await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.locator('.console-metrics').getByText('1', { exact: true })).toBeVisible()
@@ -133,22 +137,23 @@ test('refreshes statistics from the admin console', async ({ page }) => {
 test('changes the administrator password and revokes the active session', async ({ page }) => {
   let passwordRequest: unknown
   let loggedOut = false
-  await page.route('**/api/admin/login', route => route.fulfill({ json: { token: 'test-session' } }))
-  await page.route('**/api/admin/config', route => route.fulfill({ json: adminConfig }))
-  await page.route('**/api/admin/stats', route => route.fulfill({ json: adminStats }))
-  await page.route('**/api/admin/audit-log', route => route.fulfill({ json: [] }))
-  await page.route('**/api/admin/password', async route => {
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
+  await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
+  await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
+  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/password', async route => {
     passwordRequest = route.request().postDataJSON()
     await route.fulfill({ status: 204 })
   })
-  await page.route('**/api/admin/logout', async route => {
+  await page.route('**/admin/api/auth/logout', async route => {
     loggedOut = true
     await route.fulfill({ status: 204 })
   })
 
-  await page.goto('/')
+  await page.goto('/admin')
   page.once('dialog', dialog => dialog.accept())
-  await page.getByRole('button', { name: 'Admin console' }).click()
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in' }).click()
   await page.getByLabel('Current password').fill('correct-password')

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App, sourceManualCommand } from './main'
 
 describe('App preferences', () => {
-  afterEach(() => { localStorage.clear(); vi.restoreAllMocks() })
+  afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); window.history.replaceState({}, '', '/') })
   it('switches language and theme and persists both', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))))
     render(<App />)
@@ -56,20 +56,20 @@ describe('App preferences', () => {
   })
 
   it('renders nested additional OS upstreams as editable fields', async () => {
-    const json = (value: unknown) => Promise.resolve(new Response(JSON.stringify(value), { status: 200 }))
+    window.history.replaceState({}, '', '/admin')
+    const json = (value: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(value), { status }))
     vi.stubGlobal('fetch', vi.fn((input: string) => {
-      if (input === '/api/admin/login') return json({ token: 'test-token' })
-      if (input === '/api/admin/config') return json({ public_base_url: 'http://selfhost.com', trusted_proxies: ['127.0.0.1'], enabled_proxies: ['os'], quota: { enabled: false, monthly_gb: 500, timezone: 'local', on_exceeded: 'stop_proxy', request_event_retention_days: 30 }, forward_client_authorization: false, database_path: 'test.sqlite', listen_addr: '127.0.0.1:3000', upstreams: { debian: 'https://deb.debian.org/debian', additional_os: { kali: 'https://http.kali.org/kali' } }, timeout: { request_secs: 60 }, rate_limit: { enabled: false, requests_per_minute: 600 }, cache: { enabled: false, directory: 'cache', max_entry_mb: 8 } })
-      if (input === '/api/admin/stats') return json({ month: '2026-07', request_count: 0, response_bytes: 0, error_count: 0, quota: { enabled: false, monthly_limit_bytes: null, remaining_bytes: null, exceeded: false, timezone: 'local', on_exceeded: 'stop_proxy' }, daily: [], targets: [] })
-      if (input === '/api/admin/audit-log') return json([])
+      if (input === '/admin/api/auth/session') return json({ error: 'unauthorized' }, 401)
+      if (input === '/admin/api/auth/login') return json({ username: 'admin', role: 'super_admin' })
+      if (input === '/admin/api/config') return json({ public_base_url: 'http://selfhost.com', trusted_proxies: ['127.0.0.1'], enabled_proxies: ['os'], quota: { enabled: false, monthly_gb: 500, timezone: 'local', on_exceeded: 'stop_proxy', request_event_retention_days: 30 }, forward_client_authorization: false, database_path: 'test.sqlite', listen_addr: '127.0.0.1:3000', upstreams: { debian: 'https://deb.debian.org/debian', additional_os: { kali: 'https://http.kali.org/kali' } }, timeout: { request_secs: 60 }, rate_limit: { enabled: false, requests_per_minute: 600 }, cache: { enabled: false, directory: 'cache', max_entry_mb: 8 } })
+      if (input === '/admin/api/stats') return json({ month: '2026-07', request_count: 0, response_bytes: 0, error_count: 0, quota: { enabled: false, monthly_limit_bytes: null, remaining_bytes: null, exceeded: false, timezone: 'local', on_exceeded: 'stop_proxy' }, daily: [], targets: [] })
+      if (input === '/admin/api/audit-log') return json([])
+      if (input === '/admin/api/admins') return json([])
       if (input === '/api/sources') return json({ providers: [], targets: [{ code: 'solus', name: 'Solus', category: 'os', aliases: [], supported_modes: ['template'], default_scope: 'system' }], sources: [], templates: [{ target_code: 'solus', os_family: 'solus', scope: 'system', template: 'Configure a compatible external Solus mirror.', requires_sudo: true }] })
       return json({ public_base_url: 'http://selfhost.com', enabled_proxies: ['os'], quota: { enabled: false, monthly_gb: 500, timezone: 'local', on_exceeded: 'stop_proxy' } })
     }))
     render(<App />)
-    fireEvent.click(await screen.findByText('Solus'))
-    expect(await screen.findByText('mirrorproxy get solus')).toBeTruthy()
-    fireEvent.click(screen.getAllByText('Admin console').at(-1)!)
-    fireEvent.change(screen.getAllByLabelText('Administrator password').at(-1)!, { target: { value: 'password' } })
+    fireEvent.change(await screen.findByLabelText('Administrator password'), { target: { value: 'password' } })
     fireEvent.click(screen.getAllByText('Sign in').at(-1)!)
     const field = await screen.findByDisplayValue('https://http.kali.org/kali')
     expect(field.closest('label')?.textContent).toContain('additional_os.kali')

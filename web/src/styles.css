@@ -181,6 +181,60 @@ p {
   animation: console-in 260ms ease-out both;
 }
 
+.admin-page {
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.admin-page-header {
+  max-width: 1500px;
+  margin: 0 auto 18px;
+}
+
+.admin-page-header .brand-mark {
+  color: inherit;
+  text-decoration: none;
+}
+
+.admin-page .admin-console {
+  max-width: 1500px;
+  margin: 0 auto;
+}
+
+.administrator-management {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.admin-account-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.admin-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.admin-account-row span {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.admin-account-row small {
+  color: var(--muted);
+}
+
 .admin-console::before {
   position: absolute;
   inset: 0 0 auto;

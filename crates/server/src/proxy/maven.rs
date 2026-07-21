@@ -157,6 +157,7 @@ mod tests {
             database: Arc::new(database),
             client: reqwest::Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
+            admin_login_limiter: Arc::new(crate::AdminLoginRateLimiter::new()),
             observability: Arc::new(Observability::new().unwrap()),
         }
     }
