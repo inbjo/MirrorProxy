@@ -52,6 +52,7 @@ MirrorProxy 是一个基于 Rust 的自部署镜像代理平台。服务端 `mir
 - `/crates-index` Cargo sparse registry 代理
 - `/pypi/simple` pip/PyPI 代理
 - 上游响应流式转发，并过滤 hop-by-hop headers
+- 可选的单一全局 HTTP/HTTPS/SOCKS5/SOCKS5H 代理，覆盖所有镜像上游请求
 - 默认拒绝不支持的绝对 URL 代理目标，避免开放代理风险
 
 ## 快速开始
@@ -94,6 +95,11 @@ services:
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       MIRRORPROXY_MAVEN_FALLBACKS: ${MIRRORPROXY_MAVEN_FALLBACKS-https://jcenter.bintray.com}
+      MIRRORPROXY_OUTBOUND_PROXY_ENABLED: ${MIRRORPROXY_OUTBOUND_PROXY_ENABLED:-false}
+      MIRRORPROXY_OUTBOUND_PROXY_URL: ${MIRRORPROXY_OUTBOUND_PROXY_URL:-}
+      MIRRORPROXY_OUTBOUND_PROXY_USERNAME: ${MIRRORPROXY_OUTBOUND_PROXY_USERNAME:-}
+      MIRRORPROXY_OUTBOUND_PROXY_PASSWORD: ${MIRRORPROXY_OUTBOUND_PROXY_PASSWORD:-}
+      MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY: ${MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY:-127.0.0.1,localhost}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
@@ -120,6 +126,12 @@ MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
 # MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
 # 可选：逗号分隔的 Maven 后备仓库；空值关闭回退
 # MIRRORPROXY_MAVEN_FALLBACKS=https://jcenter.bintray.com
+# 可选：让所有镜像上游请求通过一个 HTTP 或 SOCKS5 代理
+# MIRRORPROXY_OUTBOUND_PROXY_ENABLED=true
+# MIRRORPROXY_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:1080
+# MIRRORPROXY_OUTBOUND_PROXY_USERNAME=proxy-user
+# MIRRORPROXY_OUTBOUND_PROXY_PASSWORD=replace-with-secret
+# MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY=127.0.0.1,localhost
 # 可选：启用 OTLP/gRPC trace 导出，并采样 10% 的根 trace
 # OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 ```
@@ -709,6 +721,13 @@ crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
 pypi_files = "https://files.pythonhosted.org"
+
+[outbound_proxy]
+enabled = false
+url = ""
+no_proxy = ["127.0.0.1", "localhost"]
+# username = "proxy-user"
+# password = "replace-with-secret"
 ```
 
 `public_base_url` 会用于 Web 控制台和元数据重写。未设置或设置为空时，MirrorProxy 会根据每次浏览器请求的主机和协议自动推导（支持 `X-Forwarded-Host` 和 `X-Forwarded-Proto`）；如需固定地址，再设置为用户实际访问的外部地址。
@@ -727,9 +746,17 @@ MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
 MIRRORPROXY_CACHE_ENABLED=true
 MIRRORPROXY_CACHE_DIRECTORY=/var/cache/mirrorproxy
 MIRRORPROXY_CACHE_MAX_ENTRY_MB=8
+MIRRORPROXY_OUTBOUND_PROXY_ENABLED=true
+MIRRORPROXY_OUTBOUND_PROXY_URL=socks5h://127.0.0.1:1080
+MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY=127.0.0.1,localhost
 ```
 
-MirrorProxy 会在启动时校验非空的 `public_base_url`、所有上游 URL、启用的代理名称和超时配置。配置非法会快速失败，并提示具体字段。
+全局上游代理默认关闭。`http://` 和 `https://` 表示 HTTP 代理（HTTPS 上游使用
+CONNECT）；`socks5://` 在本机解析上游 DNS，`socks5h://` 则交给代理解析。它覆盖所有
+镜像 adapter、重定向、OCI Token/blob 和 Maven fallback，但不影响 OTLP 导出。
+代理凭据属于服务端敏感配置，不写入 SQLite，也不会通过配置 API 返回；修改后需要重启服务。
+
+MirrorProxy 会在启动时校验非空的 `public_base_url`、所有上游 URL、启用的代理名称、全局上游代理和超时配置。配置非法会快速失败，并提示具体字段。
 
 可选磁盘缓存默认关闭。启用后，仅缓存带明确 `Content-Length` 且不大于 `cache.max_entry_mb` 的成功公开 GET 响应；`cache.max_total_mb` 限制总磁盘用量并按最近最少使用淘汰。携带 `Authorization`、`Cookie` 或 `Range` 的请求会绕过缓存。大文件或长度未知的响应保持流式转发，绝不会为了缓存整块读入内存。
 

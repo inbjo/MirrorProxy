@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, net::IpAddr, path::Path};
+use std::{collections::BTreeMap, fmt, net::IpAddr, path::Path};
 
 use chrono_tz::Tz;
 use reqwest::Url;
@@ -28,6 +28,11 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(default)]
     pub quota: QuotaConfig,
+    /// The outbound proxy is owned by the service configuration and requires a
+    /// restart because the shared HTTP client is constructed once at startup.
+    /// It is deliberately omitted from runtime API and SQLite serialization.
+    #[serde(default, skip_serializing)]
+    pub outbound_proxy: OutboundProxyConfig,
     #[serde(default)]
     pub forward_client_authorization: bool,
     /// Credentials are deliberately excluded from API responses and SQLite runtime
@@ -186,6 +191,50 @@ pub struct QuotaConfig {
     pub request_event_retention_days: u32,
 }
 
+#[derive(Clone, Deserialize, Default)]
+pub struct OutboundProxyConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub no_proxy: Vec<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+impl fmt::Debug for OutboundProxyConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let endpoint = Url::parse(&self.url)
+            .ok()
+            .and_then(|url| {
+                Some(format!(
+                    "{}://{}:{}",
+                    url.scheme(),
+                    url.host_str()?,
+                    url.port_or_known_default()?
+                ))
+            })
+            .unwrap_or_else(|| {
+                if self.url.is_empty() {
+                    String::new()
+                } else {
+                    "[invalid proxy URL]".to_string()
+                }
+            });
+        formatter
+            .debug_struct("OutboundProxyConfig")
+            .field("enabled", &self.enabled)
+            .field("url", &endpoint)
+            .field("no_proxy", &self.no_proxy)
+            .field("username", &self.username.as_ref().map(|_| "[redacted]"))
+            .field("password", &self.password.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
+
 impl Config {
     pub fn load(path: Option<&Path>) -> anyhow::Result<Self> {
         let mut config = path
@@ -197,12 +246,12 @@ impl Config {
             .unwrap_or_default();
 
         config.public_base_url = config.public_base_url.trim_end_matches('/').to_string();
-        config.apply_env_overrides();
+        config.apply_env_overrides()?;
         config.validate()?;
         Ok(config)
     }
 
-    fn apply_env_overrides(&mut self) {
+    fn apply_env_overrides(&mut self) -> anyhow::Result<()> {
         if let Ok(value) = std::env::var("MIRRORPROXY_DB") {
             self.database_path = value;
         }
@@ -296,6 +345,23 @@ impl Config {
                 self.quota.request_event_retention_days = days;
             }
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_OUTBOUND_PROXY_ENABLED") {
+            self.outbound_proxy.enabled =
+                parse_env_bool("MIRRORPROXY_OUTBOUND_PROXY_ENABLED", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_OUTBOUND_PROXY_URL") {
+            self.outbound_proxy.url = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY") {
+            self.outbound_proxy.no_proxy = parse_url_list(&value);
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_OUTBOUND_PROXY_USERNAME") {
+            self.outbound_proxy.username = (!value.is_empty()).then_some(value);
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_OUTBOUND_PROXY_PASSWORD") {
+            self.outbound_proxy.password = (!value.is_empty()).then_some(value);
+        }
+        Ok(())
     }
 
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
@@ -341,6 +407,7 @@ impl Config {
             "stop_proxy" | "throttle" => {}
             other => anyhow::bail!("quota.on_exceeded must be stop_proxy or throttle, got {other}"),
         }
+        self.outbound_proxy.validate()?;
         for (name, auth) in &self.upstream_auth {
             if self.upstream_url(name).is_none() {
                 anyhow::bail!("upstream_auth contains unknown upstream: {name}");
@@ -535,6 +602,7 @@ impl Default for Config {
             rate_limit: RateLimitConfig::default(),
             cache: CacheConfig::default(),
             quota: QuotaConfig::default(),
+            outbound_proxy: OutboundProxyConfig::default(),
             forward_client_authorization: false,
             upstream_auth: BTreeMap::new(),
         }
@@ -699,6 +767,45 @@ impl Default for QuotaConfig {
             on_exceeded: default_quota_on_exceeded(),
             request_event_retention_days: default_request_event_retention_days(),
         }
+    }
+}
+
+impl OutboundProxyConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.url.trim().is_empty() {
+            anyhow::bail!("outbound_proxy.url cannot be empty when outbound_proxy is enabled");
+        }
+        let url = Url::parse(&self.url)
+            .map_err(|error| anyhow::anyhow!("outbound_proxy.url is invalid: {error}"))?;
+        match url.scheme() {
+            "http" | "https" | "socks5" | "socks5h" => {}
+            scheme => anyhow::bail!(
+                "outbound_proxy.url must use http, https, socks5, or socks5h, got {scheme}"
+            ),
+        }
+        if url.host_str().is_none() {
+            anyhow::bail!("outbound_proxy.url must include a host");
+        }
+        if !url.username().is_empty() || url.password().is_some() {
+            anyhow::bail!(
+                "outbound_proxy.url cannot contain credentials; use username and password fields"
+            );
+        }
+        match (&self.username, &self.password) {
+            (None, None) => {}
+            (Some(username), Some(password))
+                if !username.trim().is_empty() && !password.is_empty() => {}
+            _ => anyhow::bail!(
+                "outbound_proxy.username and outbound_proxy.password must both be non-empty when authentication is configured"
+            ),
+        }
+        if self.no_proxy.iter().any(|value| value.trim().is_empty()) {
+            anyhow::bail!("outbound_proxy.no_proxy entries cannot be empty");
+        }
+        Ok(())
     }
 }
 
@@ -1033,9 +1140,131 @@ fn parse_url_list(value: &str) -> Vec<String> {
         .collect()
 }
 
+fn parse_env_bool(name: &str, value: &str) -> anyhow::Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => anyhow::bail!("{name} expects true or false"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_supported_global_outbound_proxy_schemes() {
+        for scheme in ["http", "https", "socks5", "socks5h"] {
+            let config = Config {
+                outbound_proxy: OutboundProxyConfig {
+                    enabled: true,
+                    url: format!("{scheme}://proxy.example:1080"),
+                    no_proxy: vec!["localhost".to_string(), ".internal.example".to_string()],
+                    username: Some("proxy-user".to_string()),
+                    password: Some("proxy-password".to_string()),
+                },
+                ..Config::default()
+            };
+            assert!(config.validate().is_ok(), "scheme {scheme} should be valid");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_global_outbound_proxy_configuration() {
+        let mut config = Config::default();
+        config.outbound_proxy.enabled = true;
+        assert!(config.validate().is_err());
+
+        config.outbound_proxy.url = "ftp://proxy.example:21".to_string();
+        assert!(config.validate().is_err());
+
+        config.outbound_proxy.url = "http://user:secret@proxy.example:8080".to_string();
+        assert!(config.validate().is_err());
+
+        config.outbound_proxy.url = "http://proxy.example:8080".to_string();
+        config.outbound_proxy.username = Some("proxy-user".to_string());
+        assert!(config.validate().is_err());
+
+        config.outbound_proxy.password = Some(String::new());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn global_outbound_proxy_is_service_owned_and_redacted() {
+        let config = Config {
+            outbound_proxy: OutboundProxyConfig {
+                enabled: true,
+                url: "socks5h://proxy.example:1080".to_string(),
+                no_proxy: vec!["localhost".to_string()],
+                username: Some("proxy-user".to_string()),
+                password: Some("proxy-secret".to_string()),
+            },
+            ..Config::default()
+        };
+
+        let rendered = serde_json::to_string(&config).unwrap();
+        assert!(!rendered.contains("outbound_proxy"));
+        assert!(!rendered.contains("proxy-secret"));
+        assert!(!format!("{config:?}").contains("proxy-secret"));
+    }
+
+    #[test]
+    fn parses_global_outbound_proxy_from_toml() {
+        let config: Config = toml::from_str(
+            r#"
+[outbound_proxy]
+enabled = true
+url = "socks5h://127.0.0.1:1080"
+no_proxy = ["localhost", "127.0.0.1"]
+username = "proxy-user"
+password = "proxy-password"
+"#,
+        )
+        .unwrap();
+
+        assert!(config.validate().is_ok());
+        assert!(config.outbound_proxy.enabled);
+        assert_eq!(config.outbound_proxy.no_proxy.len(), 2);
+    }
+
+    #[test]
+    fn parses_strict_outbound_proxy_environment_boolean() {
+        assert!(parse_env_bool("PROXY_ENABLED", "yes").unwrap());
+        assert!(!parse_env_bool("PROXY_ENABLED", "off").unwrap());
+        assert!(parse_env_bool("PROXY_ENABLED", "sometimes").is_err());
+    }
+
+    #[test]
+    fn applies_global_outbound_proxy_environment_overrides() {
+        let variables = [
+            ("MIRRORPROXY_OUTBOUND_PROXY_ENABLED", "true"),
+            ("MIRRORPROXY_OUTBOUND_PROXY_URL", "socks5h://127.0.0.1:1080"),
+            ("MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY", "localhost,127.0.0.1"),
+            ("MIRRORPROXY_OUTBOUND_PROXY_USERNAME", "proxy-user"),
+            ("MIRRORPROXY_OUTBOUND_PROXY_PASSWORD", "proxy-password"),
+        ];
+        for (name, value) in variables {
+            std::env::set_var(name, value);
+        }
+
+        let result = Config::load(None);
+        for (name, _) in variables {
+            std::env::remove_var(name);
+        }
+        let config = result.unwrap();
+
+        assert!(config.outbound_proxy.enabled);
+        assert_eq!(config.outbound_proxy.url, "socks5h://127.0.0.1:1080");
+        assert_eq!(config.outbound_proxy.no_proxy, ["localhost", "127.0.0.1"]);
+        assert_eq!(
+            config.outbound_proxy.username.as_deref(),
+            Some("proxy-user")
+        );
+        assert_eq!(
+            config.outbound_proxy.password.as_deref(),
+            Some("proxy-password")
+        );
+    }
 
     #[test]
     fn trusted_proxies_accept_ips_and_cidrs() {

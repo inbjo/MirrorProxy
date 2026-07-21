@@ -52,6 +52,7 @@ The project uses an adapter-based proxy core and already ships adapters for GitH
 - Cargo sparse registry proxy at `/crates-index`
 - pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
+- Optional single global HTTP/HTTPS/SOCKS5/SOCKS5H proxy for all mirror-upstream requests
 - Safe defaults that reject unsupported absolute proxy targets
 
 ## Quick Start
@@ -95,6 +96,11 @@ services:
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
       MIRRORPROXY_MAVEN_FALLBACKS: ${MIRRORPROXY_MAVEN_FALLBACKS-https://jcenter.bintray.com}
+      MIRRORPROXY_OUTBOUND_PROXY_ENABLED: ${MIRRORPROXY_OUTBOUND_PROXY_ENABLED:-false}
+      MIRRORPROXY_OUTBOUND_PROXY_URL: ${MIRRORPROXY_OUTBOUND_PROXY_URL:-}
+      MIRRORPROXY_OUTBOUND_PROXY_USERNAME: ${MIRRORPROXY_OUTBOUND_PROXY_USERNAME:-}
+      MIRRORPROXY_OUTBOUND_PROXY_PASSWORD: ${MIRRORPROXY_OUTBOUND_PROXY_PASSWORD:-}
+      MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY: ${MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY:-127.0.0.1,localhost}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
@@ -127,6 +133,12 @@ MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1
 # MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
 # Optional: comma-separated Maven fallback repositories; empty disables fallback.
 # MIRRORPROXY_MAVEN_FALLBACKS=https://jcenter.bintray.com
+# Optional: route every mirror-upstream request through one HTTP or SOCKS5 proxy.
+# MIRRORPROXY_OUTBOUND_PROXY_ENABLED=true
+# MIRRORPROXY_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:1080
+# MIRRORPROXY_OUTBOUND_PROXY_USERNAME=proxy-user
+# MIRRORPROXY_OUTBOUND_PROXY_PASSWORD=replace-with-secret
+# MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY=127.0.0.1,localhost
 # Optional: enable OTLP/gRPC trace export and sample 10% of root traces.
 # OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 ```
@@ -741,6 +753,13 @@ crates_index = "https://index.crates.io"
 crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
 pypi_files = "https://files.pythonhosted.org"
+
+[outbound_proxy]
+enabled = false
+url = ""
+no_proxy = ["127.0.0.1", "localhost"]
+# username = "proxy-user"
+# password = "replace-with-secret"
 ```
 
 `public_base_url` is used by the web console and metadata rewriters. When it is unset or empty, MirrorProxy derives it from each browser request's host and scheme (including `X-Forwarded-Host` and `X-Forwarded-Proto`). Set it to an external URL to use one fixed address instead.
@@ -760,9 +779,19 @@ MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
 MIRRORPROXY_CACHE_ENABLED=true
 MIRRORPROXY_CACHE_DIRECTORY=/var/cache/mirrorproxy
 MIRRORPROXY_CACHE_MAX_ENTRY_MB=8
+MIRRORPROXY_OUTBOUND_PROXY_ENABLED=true
+MIRRORPROXY_OUTBOUND_PROXY_URL=socks5h://127.0.0.1:1080
+MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY=127.0.0.1,localhost
 ```
 
-MirrorProxy validates a non-empty `public_base_url`, all upstream URLs, enabled proxy names, and timeout values during startup. Invalid configuration fails fast with a field-specific error.
+The outbound proxy is disabled by default. `http://` and `https://` configure an
+HTTP proxy (HTTPS upstreams use CONNECT); `socks5://` resolves upstream DNS
+locally and `socks5h://` resolves it through the proxy. It applies to all mirror
+adapters, redirects, OCI token/blob requests, and Maven fallbacks, but not OTLP
+export. Proxy credentials are service-owned secrets: they are not stored in
+SQLite or exposed by the config APIs. Changes require a service restart.
+
+MirrorProxy validates a non-empty `public_base_url`, all upstream URLs, enabled proxy names, outbound proxy settings, and timeout values during startup. Invalid configuration fails fast with a field-specific error.
 
 Optional disk caching is disabled by default. When enabled, it stores only successful public GET responses with an explicit `Content-Length` no larger than `cache.max_entry_mb`; `cache.max_total_mb` bounds disk usage and evicts least-recently-used entries. Requests carrying `Authorization`, `Cookie`, or `Range` bypass the cache. Large or unknown-length responses stay streamed and are never buffered for caching.
 

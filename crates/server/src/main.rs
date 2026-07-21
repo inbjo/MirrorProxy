@@ -26,7 +26,7 @@ use axum::{
 use chrono::{Datelike, Local, Utc};
 use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
-use config::Config;
+use config::{Config, OutboundProxyConfig};
 use database::{Database, ProxyTrafficRecord};
 use mirrorproxy_catalog as catalog;
 use observability::Observability;
@@ -39,7 +39,7 @@ use proxy::{
     hackage, homebrew, julia, luarocks, maven, nix, npm, nuget, nvm, oci, opam, os, pub_repository,
     pypi, rubygems, rustup, texlive, winget, ProxyError,
 };
-use reqwest::{Client, Url};
+use reqwest::{Client, NoProxy, Proxy, Url};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tracing::Instrument;
@@ -290,9 +290,12 @@ fn set_toml_value(document: &mut toml::Value, key: &str, value: &str) -> anyhow:
         ConfigValueKind::PositiveU32 => toml::Value::Integer(i64::from(value.parse::<u32>()?)),
         ConfigValueKind::HttpUrl
         | ConfigValueKind::OptionalHttpUrl
+        | ConfigValueKind::ProxyUrl
         | ConfigValueKind::NonEmpty
         | ConfigValueKind::QuotaAction => toml::Value::String(value.to_string()),
-        ConfigValueKind::HttpUrlList | ConfigValueKind::TrustedProxyList => toml::Value::Array(
+        ConfigValueKind::HttpUrlList
+        | ConfigValueKind::StringList
+        | ConfigValueKind::TrustedProxyList => toml::Value::Array(
             value
                 .split(',')
                 .map(str::trim)
@@ -336,6 +339,14 @@ fn plan_config_set(config: &Config, key: &str, value: &str) -> anyhow::Result<Pl
     let spec = config_set_spec(key)
         .ok_or_else(|| anyhow::anyhow!("config key '{key}' is not settable"))?;
     validate_config_set_value(&spec.key, value)?;
+    if spec.key == "outbound_proxy.enabled"
+        && value == "true"
+        && config.outbound_proxy.url.trim().is_empty()
+    {
+        anyhow::bail!(
+            "outbound_proxy.url must be configured before enabling the global outbound proxy"
+        );
+    }
     let current_value = config_value(config, &spec.key)
         .ok_or_else(|| anyhow::anyhow!("config key '{}' cannot be read", spec.key))?;
 
@@ -359,6 +370,8 @@ enum ConfigValueKind {
     HttpUrl,
     OptionalHttpUrl,
     HttpUrlList,
+    ProxyUrl,
+    StringList,
     NonEmpty,
     U64,
     PositiveU32,
@@ -400,6 +413,21 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             "forward_client_authorization",
             "forward_client_authorization",
             ConfigValueKind::Bool,
+        ),
+        "outbound_proxy.enabled" => (
+            "outbound_proxy.enabled",
+            "outbound_proxy.enabled",
+            ConfigValueKind::Bool,
+        ),
+        "outbound_proxy.url" => (
+            "outbound_proxy.url",
+            "outbound_proxy.url",
+            ConfigValueKind::ProxyUrl,
+        ),
+        "outbound_proxy.no_proxy" => (
+            "outbound_proxy.no_proxy",
+            "outbound_proxy.no_proxy",
+            ConfigValueKind::StringList,
         ),
         "timeout.request_secs" => (
             "timeout.request_secs",
@@ -506,6 +534,15 @@ fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
                     })?;
             }
         }
+        ConfigValueKind::ProxyUrl => {
+            OutboundProxyConfig {
+                enabled: true,
+                url: value.to_string(),
+                ..OutboundProxyConfig::default()
+            }
+            .validate()?;
+        }
+        ConfigValueKind::StringList => {}
         ConfigValueKind::NonEmpty => {
             if value.trim().is_empty() {
                 anyhow::bail!("{key} cannot be empty");
@@ -560,6 +597,9 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "public_base_url" => Some(config.public_base_url.clone()),
         "trusted_proxies" => Some(config.trusted_proxies.join(",")),
         "forward_client_authorization" => Some(config.forward_client_authorization.to_string()),
+        "outbound_proxy.enabled" => Some(config.outbound_proxy.enabled.to_string()),
+        "outbound_proxy.url" => Some(config.outbound_proxy.url.clone()),
+        "outbound_proxy.no_proxy" => Some(config.outbound_proxy.no_proxy.join(",")),
         "enabled_proxies" => Some(config.enabled_proxies.join(",")),
         "timeout.request_secs" => Some(config.timeout.request_secs.to_string()),
         "rate_limit.enabled" => Some(config.rate_limit.enabled.to_string()),
@@ -633,6 +673,9 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
         "public_base_url",
         "trusted_proxies",
         "forward_client_authorization",
+        "outbound_proxy.enabled",
+        "outbound_proxy.url",
+        "outbound_proxy.no_proxy",
         "enabled_proxies",
         "timeout.request_secs",
         "rate_limit.enabled",
@@ -768,12 +811,19 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     // Secrets are not persisted to SQLite, so retain the service-owned values
     // after loading the mutable runtime configuration snapshot.
     config.upstream_auth = service_config.upstream_auth;
-    let request_timeout = Duration::from_secs(config.timeout.request_secs);
-    let client = Client::builder()
-        .user_agent(format!("MirrorProxy/{}", env!("CARGO_PKG_VERSION")))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .timeout(request_timeout)
-        .build()?;
+    config.outbound_proxy = service_config.outbound_proxy;
+    let client = build_upstream_client(&config)?;
+    if config.outbound_proxy.enabled {
+        let endpoint = Url::parse(&config.outbound_proxy.url)
+            .context("validated outbound proxy URL became invalid")?;
+        tracing::info!(
+            scheme = endpoint.scheme(),
+            host = endpoint.host_str().unwrap_or_default(),
+            port = endpoint.port_or_known_default(),
+            no_proxy_entries = config.outbound_proxy.no_proxy.len(),
+            "using global outbound proxy for mirror upstreams"
+        );
+    }
     let observability = Arc::new(Observability::new()?);
 
     if let Some(credentials) = initial_admin {
@@ -964,6 +1014,33 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             observability_middleware,
         ))
         .with_state(state))
+}
+
+fn build_upstream_client(config: &Config) -> anyhow::Result<Client> {
+    let request_timeout = Duration::from_secs(config.timeout.request_secs);
+    let mut builder = Client::builder()
+        .no_proxy()
+        .user_agent(format!("MirrorProxy/{}", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(request_timeout);
+    if config.outbound_proxy.enabled {
+        let mut proxy = Proxy::all(&config.outbound_proxy.url)
+            .context("failed to configure global outbound proxy")?;
+        if let (Some(username), Some(password)) = (
+            config.outbound_proxy.username.as_deref(),
+            config.outbound_proxy.password.as_deref(),
+        ) {
+            proxy = proxy.basic_auth(username, password);
+        }
+        if !config.outbound_proxy.no_proxy.is_empty() {
+            let values = config.outbound_proxy.no_proxy.join(",");
+            proxy = proxy.no_proxy(NoProxy::from_string(&values));
+        }
+        builder = builder.proxy(proxy);
+    }
+    builder
+        .build()
+        .context("failed to build upstream HTTP client")
 }
 
 async fn strip_untrusted_forwarded_headers(
@@ -1799,6 +1876,7 @@ async fn update_admin_config(
     // The management API intentionally never receives secret credentials. Keep
     // the service-owned credentials while applying other runtime settings.
     next_config.upstream_auth = current.upstream_auth.clone();
+    next_config.outbound_proxy = current.outbound_proxy.clone();
     if next_config.listen_addr != current.listen_addr
         || next_config.database_path != current.database_path
     {
@@ -2014,9 +2092,37 @@ mod tests {
         body::{to_bytes, Body},
         http::{HeaderMap, HeaderValue, Request, StatusCode},
     };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+        time::timeout,
+    };
     use tower::ServiceExt;
 
     use super::*;
+
+    async fn read_http_headers(stream: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let count = stream.read(&mut buffer).await.unwrap();
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        String::from_utf8(bytes).unwrap()
+    }
+
+    async fn respond_ok(stream: &mut TcpStream) {
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn generated_admin_password_log_starts_with_password_and_explains_fallback() {
@@ -2036,6 +2142,260 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn global_http_proxy_handles_upstream_requests_and_authentication() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let proxy_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_headers(&mut stream).await;
+            respond_ok(&mut stream).await;
+            request
+        });
+        let config = Config {
+            outbound_proxy: OutboundProxyConfig {
+                enabled: true,
+                url: format!("http://{address}"),
+                no_proxy: Vec::new(),
+                username: Some("proxy-user".to_string()),
+                password: Some("proxy-password".to_string()),
+            },
+            ..Config::default()
+        };
+        let response = build_upstream_client(&config)
+            .unwrap()
+            .get("http://upstream.invalid/packages/item")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.text().await.unwrap(), "ok");
+        let request = proxy_task.await.unwrap();
+        assert!(request.starts_with("GET http://upstream.invalid/packages/item HTTP/1.1\r\n"));
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("proxy-authorization: basic "));
+    }
+
+    #[test]
+    fn builds_clients_for_every_supported_global_proxy_scheme() {
+        for url in [
+            "http://127.0.0.1:8080",
+            "https://127.0.0.1:8443",
+            "socks5://127.0.0.1:1080",
+            "socks5h://127.0.0.1:1080",
+        ] {
+            let config = Config {
+                outbound_proxy: OutboundProxyConfig {
+                    enabled: true,
+                    url: url.to_string(),
+                    ..OutboundProxyConfig::default()
+                },
+                ..Config::default()
+            };
+            assert!(build_upstream_client(&config).is_ok(), "proxy URL {url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn global_http_proxy_receives_https_connect_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let proxy_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_headers(&mut stream).await;
+            stream
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            request
+        });
+        let config = Config {
+            outbound_proxy: OutboundProxyConfig {
+                enabled: true,
+                url: format!("http://{address}"),
+                ..OutboundProxyConfig::default()
+            },
+            ..Config::default()
+        };
+
+        let _ = build_upstream_client(&config)
+            .unwrap()
+            .get("https://upstream.invalid/archive.tar.zst")
+            .send()
+            .await;
+        let request = proxy_task.await.unwrap();
+        assert!(request.starts_with("CONNECT upstream.invalid:443 HTTP/1.1\r\n"));
+    }
+
+    #[tokio::test]
+    async fn global_proxy_honors_no_proxy_hosts() {
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let upstream_task = tokio::spawn(async move {
+            let (mut stream, _) = upstream.accept().await.unwrap();
+            let request = read_http_headers(&mut stream).await;
+            respond_ok(&mut stream).await;
+            request
+        });
+        let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_address = proxy.local_addr().unwrap();
+        let config = Config {
+            outbound_proxy: OutboundProxyConfig {
+                enabled: true,
+                url: format!("http://{proxy_address}"),
+                no_proxy: vec!["127.0.0.1".to_string()],
+                ..OutboundProxyConfig::default()
+            },
+            ..Config::default()
+        };
+
+        let response = build_upstream_client(&config)
+            .unwrap()
+            .get(format!("http://{upstream_address}/direct"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "ok");
+        assert!(upstream_task
+            .await
+            .unwrap()
+            .starts_with("GET /direct HTTP/1.1"));
+        assert!(timeout(Duration::from_millis(100), proxy.accept())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn global_socks5h_proxy_resolves_dns_and_authenticates_remotely() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let proxy_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut greeting = [0_u8; 2];
+            stream.read_exact(&mut greeting).await.unwrap();
+            assert_eq!(greeting[0], 5);
+            let mut methods = vec![0_u8; greeting[1] as usize];
+            stream.read_exact(&mut methods).await.unwrap();
+            assert!(methods.contains(&2));
+            stream.write_all(&[5, 2]).await.unwrap();
+
+            let mut auth_header = [0_u8; 2];
+            stream.read_exact(&mut auth_header).await.unwrap();
+            assert_eq!(auth_header[0], 1);
+            let mut username = vec![0_u8; auth_header[1] as usize];
+            stream.read_exact(&mut username).await.unwrap();
+            let password_len = stream.read_u8().await.unwrap();
+            let mut password = vec![0_u8; password_len as usize];
+            stream.read_exact(&mut password).await.unwrap();
+            stream.write_all(&[1, 0]).await.unwrap();
+
+            let mut request_header = [0_u8; 4];
+            stream.read_exact(&mut request_header).await.unwrap();
+            assert_eq!(request_header, [5, 1, 0, 3]);
+            let domain_len = stream.read_u8().await.unwrap();
+            let mut domain = vec![0_u8; domain_len as usize];
+            stream.read_exact(&mut domain).await.unwrap();
+            let port = stream.read_u16().await.unwrap();
+            stream
+                .write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+                .await
+                .unwrap();
+            let request = read_http_headers(&mut stream).await;
+            respond_ok(&mut stream).await;
+            (
+                String::from_utf8(username).unwrap(),
+                String::from_utf8(password).unwrap(),
+                String::from_utf8(domain).unwrap(),
+                port,
+                request,
+            )
+        });
+        let config = Config {
+            outbound_proxy: OutboundProxyConfig {
+                enabled: true,
+                url: format!("socks5h://{address}"),
+                username: Some("proxy-user".to_string()),
+                password: Some("proxy-password".to_string()),
+                ..OutboundProxyConfig::default()
+            },
+            ..Config::default()
+        };
+        let response = build_upstream_client(&config)
+            .unwrap()
+            .get("http://upstream.example.invalid/from-socks")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.text().await.unwrap(), "ok");
+        let (username, password, domain, port, request) = proxy_task.await.unwrap();
+        assert_eq!(username, "proxy-user");
+        assert_eq!(password, "proxy-password");
+        assert_eq!(domain, "upstream.example.invalid");
+        assert_eq!(port, 80);
+        assert!(request.starts_with("GET /from-socks HTTP/1.1\r\n"));
+    }
+
+    #[tokio::test]
+    async fn global_socks5_proxy_resolves_dns_locally() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let proxy_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut greeting = [0_u8; 2];
+            stream.read_exact(&mut greeting).await.unwrap();
+            let mut methods = vec![0_u8; greeting[1] as usize];
+            stream.read_exact(&mut methods).await.unwrap();
+            assert!(methods.contains(&0));
+            stream.write_all(&[5, 0]).await.unwrap();
+
+            let mut request_header = [0_u8; 4];
+            stream.read_exact(&mut request_header).await.unwrap();
+            assert_eq!(&request_header[..3], &[5, 1, 0]);
+            let address_type = request_header[3];
+            match address_type {
+                1 => {
+                    let mut address = [0_u8; 4];
+                    stream.read_exact(&mut address).await.unwrap();
+                }
+                4 => {
+                    let mut address = [0_u8; 16];
+                    stream.read_exact(&mut address).await.unwrap();
+                }
+                other => panic!("socks5 local DNS unexpectedly used address type {other}"),
+            }
+            let port = stream.read_u16().await.unwrap();
+            stream
+                .write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+                .await
+                .unwrap();
+            let request = read_http_headers(&mut stream).await;
+            respond_ok(&mut stream).await;
+            (address_type, port, request)
+        });
+        let config = Config {
+            outbound_proxy: OutboundProxyConfig {
+                enabled: true,
+                url: format!("socks5://{address}"),
+                ..OutboundProxyConfig::default()
+            },
+            ..Config::default()
+        };
+        let response = build_upstream_client(&config)
+            .unwrap()
+            .get("http://localhost:18080/from-socks")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.text().await.unwrap(), "ok");
+        let (address_type, port, request) = proxy_task.await.unwrap();
+        assert!(matches!(address_type, 1 | 4));
+        assert_eq!(port, 18080);
+        assert!(request.starts_with("GET /from-socks HTTP/1.1\r\n"));
+    }
+
     #[test]
     fn config_value_reads_effective_config_keys() {
         let config = Config::default();
@@ -2047,6 +2407,10 @@ mod tests {
         assert_eq!(config_value(&config, "public_base_url").unwrap(), "");
         assert_eq!(config_value(&config, "quota.monthly_gb").unwrap(), "500");
         assert_eq!(config_value(&config, "cache.max_entry_mb").unwrap(), "8");
+        assert_eq!(
+            config_value(&config, "outbound_proxy.enabled").unwrap(),
+            "false"
+        );
         assert_eq!(
             config_value(&config, "upstreams.npm").unwrap(),
             "https://registry.npmjs.org"
@@ -2126,6 +2490,9 @@ mod tests {
             .any(|(key, value)| key == "cache.directory" && value == "mirrorproxy-cache"));
         assert!(entries
             .iter()
+            .any(|(key, value)| key == "outbound_proxy.enabled" && value == "false"));
+        assert!(entries
+            .iter()
             .any(|(key, value)| key == "upstreams.pypi_files"
                 && value == "https://files.pythonhosted.org"));
         assert!(entries.iter().any(|(key, value)| key == "upstreams.maven"
@@ -2186,6 +2553,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(maven_fallbacks.current_value, "https://jcenter.bintray.com");
+
+        let outbound_proxy =
+            plan_config_set(&config, "outbound_proxy.url", "socks5h://127.0.0.1:1080").unwrap();
+        assert_eq!(outbound_proxy.toml_path, "outbound_proxy.url");
     }
 
     #[test]
@@ -2206,6 +2577,8 @@ mod tests {
         )
         .is_err());
         assert!(plan_config_set(&config, "upstreams.maven_fallbacks", "").is_ok());
+        assert!(plan_config_set(&config, "outbound_proxy.enabled", "true").is_err());
+        assert!(plan_config_set(&config, "outbound_proxy.url", "ftp://proxy.example:21").is_err());
     }
 
     #[test]
@@ -2302,6 +2675,34 @@ on_exceeded = "stop_proxy"
                 "https://second.example/maven"
             ]
         );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn persist_config_set_writes_global_outbound_proxy_values() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrorproxy-outbound-proxy-config-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let config_path = directory.join("config.toml");
+        fs::write(&config_path, "[outbound_proxy]\nenabled = false\n").unwrap();
+
+        for (key, value) in [
+            ("outbound_proxy.url", "socks5h://127.0.0.1:1080"),
+            ("outbound_proxy.no_proxy", "localhost,127.0.0.1"),
+            ("outbound_proxy.enabled", "true"),
+        ] {
+            let config = Config::load(Some(&config_path)).unwrap();
+            let change = plan_config_set(&config, key, value).unwrap();
+            persist_config_set(&config_path, &change).unwrap();
+        }
+
+        let updated = Config::load(Some(&config_path)).unwrap();
+        assert!(updated.outbound_proxy.enabled);
+        assert_eq!(updated.outbound_proxy.url, "socks5h://127.0.0.1:1080");
+        assert_eq!(updated.outbound_proxy.no_proxy, ["localhost", "127.0.0.1"]);
         fs::remove_dir_all(directory).unwrap();
     }
 
