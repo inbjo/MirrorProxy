@@ -48,6 +48,16 @@ pub struct AdminSession {
     pub role: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AdminSessionSummary {
+    pub id: String,
+    pub auth_method: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub last_used_at: i64,
+    pub current: bool,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct AdminIdentity {
     pub username: String,
@@ -685,6 +695,61 @@ impl Database {
         .map_err(Into::into)
     }
 
+    pub async fn list_admin_sessions(
+        &self,
+        username: &str,
+        current_token: &str,
+    ) -> anyhow::Result<Vec<AdminSessionSummary>> {
+        let now = unix_timestamp();
+        let current_hash = hash_token(current_token);
+        sqlx::query("SELECT substr(token_hash, 1, 24) AS id, token_hash, auth_method, created_at, expires_at, last_used_at FROM admin_sessions WHERE username = ? AND expires_at > ? ORDER BY last_used_at DESC")
+            .bind(username)
+            .bind(now)
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| {
+                let token_hash: String = row.try_get("token_hash")?;
+                Ok::<_, sqlx::Error>(AdminSessionSummary {
+                    id: row.try_get("id")?,
+                    auth_method: row.try_get("auth_method")?,
+                    created_at: row.try_get("created_at")?,
+                    expires_at: row.try_get("expires_at")?,
+                    last_used_at: row.try_get("last_used_at")?,
+                    current: token_hash == current_hash,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub async fn revoke_admin_session(
+        &self,
+        actor: &str,
+        username: &str,
+        session_id: &str,
+    ) -> anyhow::Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query(
+            "DELETE FROM admin_sessions WHERE username = ? AND substr(token_hash, 1, 24) = ?",
+        )
+        .bind(username)
+        .bind(session_id)
+        .execute(&mut *transaction)
+        .await?;
+        if result.rows_affected() != 1 {
+            return Ok(false);
+        }
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'admin_session_revoked', ?)")
+            .bind(unix_timestamp())
+            .bind(actor)
+            .bind(format!("session_id={session_id}"))
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
     pub async fn create_admin(
         &self,
         actor: &str,
@@ -1245,6 +1310,45 @@ impl Database {
         .bind(format!("user_id={user_id}; disabled={disabled}"))
         .execute(&mut *transaction)
         .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn soft_delete_user(&self, actor: &str, user_id: i64) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query("UPDATE users SET disabled = 1, deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
+            .bind(now)
+            .bind(now)
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM user_sessions WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("UPDATE user_routing_ids SET active = 0, revoked_at = ? WHERE user_id = ? AND active = 1")
+            .bind(now)
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("DELETE FROM group_members WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("DELETE FROM user_quota_overrides WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'user_soft_deleted', ?)")
+            .bind(now)
+            .bind(actor)
+            .bind(format!("user_id={user_id}"))
+            .execute(&mut *transaction)
+            .await?;
         transaction.commit().await?;
         Ok(true)
     }
@@ -3506,6 +3610,73 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn lists_and_revokes_individual_administrator_sessions() {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let credentials = credentials.unwrap();
+        let first = database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let second = database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let sessions = database
+            .list_admin_sessions("admin", &first.token)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions.iter().filter(|session| session.current).count(), 1);
+        let second_id = sessions
+            .iter()
+            .find(|session| !session.current)
+            .unwrap()
+            .id
+            .clone();
+        assert!(database
+            .revoke_admin_session("admin", "admin", &second_id)
+            .await
+            .unwrap());
+        assert!(database.authorize(&first.token).await.unwrap());
+        assert!(!database.authorize(&second.token).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn soft_delete_revokes_user_access_but_preserves_the_record() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let user = database
+            .create_user("admin", "delete@example.com", "Delete", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        let session = database
+            .create_user_session(user.id, "email")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(database.soft_delete_user("admin", user.id).await.unwrap());
+        assert!(database
+            .authenticate_user_session(&session.token)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(database
+            .user_by_routing_id(&user.routing_id)
+            .await
+            .unwrap()
+            .is_none());
+        let deleted_at: Option<i64> =
+            sqlx::query_scalar("SELECT deleted_at FROM users WHERE id = ?")
+                .bind(user.id)
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert!(deleted_at.is_some());
     }
 
     fn test_auth_provider(slug: &str, encrypted_secret: &str) -> AuthProvider {

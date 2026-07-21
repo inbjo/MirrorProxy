@@ -94,6 +94,8 @@ request_event_retention_days = 30
 [user_access]
 base_domain = ""
 mode = "public"
+# Set true only after wildcard DNS/TLS and original Host forwarding are ready.
+infrastructure_ready = false
 routing_id_min_length = 12
 routing_rotation_cooldown_hours = 24
 

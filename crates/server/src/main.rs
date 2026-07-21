@@ -965,6 +965,11 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             post(finish_admin_passkey_login),
         )
         .route("/admin/api/auth/passkeys", get(list_admin_passkeys))
+        .route("/admin/api/auth/sessions", get(list_admin_sessions))
+        .route(
+            "/admin/api/auth/sessions/{id}",
+            delete(revoke_admin_session),
+        )
         .route(
             "/admin/api/auth/passkeys/register/start",
             post(start_admin_passkey_registration),
@@ -994,7 +999,16 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             post(reset_admin_password),
         )
         .route("/admin/api/users", get(list_users).post(create_user))
+        .route("/admin/api/users/{id}", delete(delete_user))
         .route("/admin/api/users/{id}/status", post(update_user_status))
+        .route(
+            "/admin/api/users/{id}/identities",
+            get(admin_user_identities),
+        )
+        .route(
+            "/admin/api/users/{user_id}/identities/{identity_id}",
+            delete(admin_unlink_user_identity),
+        )
         .route(
             "/admin/api/users/{id}/billing",
             get(admin_user_billing).put(update_user_billing),
@@ -2209,6 +2223,85 @@ async fn list_admin_passkeys(headers: HeaderMap, State(state): State<AppState>) 
     }
 }
 
+async fn list_admin_sessions(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let identity = match authenticated_admin(&headers, &state).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator session authorization failed");
+            return internal_error_response();
+        }
+    };
+    let Some(token) = admin_token(&headers) else {
+        return unauthorized_response();
+    };
+    match state
+        .database
+        .list_admin_sessions(&identity.username, token)
+        .await
+    {
+        Ok(sessions) => Json(sessions).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to list administrator sessions");
+            internal_error_response()
+        }
+    }
+}
+
+async fn revoke_admin_session(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let identity = match authenticated_admin(&headers, &state).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator session authorization failed");
+            return internal_error_response();
+        }
+    };
+    if id.len() != 24 || !id.chars().all(|character| character.is_ascii_hexdigit()) {
+        return bad_request_response("invalid administrator session ID".to_string());
+    }
+    let Some(current_token) = admin_token(&headers) else {
+        return unauthorized_response();
+    };
+    let current = match state
+        .database
+        .list_admin_sessions(&identity.username, current_token)
+        .await
+    {
+        Ok(sessions) => sessions
+            .into_iter()
+            .any(|session| session.id == id && session.current),
+        Err(error) => {
+            tracing::error!(%error, "failed to inspect administrator session");
+            return internal_error_response();
+        }
+    };
+    match state
+        .database
+        .revoke_admin_session(&identity.username, &identity.username, &id)
+        .await
+    {
+        Ok(true) => {
+            let mut response = StatusCode::NO_CONTENT.into_response();
+            if current {
+                response
+                    .headers_mut()
+                    .insert(header::SET_COOKIE, clear_admin_session_cookie());
+            }
+            response
+        }
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to revoke administrator session");
+            internal_error_response()
+        }
+    }
+}
+
 async fn start_admin_passkey_registration(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -2928,7 +3021,7 @@ async fn create_admin(
     State(state): State<AppState>,
     Json(request): Json<CreateAdminRequest>,
 ) -> Response {
-    let identity = match require_super_admin(&headers, &state).await {
+    let identity = match require_recent_super_admin(&headers, &state).await {
         Ok(identity) => identity,
         Err(response) => return response,
     };
@@ -2977,7 +3070,7 @@ async fn update_admin_status(
     AxumPath(username): AxumPath<String>,
     Json(request): Json<AdminStatusRequest>,
 ) -> Response {
-    let identity = match require_super_admin(&headers, &state).await {
+    let identity = match require_recent_super_admin(&headers, &state).await {
         Ok(identity) => identity,
         Err(response) => return response,
     };
@@ -3011,7 +3104,7 @@ async fn reset_admin_password(
     AxumPath(username): AxumPath<String>,
     Json(request): Json<AdminPasswordResetRequest>,
 ) -> Response {
-    let identity = match require_super_admin(&headers, &state).await {
+    let identity = match require_recent_super_admin(&headers, &state).await {
         Ok(identity) => identity,
         Err(response) => return response,
     };
@@ -3117,6 +3210,69 @@ async fn update_user_status(
             .into_response(),
         Err(error) => {
             tracing::error!(%error, "failed to update user status");
+            internal_error_response()
+        }
+    }
+}
+
+async fn delete_user(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+) -> Response {
+    let identity = match require_recent_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    match state
+        .database
+        .soft_delete_user(&identity.username, id)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to soft-delete user");
+            internal_error_response()
+        }
+    }
+}
+
+async fn admin_user_identities(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+) -> Response {
+    if let Err(response) = require_super_admin(&headers, &state).await {
+        return response;
+    }
+    match state.database.list_external_identities(id).await {
+        Ok(identities) => Json(identities).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to list user external identities");
+            internal_error_response()
+        }
+    }
+}
+
+async fn admin_unlink_user_identity(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath((user_id, identity_id)): AxumPath<(i64, i64)>,
+) -> Response {
+    let identity = match require_recent_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    match state
+        .database
+        .delete_external_identity(&identity.username, user_id, identity_id)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to unlink user external identity");
             internal_error_response()
         }
     }
@@ -3503,6 +3659,30 @@ async fn require_super_admin(
     }
 }
 
+async fn require_recent_super_admin(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<database::AdminIdentity, Response> {
+    let identity = require_super_admin(headers, state).await?;
+    let Some(token) = admin_token(headers) else {
+        return Err(unauthorized_response());
+    };
+    match state.database.is_recent_admin_session(token).await {
+        Ok(true) => Ok(identity),
+        Ok(false) => Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "recent administrator verification required"
+            })),
+        )
+            .into_response()),
+        Err(error) => {
+            tracing::error!(%error, "administrator recent verification query failed");
+            Err(internal_error_response())
+        }
+    }
+}
+
 async fn is_admin_authorized(headers: &HeaderMap, state: &AppState) -> anyhow::Result<bool> {
     Ok(authenticated_admin(headers, state).await?.is_some())
 }
@@ -3850,6 +4030,7 @@ mod tests {
             user_access: crate::config::UserAccessConfig {
                 base_domain: "mirror.example.com".to_string(),
                 mode: mode.to_string(),
+                infrastructure_ready: mode == "subdomain_required",
                 ..Default::default()
             },
             ..Config::default()

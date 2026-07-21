@@ -54,6 +54,7 @@ type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access'> & {
   user_access: {
     base_domain: string
     mode: 'public' | 'subdomain_required'
+    infrastructure_ready: boolean
     routing_id_min_length: number
     routing_rotation_cooldown_hours: number
   }
@@ -348,7 +349,7 @@ type UserUsage = {
   targets: Array<{ target_code: string; response_bytes: number; request_count: number; error_count: number }>
 }
 type PublicAuthProvider = { slug: string; display_name: string; kind: string }
-type LinkedIdentity = { id: number; provider_slug: string; provider_name: string; email: string | null; email_verified: boolean; created_at: number }
+type LinkedIdentity = { id: number; provider_slug: string; provider_name: string; provider_subject: string; email: string | null; email_verified: boolean; created_at: number }
 
 function UserPage() {
   const [email, setEmail] = React.useState(() => new URLSearchParams(location.search).get('email') ?? '')
@@ -864,7 +865,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         title: '运行控制台', login: '管理员登录', username: '管理员账号', password: '管理员密码', signIn: '登录', signOut: '退出登录',
         overview: '本月概览', sent: '已发送', remaining: '配额剩余', requests: '请求', errors: '错误',
         configuration: '运行时配置', publicUrl: '公开地址', trustedProxies: '可信反向代理', trustedProxiesHint: '逗号分隔的 IP 或 CIDR；只有这些来源的 X-Forwarded-* 头会被使用。', quota: '启用月度配额', quotaGb: '月度 GB', retentionDays: '明细保留天数', timezone: '时区', cache: '启用小对象磁盘缓存', cacheDirectory: '缓存目录', cacheMaxEntry: '单项上限（MB）',
-        action: '超限动作', forwardAuth: '转发客户端认证头', rate: '启用请求限流', rpm: '每分钟请求数', adapters: '启用代理', upstreams: '上游地址', baseDomain: '用户子域名主域', accessMode: '包代理访问模式', routingLength: '子域名最短长度', rotationCooldown: '子域名更换冷却（小时）', registrationMode: '注册模式', allowedDomains: '企业邮箱域名', emailTtl: '邮件登录有效期（分钟）',
+        action: '超限动作', forwardAuth: '转发客户端认证头', rate: '启用请求限流', rpm: '每分钟请求数', adapters: '启用代理', upstreams: '上游地址', baseDomain: '用户子域名主域', accessMode: '包代理访问模式', infrastructureReady: '通配符 DNS、TLS 与原始 Host 转发已就绪', routingLength: '子域名最短长度', rotationCooldown: '子域名更换冷却（小时）', registrationMode: '注册模式', allowedDomains: '企业邮箱域名', emailTtl: '邮件登录有效期（分钟）',
         save: '保存配置', saving: '保存中…', refresh: '刷新统计', top: 'Top targets', daily: '当月日明细',
         close: '关闭控制台', badLogin: '登录失败，请检查管理员密码。', saveError: '配置保存失败。', restart: '以下字段将在重启后生效：',
         quotaStopped: '代理已因月流量上限停止', noData: '本月尚无代理流量。', passwordHint: '首次启动时密码只会出现在本机日志中。',
@@ -877,7 +878,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         title: 'Operations console', login: 'Administrator sign in', username: 'Administrator username', password: 'Administrator password', signIn: 'Sign in', signOut: 'Sign out',
         overview: 'Month at a glance', sent: 'Sent', remaining: 'Quota remaining', requests: 'Requests', errors: 'Errors',
         configuration: 'Runtime configuration', publicUrl: 'Public URL', trustedProxies: 'Trusted reverse proxies', trustedProxiesHint: 'Comma-separated IPs or CIDRs. Only these peers may supply X-Forwarded-* headers.', quota: 'Enable monthly quota', quotaGb: 'Monthly GB', retentionDays: 'Event retention (days)', timezone: 'Timezone', cache: 'Enable small-response disk cache', cacheDirectory: 'Cache directory', cacheMaxEntry: 'Per-entry limit (MB)',
-        action: 'Exceeded action', forwardAuth: 'Forward client authorization', rate: 'Enable request rate limit', rpm: 'Requests / minute', adapters: 'Enabled adapters', upstreams: 'Upstream endpoints', baseDomain: 'User subdomain base', accessMode: 'Package proxy access mode', routingLength: 'Minimum routing ID length', rotationCooldown: 'Rotation cooldown (hours)', registrationMode: 'Registration mode', allowedDomains: 'Allowed email domains', emailTtl: 'Email login lifetime (minutes)',
+        action: 'Exceeded action', forwardAuth: 'Forward client authorization', rate: 'Enable request rate limit', rpm: 'Requests / minute', adapters: 'Enabled adapters', upstreams: 'Upstream endpoints', baseDomain: 'User subdomain base', accessMode: 'Package proxy access mode', infrastructureReady: 'Wildcard DNS, TLS, and original Host forwarding are ready', routingLength: 'Minimum routing ID length', rotationCooldown: 'Rotation cooldown (hours)', registrationMode: 'Registration mode', allowedDomains: 'Allowed email domains', emailTtl: 'Email login lifetime (minutes)',
         save: 'Save configuration', saving: 'Saving…', refresh: 'Refresh stats', top: 'Top targets', daily: 'Daily detail',
         close: 'Close console', badLogin: 'Sign in failed. Check the administrator password.', saveError: 'Configuration save failed.', restart: 'These fields apply after restart:',
         quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is printed only in the local startup log.',
@@ -920,7 +921,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     setDraft({
       ...config,
       trusted_proxies: config.trusted_proxies ?? [],
-      user_access: config.user_access ?? { base_domain: '', mode: 'public', routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
+      user_access: config.user_access ?? { base_domain: '', mode: 'public', infrastructure_ready: false, routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
       registration: config.registration ?? { mode: 'invite_only', allowed_email_domains: [], email_token_ttl_minutes: 10 },
       webauthn: config.webauthn ?? { enabled: false, rp_id: '', rp_origin: '', rp_name: 'MirrorProxy', require_passkey: false, break_glass_username: 'admin' },
     })
@@ -1087,7 +1088,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
   const updateQuota = (key: keyof AdminConfig['quota'], value: string | boolean | number | null) => setDraft((current) => current ? { ...current, quota: { ...current.quota, [key]: value } } : current)
   const updateRate = (key: keyof AdminConfig['rate_limit'], value: string | boolean | number) => setDraft((current) => current ? { ...current, rate_limit: { ...current.rate_limit, [key]: value } } : current)
   const updateCache = (key: keyof AdminConfig['cache'], value: string | boolean | number) => setDraft((current) => current ? { ...current, cache: { ...current.cache, [key]: value } } : current)
-  const updateUserAccess = (key: keyof AdminConfig['user_access'], value: string | number) => setDraft((current) => current ? { ...current, user_access: { ...current.user_access, [key]: value } } : current)
+  const updateUserAccess = (key: keyof AdminConfig['user_access'], value: string | number | boolean) => setDraft((current) => current ? { ...current, user_access: { ...current.user_access, [key]: value } } : current)
   const updateRegistration = (key: keyof AdminConfig['registration'], value: string | number | string[]) => setDraft((current) => current ? { ...current, registration: { ...current.registration, [key]: value } } : current)
   const toggleAdapter = (adapter: string) => setDraft((current) => {
     if (!current) return current
@@ -1121,11 +1122,12 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
           {error ? <p className="form-error">{error}</p> : null}{restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
           <div className="config-fields"><label>{text.registrationMode}<select value={draft.registration.mode} onChange={(event) => updateRegistration('mode', event.target.value)}><option value="invite_only">invite_only</option><option value="domain_allowlist">domain_allowlist</option><option value="open">open</option><option value="disabled">disabled</option></select></label><label>{text.allowedDomains}<input value={draft.registration.allowed_email_domains.join(', ')} onChange={(event) => updateRegistration('allowed_email_domains', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /></label><label>{text.emailTtl}<input min="1" max="60" type="number" value={draft.registration.email_token_ttl_minutes} onChange={(event) => updateRegistration('email_token_ttl_minutes', Number(event.target.value))} /></label></div>
           <div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label className="wide-field">{text.trustedProxies}<input aria-describedby="trusted-proxies-hint" value={draft.trusted_proxies.join(', ')} onChange={(event) => update('trusted_proxies', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small id="trusted-proxies-hint">{text.trustedProxiesHint}</small></label><label>{text.baseDomain}<input value={draft.user_access.base_domain} onChange={(event) => updateUserAccess('base_domain', event.target.value)} /></label><label>{text.accessMode}<select value={draft.user_access.mode} onChange={(event) => updateUserAccess('mode', event.target.value)}><option value="public">public</option><option value="subdomain_required">subdomain_required</option></select></label><label>{text.routingLength}<input min="8" max="32" type="number" value={draft.user_access.routing_id_min_length} onChange={(event) => updateUserAccess('routing_id_min_length', Number(event.target.value))} /></label><label>{text.rotationCooldown}<input min="0" max="8760" type="number" value={draft.user_access.routing_rotation_cooldown_hours} onChange={(event) => updateUserAccess('routing_rotation_cooldown_hours', Number(event.target.value))} /></label><label>{text.quotaGb}<input min="0" type="number" value={draft.quota.monthly_gb} onChange={(event) => updateQuota('monthly_gb', Number(event.target.value))} /></label><label>{text.retentionDays}<input min="1" type="number" value={draft.quota.request_event_retention_days} onChange={(event) => updateQuota('request_event_retention_days', Number(event.target.value))} /></label><label>{text.timezone}<input value={draft.quota.timezone} onChange={(event) => updateQuota('timezone', event.target.value)} /></label><label>{text.action}<select value={draft.quota.on_exceeded} onChange={(event) => updateQuota('on_exceeded', event.target.value)}><option value="stop_proxy">stop_proxy · 503</option><option value="throttle">throttle · 429</option></select></label><label className="toggle-field"><input type="checkbox" checked={draft.quota.enabled} onChange={(event) => updateQuota('enabled', event.target.checked)} />{text.quota}</label><label className="toggle-field"><input type="checkbox" checked={draft.forward_client_authorization} onChange={(event) => update('forward_client_authorization', event.target.checked)} />{text.forwardAuth}</label><label className="toggle-field"><input type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<input min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label><label>{text.cacheDirectory}<input value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><label>{text.cacheMaxEntry}<input min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label className="toggle-field"><input type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label><label>{text.webauthnRpId}<input value={draft.webauthn.rp_id} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_id: event.target.value })} /></label><label>{text.webauthnOrigin}<input value={draft.webauthn.rp_origin} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_origin: event.target.value })} /></label><label>{text.webauthnName}<input value={draft.webauthn.rp_name} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_name: event.target.value })} /></label><label>{text.breakGlass}<input value={draft.webauthn.break_glass_username} onChange={(event) => update('webauthn', { ...draft.webauthn, break_glass_username: event.target.value })} /></label><label className="toggle-field"><input type="checkbox" checked={draft.webauthn.enabled} onChange={(event) => update('webauthn', { ...draft.webauthn, enabled: event.target.checked })} />{text.webauthnEnabled}</label><label className="toggle-field"><input type="checkbox" checked={draft.webauthn.require_passkey} onChange={(event) => update('webauthn', { ...draft.webauthn, require_passkey: event.target.checked })} />{text.requirePasskey}</label></div>
-          <div className="config-fields"><label>Default user quota (GB)<input min="0" type="number" value={draft.quota.default_user_monthly_gb ?? ''} placeholder="Unlimited" onChange={(event) => updateQuota('default_user_monthly_gb', event.target.value === '' ? null : Number(event.target.value))} /></label></div>
+          <div className="config-fields"><label className="toggle-field"><input type="checkbox" checked={draft.user_access.infrastructure_ready} onChange={(event) => updateUserAccess('infrastructure_ready', event.target.checked)} />{text.infrastructureReady}</label><label>Default user quota (GB)<input min="0" type="number" value={draft.quota.default_user_monthly_gb ?? ''} placeholder="Unlimited" onChange={(event) => updateQuota('default_user_monthly_gb', event.target.value === '' ? null : Number(event.target.value))} /></label></div>
           <h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><input type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div>
           <h4>{text.upstreams}</h4><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : Object.entries(value).map(([target, url]) => <label key={`${key}.${target}`}><span>{key}.{target}</span><input value={url} onChange={(event) => updateAdditionalOsUpstream(target, event.target.value)} /></label>))}</div>
           {catalog ? <SourceCommandGenerator catalog={catalog} baseUrl={draft.public_base_url} text={text} /> : null}
           {draft.webauthn.enabled && 'credentials' in navigator ? <section className="administrator-management"><h4>{text.passkeys}</h4><div className="admin-account-list">{passkeys.map((passkey) => <div className="admin-account-row" key={passkey.id}><span><strong>{passkey.name}</strong><small>{passkey.last_used_at ? new Date(passkey.last_used_at * 1000).toLocaleString() : new Date(passkey.created_at * 1000).toLocaleDateString()}</small></span><button onClick={() => removePasskey(passkey)}>{text.deletePasskey}</button></div>)}</div><form className="security-form" onSubmit={registerPasskey}><label>{text.passkeyName}<input required maxLength={80} value={passkeyName} onChange={(event) => setPasskeyName(event.target.value)} /></label><button className="primary-button" disabled={passkeyBusy} type="submit"><KeyRound size={16} /> {text.addPasskey}</button></form></section> : null}
+          <AdminSessionManagement onCurrentRevoked={() => { setIdentity(null); setToken(null); setDraft(null) }} />
           {identity?.role === 'super_admin' ? <AdminEmailSettings /> : null}
           {identity?.role === 'super_admin' ? <AdminAuthProviders /> : null}
           {identity?.role === 'super_admin' ? <AdminBillingManagement /> : null}
@@ -1140,6 +1142,25 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
 
 type SmtpView = { enabled: boolean; host: string; port: number; security: string; username: string | null; has_password: boolean; from_name: string; from_address: string; master_key_configured: boolean }
 type InvitationView = { id: number; email: string; display_name: string; status: string; expires_at: number }
+type AdminSessionView = { id: string; auth_method: string; created_at: number; expires_at: number; last_used_at: number; current: boolean }
+
+function AdminSessionManagement({ onCurrentRevoked }: { onCurrentRevoked: () => void }) {
+  const [sessions, setSessions] = React.useState<AdminSessionView[]>([])
+  const load = React.useCallback(async () => {
+    const response = await fetch('/admin/api/auth/sessions')
+    if (response.ok) {
+      const value = await response.json() as unknown
+      if (Array.isArray(value)) setSessions(value as AdminSessionView[])
+    }
+  }, [])
+  React.useEffect(() => { load().catch(() => undefined) }, [load])
+  const revoke = async (session: AdminSessionView) => {
+    const response = await fetch(`/admin/api/auth/sessions/${session.id}`, { method: 'DELETE' })
+    if (!response.ok) return
+    if (session.current) onCurrentRevoked(); else await load()
+  }
+  return <section className="administrator-management"><h4>Administrator sessions</h4><div className="admin-account-list">{sessions.map((session) => <div className="admin-account-row" key={session.id}><span><strong>{session.auth_method}{session.current ? ' · current' : ''}</strong><small>Last used {new Date(session.last_used_at * 1000).toLocaleString()} · expires {new Date(session.expires_at * 1000).toLocaleString()}</small></span><button className={session.current ? 'danger-button' : ''} onClick={() => revoke(session)}>Revoke</button></div>)}</div></section>
+}
 
 type AuthProviderView = {
   id: number; slug: string; display_name: string; kind: 'oauth2' | 'oidc'; preset: string; enabled: boolean; client_id: string; has_client_secret: boolean
@@ -1287,11 +1308,12 @@ function BillingGroupRow({ group, reload }: { group: BillingGroupView; reload: (
   return <div className="admin-account-row"><span><strong>{group.name}</strong><small>{group.member_count} members · {group.monthly_limit_bytes === null ? 'unlimited' : byteLabel(group.monthly_limit_bytes)}</small></span><span><input aria-label={`${group.name} name`} value={name} onChange={(event) => setName(event.target.value)} /><input aria-label={`${group.name} quota`} min="0" type="number" placeholder="Unlimited GB" value={quota} onChange={(event) => setQuota(event.target.value)} /><button onClick={save}>Save</button></span></div>
 }
 
-function BillingUserRow({ initialUser, groups }: { initialUser: AdminUserView; groups: BillingGroupView[] }) {
+function BillingUserRow({ initialUser, groups, reloadUsers }: { initialUser: AdminUserView; groups: BillingGroupView[]; reloadUsers: () => Promise<void> }) {
   const [user, setUser] = React.useState(initialUser)
   const [billing, setBilling] = React.useState<UserBillingView | null>(null)
   const [usage, setUsage] = React.useState<UserUsage | null>(null)
   const [customGb, setCustomGb] = React.useState('')
+  const [identities, setIdentities] = React.useState<LinkedIdentity[] | null>(null)
   const load = React.useCallback(async () => {
     const [billingResponse, usageResponse] = await Promise.all([fetch(`/admin/api/users/${user.id}/billing`), fetch(`/admin/api/users/${user.id}/usage`)])
     if (billingResponse.ok) {
@@ -1312,7 +1334,10 @@ function BillingUserRow({ initialUser, groups }: { initialUser: AdminUserView; g
     if (response.ok) setUser({ ...user, disabled: !user.disabled })
   }
   const rotate = async () => { await fetch(`/admin/api/users/${user.id}/routing-id/rotate`, { method: 'POST' }) }
-  return <div className="admin-account-row"><span><strong>{user.display_name}</strong><small>{user.email} · {user.disabled ? 'disabled' : user.routing_id}{usage ? ` · ${byteLabel(usage.response_bytes)} this month` : ''}</small></span>{billing ? <span><select aria-label={`${user.email} billing group`} value={billing.group_id ?? ''} onChange={(event) => setBilling({ ...billing, group_id: event.target.value ? Number(event.target.value) : null })}><option value="">No billing group</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><select aria-label={`${user.email} quota mode`} value={billing.quota_mode} onChange={(event) => setBilling({ ...billing, quota_mode: event.target.value as UserBillingView['quota_mode'] })}><option value="default">Default quota</option><option value="unlimited">Unlimited</option><option value="custom">Custom</option></select>{billing.quota_mode === 'custom' ? <input required aria-label={`${user.email} custom quota`} min="0" type="number" value={customGb} onChange={(event) => setCustomGb(event.target.value)} /> : null}<button disabled={billing.quota_mode === 'custom' && customGb === ''} onClick={save}>Save billing</button><button onClick={rotate}>Rotate address</button><button onClick={toggle}>{user.disabled ? 'Enable' : 'Disable'}</button></span> : null}</div>
+  const loadIdentities = async () => { const response = await fetch(`/admin/api/users/${user.id}/identities`); if (response.ok) setIdentities(await response.json() as LinkedIdentity[]) }
+  const unlink = async (identity: LinkedIdentity) => { const response = await fetch(`/admin/api/users/${user.id}/identities/${identity.id}`, { method: 'DELETE' }); if (response.ok) await loadIdentities() }
+  const remove = async () => { if (!confirm(`Soft-delete ${user.email}? Existing traffic and audit history will be retained.`)) return; const response = await fetch(`/admin/api/users/${user.id}`, { method: 'DELETE' }); if (response.ok) await reloadUsers() }
+  return <div className="admin-user-record"><div className="admin-account-row"><span><strong>{user.display_name}</strong><small>{user.email} · {user.disabled ? 'disabled' : user.routing_id}{usage ? ` · ${byteLabel(usage.response_bytes)} this month` : ''}</small></span>{billing ? <span><select aria-label={`${user.email} billing group`} value={billing.group_id ?? ''} onChange={(event) => setBilling({ ...billing, group_id: event.target.value ? Number(event.target.value) : null })}><option value="">No billing group</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><select aria-label={`${user.email} quota mode`} value={billing.quota_mode} onChange={(event) => setBilling({ ...billing, quota_mode: event.target.value as UserBillingView['quota_mode'] })}><option value="default">Default quota</option><option value="unlimited">Unlimited</option><option value="custom">Custom</option></select>{billing.quota_mode === 'custom' ? <input required aria-label={`${user.email} custom quota`} min="0" type="number" value={customGb} onChange={(event) => setCustomGb(event.target.value)} /> : null}<button disabled={billing.quota_mode === 'custom' && customGb === ''} onClick={save}>Save billing</button><button onClick={rotate}>Rotate address</button><button onClick={toggle}>{user.disabled ? 'Enable' : 'Disable'}</button><button onClick={loadIdentities}>Identities</button><button className="danger-button" onClick={remove}>Delete</button></span> : null}</div>{identities ? <div className="admin-identity-detail">{identities.length ? identities.map((identity) => <span key={identity.id}><strong>{identity.provider_name}</strong><small>{identity.email ?? identity.provider_subject}</small><button onClick={() => unlink(identity)}>Unlink</button></span>) : <small>No linked external identities.</small>}</div> : null}</div>
 }
 
 function AdminBillingManagement() {
@@ -1320,6 +1345,7 @@ function AdminBillingManagement() {
   const [users, setUsers] = React.useState<AdminUserView[]>([])
   const [name, setName] = React.useState('')
   const [quota, setQuota] = React.useState('')
+  const [search, setSearch] = React.useState('')
   const load = React.useCallback(async () => {
     const [groupResponse, userResponse] = await Promise.all([fetch('/admin/api/groups'), fetch('/admin/api/users')])
     if (groupResponse.ok) {
@@ -1337,7 +1363,8 @@ function AdminBillingManagement() {
     const response = await fetch('/admin/api/groups', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, monthly_gb: quota === '' ? null : Number(quota) }) })
     if (response.ok) { setName(''); setQuota(''); await load() }
   }
-  return <section className="administrator-management"><h4>Users, billing groups, and quotas</h4><form className="security-form" onSubmit={create}><label>Group name<input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label><label>Shared monthly quota (GB)<input min="0" type="number" placeholder="Unlimited" value={quota} onChange={(event) => setQuota(event.target.value)} /></label><button className="primary-button" type="submit">Create billing group</button></form><div className="admin-account-list">{groups.map((group) => <BillingGroupRow key={group.id} group={group} reload={load} />)}</div><h4>Users</h4><div className="admin-account-list">{users.map((user) => <BillingUserRow key={user.id} initialUser={user} groups={groups} />)}</div></section>
+  const visibleUsers = users.filter((user) => `${user.display_name} ${user.email} ${user.routing_id}`.toLowerCase().includes(search.trim().toLowerCase()))
+  return <section className="administrator-management"><h4>Users, billing groups, and quotas</h4><form className="security-form" onSubmit={create}><label>Group name<input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label><label>Shared monthly quota (GB)<input min="0" type="number" placeholder="Unlimited" value={quota} onChange={(event) => setQuota(event.target.value)} /></label><button className="primary-button" type="submit">Create billing group</button></form><div className="admin-account-list">{groups.map((group) => <BillingGroupRow key={group.id} group={group} reload={load} />)}</div><div className="console-section-head"><h4>Users</h4><label className="user-search">Search users<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Email, name, or routing ID" /></label></div><div className="admin-account-list">{visibleUsers.map((user) => <BillingUserRow key={user.id} initialUser={user} groups={groups} reloadUsers={load} />)}</div></section>
 }
 
 function ConsoleMetric({ label, value }: { label: string; value: string }) { return <div className="console-metric"><small>{label}</small><strong>{value}</strong></div> }

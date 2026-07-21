@@ -214,6 +214,35 @@ p {
   margin-bottom: 12px;
 }
 
+.admin-user-record {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-identity-detail {
+  display: grid;
+  gap: 6px;
+  margin: -2px 12px 6px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--panel-strong) 82%, var(--accent) 18%);
+}
+
+.admin-identity-detail span {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.6fr) minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.user-search {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+  font-size: 11px;
+}
+
 .admin-account-row {
   display: flex;
   align-items: center;

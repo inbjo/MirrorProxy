@@ -392,3 +392,33 @@ test('configures an OpenID Connect provider without exposing its saved secret', 
   await expect.poll(() => providerUpdate?.display_name).toBe('Company Google')
   await expect.poll(() => providerUpdate?.client_secret).toBeNull()
 })
+
+test('revokes administrator sessions and searches and soft-deletes users', async ({ page }) => {
+  let revokedSession = ''
+  let deletedUser = false
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
+  await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
+  await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
+  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/auth/sessions/*', async route => { revokedSession = route.request().url().split('/').pop() ?? ''; await route.fulfill({ status: 204 }) })
+  await page.route('**/admin/api/auth/sessions', route => route.fulfill({ json: [{ id: '0123456789abcdef01234567', auth_method: 'passkey', created_at: 1784591000, expires_at: 1784678400, last_used_at: 1784592000, current: false }] }))
+  await page.route('**/admin/api/groups', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/users/7/billing', route => route.fulfill({ json: { group_id: null, quota_mode: 'default', user_monthly_limit_bytes: null } }))
+  await page.route('**/admin/api/users/7/usage', route => route.fulfill({ json: { month: '2026-07', today_response_bytes: 0, request_count: 0, response_bytes: 0, error_count: 0, quota: { limit_bytes: null, used_bytes: 0, remaining_bytes: null }, group: null, daily: [], targets: [] } }))
+  await page.route('**/admin/api/users/7', async route => { deletedUser = true; await route.fulfill({ status: 204 }) })
+  await page.route('**/admin/api/users', route => route.fulfill({ json: deletedUser ? [] : [{ id: 7, email: 'search-me@example.com', display_name: 'Search Me', disabled: false, routing_id: 'route-id' }, { id: 8, email: 'other@example.com', display_name: 'Other', disabled: false, routing_id: 'other-route' }] }))
+
+  await page.goto('/admin')
+  await page.getByLabel('Administrator password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.locator('.admin-account-row', { hasText: 'passkey' }).getByRole('button', { name: 'Revoke' }).click()
+  await expect.poll(() => revokedSession).toBe('0123456789abcdef01234567')
+  await page.getByLabel('Search users').fill('search-me')
+  await expect(page.getByText('search-me@example.com')).toBeVisible()
+  await expect(page.getByText('other@example.com')).toHaveCount(0)
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Delete' }).click()
+  await expect.poll(() => deletedUser).toBe(true)
+})

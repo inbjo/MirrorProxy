@@ -205,6 +205,8 @@ pub struct UserAccessConfig {
     pub base_domain: String,
     #[serde(default = "default_user_access_mode")]
     pub mode: String,
+    #[serde(default)]
+    pub infrastructure_ready: bool,
     #[serde(default = "default_routing_id_min_length")]
     pub routing_id_min_length: u8,
     #[serde(default = "default_routing_rotation_cooldown_hours")]
@@ -415,6 +417,10 @@ impl Config {
         }
         if let Ok(value) = std::env::var("MIRRORPROXY_ACCESS_MODE") {
             self.user_access.mode = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY") {
+            self.user_access.infrastructure_ready =
+                parse_env_bool("MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY", &value)?;
         }
         if let Ok(value) = std::env::var("MIRRORPROXY_ROUTING_ID_MIN_LENGTH") {
             self.user_access.routing_id_min_length = value.parse().map_err(|_| {
@@ -900,6 +906,7 @@ impl Default for UserAccessConfig {
         Self {
             base_domain: String::new(),
             mode: default_user_access_mode(),
+            infrastructure_ready: false,
             routing_id_min_length: default_routing_id_min_length(),
             routing_rotation_cooldown_hours: default_routing_rotation_cooldown_hours(),
         }
@@ -960,6 +967,11 @@ impl UserAccessConfig {
     pub fn validate(&self, public_base_url: &str) -> anyhow::Result<()> {
         if self.mode != "public" && self.mode != "subdomain_required" {
             anyhow::bail!("user_access.mode must be public or subdomain_required");
+        }
+        if self.mode == "subdomain_required" && !self.infrastructure_ready {
+            anyhow::bail!(
+                "user_access.infrastructure_ready must be true before enabling subdomain_required"
+            );
         }
         if !(8..=32).contains(&self.routing_id_min_length) {
             anyhow::bail!("user_access.routing_id_min_length must be between 8 and 32");
@@ -1930,11 +1942,24 @@ password = "proxy-password"
             user_access: UserAccessConfig {
                 base_domain: "mirror.example.com".to_string(),
                 mode: "subdomain_required".to_string(),
+                infrastructure_ready: true,
                 ..UserAccessConfig::default()
             },
             ..Config::default()
         };
         assert!(valid.validate().is_ok());
+
+        let not_ready = Config {
+            public_base_url: "https://mirror.example.com".to_string(),
+            user_access: UserAccessConfig {
+                base_domain: "mirror.example.com".to_string(),
+                mode: "subdomain_required".to_string(),
+                infrastructure_ready: false,
+                ..UserAccessConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(not_ready.validate().is_err());
 
         for (base_domain, public_base_url, mode) in [
             ("", "", "subdomain_required"),

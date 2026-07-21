@@ -826,6 +826,7 @@ main domain, wildcard DNS, and wildcard TLS certificate before enabling it:
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
 MIRRORPROXY_BASE_DOMAIN=mirror.example.com
 MIRRORPROXY_ACCESS_MODE=public
+MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY=false
 MIRRORPROXY_ROUTING_ID_MIN_LENGTH=12
 MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
 ```
@@ -838,6 +839,12 @@ leak after the cooldown and an administrator may rotate it immediately. Old
 routing IDs and IDs belonging to disabled users fail uniformly. Control paths
 such as `/admin`, `/login`, and `/account` are unavailable on user subdomains.
 Only trusted reverse proxies may supply `X-Forwarded-Host`.
+
+Before switching to `subdomain_required`, verify wildcard DNS, wildcard TLS,
+original Host forwarding, and trusted proxy settings, then set
+`MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY=true`. Configuration validation
+rejects the required mode until this explicit deployment-readiness confirmation
+is present.
 
 Email invitations and passwordless sign-in require a persistent 32-byte master
 key encoded as unpadded base64url. Generate it once, store it with the deployment

@@ -680,6 +680,34 @@ feat: add user portal and hierarchical traffic quotas
 - 用户流量趋势和按镜像类型统计。
 - 完整文档、迁移、前端 E2E 和客户端 smoke。
 
+### 14.8 管理与部署收尾
+
+状态：已完成。管理员现在可以查看并逐个撤销自己的活动 Session；超级管理员可以搜索
+普通用户、查看和解绑其 OAuth/OIDC 身份，并以软删除方式立即撤销用户 Session、子域名、
+计费组关系和个人配额，同时保留用户记录、历史流量及审计信息。创建管理员、禁用管理员、
+重置管理员密码、删除用户和解绑外部身份均要求近期超级管理员认证。
+
+启用 `subdomain_required` 前增加了显式部署就绪确认：管理员必须确认通配符 DNS、通配符
+TLS、原始 Host 转发和可信代理配置均已完成；服务端配置校验会拒绝未确认就绪的强制
+子域名模式。该开关已同步到 TOML、环境变量、Compose、中英文 README 和管理后台。
+
+本轮收尾后全工作区 225 项 Rust 测试、Clippy、前端 10 项单元测试、生产构建、Compose
+配置检查和 14 项 Playwright 浏览器流程均已通过。
+
+建议 Commit：
+
+```text
+feat: complete identity administration and deployment safeguards
+```
+
+内容：
+
+- 管理员活动 Session 列表与单项撤销。
+- 用户搜索、软删除及外部身份管理。
+- 高风险后台操作的近期认证保护。
+- `subdomain_required` 部署就绪确认与配置校验。
+- 数据库、配置和浏览器回归用例。
+
 ## 15. 验收和测试计划
 
 ### 15.1 管理员认证

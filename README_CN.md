@@ -786,6 +786,7 @@ mirrorproxy-server --config config.toml admin reset-password admin
 MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
 MIRRORPROXY_BASE_DOMAIN=mirror.example.com
 MIRRORPROXY_ACCESS_MODE=public
+MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY=false
 MIRRORPROXY_ROUTING_ID_MIN_LENGTH=12
 MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
 ```
@@ -795,6 +796,11 @@ MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
 泄漏后可在冷却期结束后更换，管理员可立即代为更换。旧子域名、未知子域名和已禁用用户
 统一失败；用户子域名不能访问 `/admin`、`/login`、`/account` 等控制入口。只有可信
 反向代理提供的 `X-Forwarded-Host` 会参与归属判断。
+
+切换到 `subdomain_required` 前，需确认通配符 DNS、通配符 TLS 证书、
+原始 Host 转发与可信代理均已配置，然后设置
+`MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY=true`。如未显式确认部署就绪，
+配置校验会拒绝启用强制子域名模式。
 
 邮件邀请和无密码登录需要一个持久化的 32 字节主密钥，使用无填充 base64url 编码。
 只生成一次，作为部署密钥保存，并与 SQLite 一同备份：
