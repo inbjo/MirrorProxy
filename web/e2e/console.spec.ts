@@ -24,6 +24,7 @@ const adminConfig = {
   timeout: { request_secs: 30 },
   rate_limit: { enabled: true, requests_per_minute: 120 },
   cache: { enabled: false, directory: 'cache', max_entry_mb: 8, max_total_mb: 256 },
+  user_access: { base_domain: '', mode: 'public', routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
   webauthn: { enabled: false, rp_id: '', rp_origin: '', rp_name: 'MirrorProxy', require_passkey: false, break_glass_username: 'admin' },
 }
 

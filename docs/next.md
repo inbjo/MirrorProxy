@@ -577,6 +577,13 @@ feat: add passkey authentication for administrators
 
 ### 14.4 用户身份和子域名
 
+状态：已完成。已增加普通用户、外部身份、独立 Session、用户组和唯一计费组约束模型；
+用户路由使用密码学随机正整数和 `sqids` 小写 DNS 字符表生成，默认最短 12 位。
+已实现管理员用户管理、用户自助/管理员子域名轮换、冷却期、禁用与 Session 撤销、
+统一失效响应、可信代理 Host 识别、控制入口隔离及 `public`/`subdomain_required`。
+代理元数据会保留当前有效用户子域名。全工作区 203 项测试、Clippy、前端单元测试、
+生产构建、Compose 校验和 8 项 Playwright 浏览器测试均已通过。
+
 建议 Commit：
 
 ```text

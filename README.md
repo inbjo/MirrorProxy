@@ -817,6 +817,28 @@ The new cookie APIs live under `/admin/api/*`. The former `/api/admin/*` Bearer
 APIs remain available for migration compatibility but are no longer used by the
 web portal.
 
+Optional accounting-only user subdomains assign every user a random numeric
+value encoded with Sqids (lowercase DNS alphabet, 12 characters minimum by
+default). The numeric value is random rather than a database ID. Configure the
+main domain, wildcard DNS, and wildcard TLS certificate before enabling it:
+
+```dotenv
+MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
+MIRRORPROXY_BASE_DOMAIN=mirror.example.com
+MIRRORPROXY_ACCESS_MODE=public
+MIRRORPROXY_ROUTING_ID_MIN_LENGTH=12
+MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
+```
+
+`public` keeps package proxy paths available on the main domain while also
+recognizing assigned user subdomains. `subdomain_required` rejects package
+proxy traffic on the main domain. User subdomains use `accounting_only`: anyone
+who knows the address can consume its traffic, so a user may rotate a suspected
+leak after the cooldown and an administrator may rotate it immediately. Old
+routing IDs and IDs belonging to disabled users fail uniformly. Control paths
+such as `/admin`, `/login`, and `/account` are unavailable on user subdomains.
+Only trusted reverse proxies may supply `X-Forwarded-Host`.
+
 Administrator Passkeys are optional and use `webauthn-rs`. Configure the exact
 HTTPS admin origin and a stable RP ID before registering credentials:
 

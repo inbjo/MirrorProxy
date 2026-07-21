@@ -778,6 +778,24 @@ mirrorproxy-server --config config.toml admin reset-password admin
 新的 Cookie API 位于 `/admin/api/*`。旧 `/api/admin/*` Bearer API 暂时保留用于迁移
 兼容，但 Web 管理后台已不再使用。
 
+可选的 `accounting_only` 用户子域名功能会为每个用户生成随机正整数，再使用 Sqids 和
+仅含小写字母、数字的 DNS 字符表编码；默认最短 12 位，不直接编码数据库自增 ID。启用
+前需要配置主域名、通配符 DNS 和通配符 TLS 证书：
+
+```dotenv
+MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
+MIRRORPROXY_BASE_DOMAIN=mirror.example.com
+MIRRORPROXY_ACCESS_MODE=public
+MIRRORPROXY_ROUTING_ID_MIN_LENGTH=12
+MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
+```
+
+`public` 模式保留主域名包代理，同时识别用户子域名；`subdomain_required` 会拒绝主域名
+上的包代理请求。子域名不校验 Token，知道地址的人都能消耗对应用户流量，因此用户发现
+泄漏后可在冷却期结束后更换，管理员可立即代为更换。旧子域名、未知子域名和已禁用用户
+统一失败；用户子域名不能访问 `/admin`、`/login`、`/account` 等控制入口。只有可信
+反向代理提供的 `X-Forwarded-Host` 会参与归属判断。
+
 管理员 Passkey 为可选功能，协议由 `webauthn-rs` 实现。登记凭据前需要配置固定 RP ID
 和管理后台实际使用的完整 HTTPS Origin：
 

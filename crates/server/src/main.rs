@@ -54,6 +54,14 @@ use webauthn_rs::prelude::{
 const QUOTA_RESERVATION_BYTES: u64 = 8 * 1024 * 1024;
 const ADMIN_SESSION_COOKIE: &str = "mirrorproxy_admin_session";
 const SESSION_COOKIE_MAX_AGE_SECS: i64 = 24 * 60 * 60;
+const USER_SESSION_COOKIE: &str = "mirrorproxy_user_session";
+const USER_SESSION_COOKIE_MAX_AGE_SECS: i64 = 30 * 24 * 60 * 60;
+
+#[derive(Clone, Debug)]
+pub struct UserRoutingContext {
+    pub user_id: i64,
+    pub routing_id: String,
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "MirrorProxy server")]
@@ -129,7 +137,17 @@ impl AppState {
     /// Uses the configured external URL when present. Otherwise, URLs embedded
     /// in proxy metadata point back to the address used by the current client.
     pub fn public_base_url(&self, headers: &HeaderMap) -> String {
-        let configured = self.config().public_base_url;
+        let config = self.config();
+        if !config.user_access.base_domain.is_empty() {
+            if let Some(host) = request_host(headers) {
+                if host != config.user_access.base_domain
+                    && host.ends_with(&format!(".{}", config.user_access.base_domain))
+                {
+                    return format!("https://{host}");
+                }
+            }
+        }
+        let configured = config.public_base_url;
         if configured.is_empty() {
             request_public_base_url(headers).unwrap_or_default()
         } else {
@@ -964,6 +982,19 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             "/admin/api/admins/{username}/password",
             post(reset_admin_password),
         )
+        .route("/admin/api/users", get(list_users).post(create_user))
+        .route("/admin/api/users/{id}/status", post(update_user_status))
+        .route(
+            "/admin/api/users/{id}/routing-id/rotate",
+            post(admin_rotate_user_routing_id),
+        )
+        .route("/api/auth/session", get(user_session))
+        .route("/api/auth/logout", post(user_logout))
+        .route("/api/account/profile", get(user_profile))
+        .route(
+            "/api/account/routing-id/rotate",
+            post(user_rotate_routing_id),
+        )
         .route("/api/sources", get(source_catalog))
         .route("/composer", get(composer::root))
         .route("/composer/", get(composer::root))
@@ -1107,6 +1138,10 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
+            user_routing_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
             strip_untrusted_forwarded_headers,
         ))
         .layer(CorsLayer::permissive())
@@ -1172,6 +1207,103 @@ async fn strip_untrusted_forwarded_headers(
         request.headers_mut().remove("x-forwarded-proto");
     }
     next.run(request).await
+}
+
+async fn user_routing_middleware(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let config = state.config();
+    let base_domain = config.user_access.base_domain.as_str();
+    if base_domain.is_empty() {
+        return next.run(request).await;
+    }
+    let Some(host) = request_host(request.headers()) else {
+        return bad_request_response("a valid Host header is required".to_string());
+    };
+    let path = request.uri().path();
+    if host == base_domain {
+        if config.user_access.mode == "subdomain_required" && is_proxy_path(path) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "package proxy requests require an assigned user subdomain"
+                })),
+            )
+                .into_response();
+        }
+        return next.run(request).await;
+    }
+    let Some(label) = host.strip_suffix(&format!(".{base_domain}")) else {
+        return (
+            StatusCode::MISDIRECTED_REQUEST,
+            Json(serde_json::json!({ "error": "unrecognized host" })),
+        )
+            .into_response();
+    };
+    if label.is_empty()
+        || label.contains('.')
+        || is_reserved_user_subdomain(label)
+        || is_user_control_path(path)
+    {
+        return unknown_user_subdomain_response();
+    }
+    match state.database.user_by_routing_id(label).await {
+        Ok(Some(identity)) => {
+            request.extensions_mut().insert(UserRoutingContext {
+                user_id: identity.user_id,
+                routing_id: identity.routing_id,
+            });
+            next.run(request).await
+        }
+        Ok(None) => unknown_user_subdomain_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to resolve user routing subdomain");
+            internal_error_response()
+        }
+    }
+}
+
+fn request_host(headers: &HeaderMap) -> Option<String> {
+    let host = forwarded_header_value(headers, "x-forwarded-host")
+        .or_else(|| header_value(headers, header::HOST))?;
+    let url = Url::parse(&format!("http://{host}")).ok()?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    Some(url.host_str()?.trim_end_matches('.').to_ascii_lowercase())
+}
+
+fn is_reserved_user_subdomain(value: &str) -> bool {
+    matches!(
+        value,
+        "www" | "admin" | "api" | "login" | "account" | "mail" | "smtp" | "status"
+    )
+}
+
+fn is_user_control_path(path: &str) -> bool {
+    path == "/login"
+        || path.starts_with("/login/")
+        || path == "/account"
+        || path.starts_with("/account/")
+        || path == "/admin"
+        || path.starts_with("/admin/")
+        || path.starts_with("/api/auth/")
+        || path.starts_with("/api/account/")
+}
+
+fn unknown_user_subdomain_response() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "user subdomain is unavailable" })),
+    )
+        .into_response()
 }
 
 fn initial_admin_password_log(username: &str, password: &str) -> String {
@@ -1773,6 +1905,13 @@ struct PublicConfig {
     public_base_url: String,
     enabled_proxies: Vec<String>,
     quota: PublicQuotaConfig,
+    user_access: PublicUserAccessConfig,
+}
+
+#[derive(Serialize)]
+struct PublicUserAccessConfig {
+    enabled: bool,
+    mode: String,
 }
 
 #[derive(Serialize)]
@@ -1793,6 +1932,10 @@ async fn public_config(State(state): State<AppState>, headers: HeaderMap) -> imp
             monthly_gb: config.quota.monthly_gb,
             timezone: config.quota.timezone.clone(),
             on_exceeded: config.quota.on_exceeded.clone(),
+        },
+        user_access: PublicUserAccessConfig {
+            enabled: !config.user_access.base_domain.is_empty(),
+            mode: config.user_access.mode,
         },
     })
 }
@@ -2559,6 +2702,36 @@ async fn update_admin_config(
         )
             .into_response();
     }
+    if next_config.user_access != current.user_access {
+        if identity.role != "super_admin" {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "super administrator access required to change user access routing"
+                })),
+            )
+                .into_response();
+        }
+        let Some(token) = admin_token(&headers) else {
+            return unauthorized_response();
+        };
+        match state.database.is_recent_admin_session(token).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "recent administrator verification required"
+                    })),
+                )
+                    .into_response()
+            }
+            Err(error) => {
+                tracing::error!(%error, "administrator recent verification query failed");
+                return internal_error_response();
+            }
+        }
+    }
     let next_webauthn = if next_config.webauthn != current.webauthn {
         if identity.role != "super_admin" {
             return (
@@ -2785,6 +2958,232 @@ async fn reset_admin_password(
     }
 }
 
+#[derive(Deserialize)]
+struct CreateUserRequest {
+    email: String,
+    display_name: String,
+}
+
+async fn list_users(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    if let Err(response) = require_super_admin(&headers, &state).await {
+        return response;
+    }
+    match state.database.list_users().await {
+        Ok(users) => Json(users).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to list users");
+            internal_error_response()
+        }
+    }
+}
+
+async fn create_user(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<CreateUserRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    let email = request.email.trim();
+    let display_name = request.display_name.trim();
+    if !valid_user_email(email) {
+        return bad_request_response("a valid email address is required".to_string());
+    }
+    if display_name.is_empty() || display_name.chars().count() > 100 {
+        return bad_request_response("display_name must contain 1 to 100 characters".to_string());
+    }
+    let config = state.config();
+    match state
+        .database
+        .create_user(
+            &identity.username,
+            email,
+            display_name,
+            config.user_access.routing_id_min_length,
+        )
+        .await
+    {
+        Ok(Some(user)) => (StatusCode::CREATED, Json(user)).into_response(),
+        Ok(None) => conflict_response("user email already exists"),
+        Err(error) => {
+            tracing::error!(%error, "failed to create user");
+            internal_error_response()
+        }
+    }
+}
+
+async fn update_user_status(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+    Json(request): Json<AdminStatusRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    match state
+        .database
+        .set_user_disabled(&identity.username, id, request.disabled)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "user not found" })),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to update user status");
+            internal_error_response()
+        }
+    }
+}
+
+async fn admin_rotate_user_routing_id(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    let config = state.config();
+    routing_rotation_response(
+        state
+            .database
+            .rotate_user_routing_id(
+                &identity.username,
+                id,
+                config.user_access.routing_id_min_length,
+                config.user_access.routing_rotation_cooldown_hours,
+                true,
+            )
+            .await,
+    )
+}
+
+async fn user_session(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match authenticated_user(&headers, &state).await {
+        Ok(Some(identity)) => Json(identity).into_response(),
+        Ok(None) => unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "user session lookup failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn user_logout(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    if let Some(token) = user_token(&headers) {
+        if let Err(error) = state.database.logout_user(token).await {
+            tracing::error!(%error, "failed to revoke user session");
+            return internal_error_response();
+        }
+    }
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, clear_user_session_cookie());
+    response
+}
+
+async fn user_profile(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let identity = match authenticated_user(&headers, &state).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "user profile authorization failed");
+            return internal_error_response();
+        }
+    };
+    match state.database.user_account(identity.user_id).await {
+        Ok(Some(account)) => {
+            let config = state.config();
+            let proxy_base_url = (!config.user_access.base_domain.is_empty()).then(|| {
+                format!(
+                    "https://{}.{}",
+                    account.routing_id, config.user_access.base_domain
+                )
+            });
+            Json(serde_json::json!({ "user": account, "proxy_base_url": proxy_base_url }))
+                .into_response()
+        }
+        Ok(None) => unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to load user profile");
+            internal_error_response()
+        }
+    }
+}
+
+async fn user_rotate_routing_id(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let identity = match authenticated_user(&headers, &state).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "user routing rotation authorization failed");
+            return internal_error_response();
+        }
+    };
+    let config = state.config();
+    routing_rotation_response(
+        state
+            .database
+            .rotate_user_routing_id(
+                &format!("user:{}", identity.user_id),
+                identity.user_id,
+                config.user_access.routing_id_min_length,
+                config.user_access.routing_rotation_cooldown_hours,
+                false,
+            )
+            .await,
+    )
+}
+
+fn routing_rotation_response(
+    outcome: anyhow::Result<database::RoutingRotationOutcome>,
+) -> Response {
+    match outcome {
+        Ok(database::RoutingRotationOutcome::Rotated { routing_id }) => {
+            Json(serde_json::json!({ "routing_id": routing_id })).into_response()
+        }
+        Ok(database::RoutingRotationOutcome::Cooldown { retry_after_secs }) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(
+                header::RETRY_AFTER,
+                HeaderValue::from_str(&retry_after_secs.to_string())
+                    .expect("retry-after value is valid"),
+            )],
+            Json(serde_json::json!({ "error": "routing ID rotation is cooling down" })),
+        )
+            .into_response(),
+        Ok(database::RoutingRotationOutcome::NotFound) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "user not found" })),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to rotate user routing ID");
+            internal_error_response()
+        }
+    }
+}
+
+fn valid_user_email(value: &str) -> bool {
+    value.len() <= 320
+        && !value.chars().any(char::is_whitespace)
+        && value.split_once('@').is_some_and(|(local, domain)| {
+            !local.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+        })
+}
+
 async fn require_super_admin(
     headers: &HeaderMap,
     state: &AppState,
@@ -2833,6 +3232,20 @@ fn admin_token(headers: &HeaderMap) -> Option<&str> {
     cookie_value(headers, ADMIN_SESSION_COOKIE).or_else(|| bearer_token(headers))
 }
 
+async fn authenticated_user(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> anyhow::Result<Option<database::UserIdentity>> {
+    let Some(token) = user_token(headers) else {
+        return Ok(None);
+    };
+    state.database.authenticate_user_session(token).await
+}
+
+fn user_token(headers: &HeaderMap) -> Option<&str> {
+    cookie_value(headers, USER_SESSION_COOKIE)
+}
+
 fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers
         .get(header::COOKIE)?
@@ -2855,6 +3268,19 @@ fn admin_session_cookie(token: &str, max_age_secs: i64) -> HeaderValue {
 fn clear_admin_session_cookie() -> HeaderValue {
     HeaderValue::from_static(
         "mirrorproxy_admin_session=; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=0",
+    )
+}
+
+pub fn user_session_cookie(token: &str) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{USER_SESSION_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={USER_SESSION_COOKIE_MAX_AGE_SECS}"
+    ))
+    .expect("generated user session cookie is valid")
+}
+
+fn clear_user_session_cookie() -> HeaderValue {
+    HeaderValue::from_static(
+        "mirrorproxy_user_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
     )
 }
 
@@ -3087,6 +3513,7 @@ impl IntoResponse for ProxyError {
 mod tests {
     use axum::{
         body::{to_bytes, Body},
+        extract::Extension,
         http::{HeaderMap, HeaderValue, Request, StatusCode},
     };
     use tokio::{
@@ -3110,6 +3537,34 @@ mod tests {
             observability: Arc::new(Observability::new().unwrap()),
         };
         (state, credentials.unwrap())
+    }
+
+    async fn routing_test_state(mode: &str) -> (AppState, database::UserAccount) {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let user = database
+            .create_user("admin", "person@example.com", "Person", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        let config = Config {
+            public_base_url: "https://mirror.example.com".to_string(),
+            user_access: crate::config::UserAccessConfig {
+                base_domain: "mirror.example.com".to_string(),
+                mode: mode.to_string(),
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        let state = AppState {
+            config: Arc::new(RwLock::new(config)),
+            database: Arc::new(database),
+            client: Client::new(),
+            rate_limiter: Arc::new(RateLimiter::new()),
+            admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+            webauthn: Arc::new(RwLock::new(None)),
+            observability: Arc::new(Observability::new().unwrap()),
+        };
+        (state, user)
     }
 
     async fn read_http_headers(stream: &mut TcpStream) -> String {
@@ -4140,6 +4595,18 @@ on_exceeded = "stop_proxy"
         assert_eq!(value["role"], "super_admin");
     }
 
+    #[test]
+    fn user_cookie_is_host_only_lax_and_never_scoped_to_wildcard_subdomains() {
+        let cookie = user_session_cookie("test-token");
+        let cookie = cookie.to_str().unwrap();
+        assert!(cookie.starts_with("mirrorproxy_user_session=test-token"));
+        assert!(cookie.contains("Path=/"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Secure"));
+        assert!(cookie.contains("SameSite=Lax"));
+        assert!(!cookie.contains("Domain="));
+    }
+
     #[tokio::test]
     async fn administrator_login_is_limited_by_username_and_source() {
         let (state, _) = admin_test_state().await;
@@ -4255,6 +4722,43 @@ on_exceeded = "stop_proxy"
         .await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(state.database.list_admins().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn super_admin_can_create_and_manage_a_routed_user() {
+        let (state, credentials) = admin_test_state().await;
+        let session = state
+            .database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("{ADMIN_SESSION_COOKIE}={}", session.token)
+                .parse()
+                .unwrap(),
+        );
+        let response = create_user(
+            headers.clone(),
+            State(state.clone()),
+            Json(CreateUserRequest {
+                email: "person@example.com".to_string(),
+                display_name: "Person".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let user: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(user["routing_id"].as_str().unwrap().len() >= 12);
+
+        let response = list_users(headers, State(state)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let users: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(users.as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -4696,6 +5200,150 @@ on_exceeded = "stop_proxy"
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["public_base_url"], "http://mirror.example");
+    }
+
+    #[tokio::test]
+    async fn sqids_subdomain_resolves_user_and_main_domain_obeys_required_mode() {
+        let (state, user) = routing_test_state("subdomain_required").await;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            format!("{}.mirror.example.com", user.routing_id)
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            state.public_base_url(&headers),
+            format!("https://{}.mirror.example.com", user.routing_id)
+        );
+        let app = Router::new()
+            .route(
+                "/npm/pkg",
+                get(
+                    |Extension(context): Extension<UserRoutingContext>| async move {
+                        format!("{}:{}", context.user_id, context.routing_id)
+                    },
+                ),
+            )
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                user_routing_middleware,
+            ))
+            .with_state(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/npm/pkg")
+                    .header("host", format!("{}.mirror.example.com", user.routing_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            String::from_utf8(body.to_vec()).unwrap(),
+            format!("{}:{}", user.id, user.routing_id)
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/npm/pkg")
+                    .header("host", "mirror.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn user_subdomains_reject_control_paths_unknown_ids_and_spoofed_hosts() {
+        let (state, user) = routing_test_state("subdomain_required").await;
+        let app = Router::new()
+            .fallback(|| async { StatusCode::OK })
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                user_routing_middleware,
+            ))
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                strip_untrusted_forwarded_headers,
+            ))
+            .with_state(state);
+
+        for (host, path) in [
+            (format!("{}.mirror.example.com", user.routing_id), "/admin"),
+            ("unknown12345.mirror.example.com".to_string(), "/npm/pkg"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("host", host)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+
+        let mut request = Request::builder()
+            .uri("/npm/pkg")
+            .header("host", "mirror.example.com")
+            .header(
+                "x-forwarded-host",
+                format!("{}.mirror.example.com", user.routing_id),
+            )
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "198.51.100.20:42000".parse::<SocketAddr>().unwrap(),
+        ));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn public_access_mode_keeps_main_proxy_paths_and_rejects_foreign_hosts() {
+        let (state, _) = routing_test_state("public").await;
+        let app = Router::new()
+            .fallback(|| async { StatusCode::OK })
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                user_routing_middleware,
+            ))
+            .with_state(state);
+        let main = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/npm/pkg")
+                    .header("host", "mirror.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(main.status(), StatusCode::OK);
+        let foreign = app
+            .oneshot(
+                Request::builder()
+                    .uri("/npm/pkg")
+                    .header("host", "other.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::MISDIRECTED_REQUEST);
     }
 
     #[tokio::test]

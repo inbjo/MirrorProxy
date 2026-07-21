@@ -8,12 +8,13 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distributions::Alphanumeric, rngs::OsRng as RandomOsRng, Rng, RngCore};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use sqids::Sqids;
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    Row, SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow},
+    Row, Sqlite, SqlitePool, Transaction,
 };
 use uuid::Uuid;
 use webauthn_rs::prelude::{AuthenticationResult, Passkey};
@@ -25,6 +26,7 @@ const ADMIN_LOGIN_FAILURE_LIMIT: i64 = 5;
 const ADMIN_LOGIN_LOCK_SECS: i64 = 15 * 60;
 const WEBAUTHN_CHALLENGE_LIFETIME_SECS: i64 = 5 * 60;
 const RECENT_ADMIN_VERIFICATION_SECS: i64 = 10 * 60;
+const ROUTING_ID_INSERT_ATTEMPTS: usize = 16;
 
 #[derive(Clone)]
 pub struct Database {
@@ -78,6 +80,38 @@ pub struct AdminPasskeySummary {
 pub struct StoredAdminPasskey {
     pub id: i64,
     pub passkey: Passkey,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct UserAccount {
+    pub id: i64,
+    pub email: String,
+    pub display_name: String,
+    pub disabled: bool,
+    pub routing_id: String,
+    pub routing_rotated_at: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct UserIdentity {
+    pub user_id: i64,
+    pub email: String,
+    pub display_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserRoutingIdentity {
+    pub user_id: i64,
+    pub routing_id: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RoutingRotationOutcome {
+    Rotated { routing_id: String },
+    Cooldown { retry_after_secs: u64 },
+    NotFound,
 }
 
 pub struct ProxyTrafficRecord<'a> {
@@ -899,6 +933,220 @@ impl Database {
         }))
     }
 
+    pub async fn create_user(
+        &self,
+        actor: &str,
+        email: &str,
+        display_name: &str,
+        routing_min_length: u8,
+    ) -> anyhow::Result<Option<UserAccount>> {
+        let email = normalize_email(email);
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let insert = sqlx::query(
+            "INSERT OR IGNORE INTO users (email, display_name, disabled, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+        )
+        .bind(&email)
+        .bind(display_name)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await?;
+        if insert.rows_affected() == 0 {
+            return Ok(None);
+        }
+        let user_id = insert.last_insert_rowid();
+        let routing_id =
+            insert_unique_routing_id(&mut transaction, user_id, routing_min_length, now).await?;
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'user_created', ?)",
+        )
+        .bind(now)
+        .bind(actor)
+        .bind(format!("user_id={user_id}"))
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(Some(UserAccount {
+            id: user_id,
+            email,
+            display_name: display_name.to_string(),
+            disabled: false,
+            routing_id,
+            routing_rotated_at: now,
+            created_at: now,
+            updated_at: now,
+        }))
+    }
+
+    pub async fn list_users(&self) -> anyhow::Result<Vec<UserAccount>> {
+        sqlx::query(
+            "SELECT u.id, u.email, u.display_name, u.disabled, u.created_at, u.updated_at, r.routing_id, r.created_at AS routing_rotated_at FROM users u JOIN user_routing_ids r ON r.user_id = u.id AND r.active = 1 WHERE u.deleted_at IS NULL ORDER BY u.id",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(user_account_from_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    }
+
+    pub async fn set_user_disabled(
+        &self,
+        actor: &str,
+        user_id: i64,
+        disabled: bool,
+    ) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query(
+            "UPDATE users SET disabled = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(disabled)
+        .bind(now)
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Ok(false);
+        }
+        if disabled {
+            sqlx::query("DELETE FROM user_sessions WHERE user_id = ?")
+                .bind(user_id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'user_status_changed', ?)",
+        )
+        .bind(now)
+        .bind(actor)
+        .bind(format!("user_id={user_id}; disabled={disabled}"))
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn rotate_user_routing_id(
+        &self,
+        actor: &str,
+        user_id: i64,
+        routing_min_length: u8,
+        cooldown_hours: u32,
+        bypass_cooldown: bool,
+    ) -> anyhow::Result<RoutingRotationOutcome> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT r.created_at FROM users u JOIN user_routing_ids r ON r.user_id = u.id AND r.active = 1 WHERE u.id = ? AND u.deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(row) = row else {
+            return Ok(RoutingRotationOutcome::NotFound);
+        };
+        let rotated_at: i64 = row.try_get("created_at")?;
+        let cooldown_secs = i64::from(cooldown_hours) * 60 * 60;
+        if !bypass_cooldown && now < rotated_at.saturating_add(cooldown_secs) {
+            return Ok(RoutingRotationOutcome::Cooldown {
+                retry_after_secs: rotated_at.saturating_add(cooldown_secs).saturating_sub(now)
+                    as u64,
+            });
+        }
+        sqlx::query(
+            "UPDATE user_routing_ids SET active = 0, revoked_at = ? WHERE user_id = ? AND active = 1",
+        )
+        .bind(now)
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?;
+        let routing_id =
+            insert_unique_routing_id(&mut transaction, user_id, routing_min_length, now).await?;
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'user_routing_id_rotated', ?)",
+        )
+        .bind(now)
+        .bind(actor)
+        .bind(format!("user_id={user_id}"))
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(RoutingRotationOutcome::Rotated { routing_id })
+    }
+
+    pub async fn user_by_routing_id(
+        &self,
+        routing_id: &str,
+    ) -> anyhow::Result<Option<UserRoutingIdentity>> {
+        sqlx::query(
+            "SELECT u.id AS user_id, r.routing_id FROM user_routing_ids r JOIN users u ON u.id = r.user_id WHERE r.routing_id = ? COLLATE NOCASE AND r.active = 1 AND u.disabled = 0 AND u.deleted_at IS NULL",
+        )
+        .bind(routing_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| {
+            Ok::<_, sqlx::Error>(UserRoutingIdentity {
+                user_id: row.try_get("user_id")?,
+                routing_id: row.try_get("routing_id")?,
+            })
+        })
+        .transpose()
+        .map_err(Into::into)
+    }
+
+    pub async fn authenticate_user_session(
+        &self,
+        token: &str,
+    ) -> anyhow::Result<Option<UserIdentity>> {
+        let now = unix_timestamp();
+        let token_hash = hash_token(token);
+        let row = sqlx::query(
+            "SELECT u.id AS user_id, u.email, u.display_name FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0 AND u.deleted_at IS NULL",
+        )
+        .bind(&token_hash)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+        if row.is_some() {
+            sqlx::query("UPDATE user_sessions SET last_used_at = ? WHERE token_hash = ?")
+                .bind(now)
+                .bind(token_hash)
+                .execute(&self.pool)
+                .await?;
+        }
+        row.map(|row| {
+            Ok::<_, sqlx::Error>(UserIdentity {
+                user_id: row.try_get("user_id")?,
+                email: row.try_get("email")?,
+                display_name: row.try_get("display_name")?,
+            })
+        })
+        .transpose()
+        .map_err(Into::into)
+    }
+
+    pub async fn logout_user(&self, token: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM user_sessions WHERE token_hash = ?")
+            .bind(hash_token(token))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn user_account(&self, user_id: i64) -> anyhow::Result<Option<UserAccount>> {
+        sqlx::query(
+            "SELECT u.id, u.email, u.display_name, u.disabled, u.created_at, u.updated_at, r.routing_id, r.created_at AS routing_rotated_at FROM users u JOIN user_routing_ids r ON r.user_id = u.id AND r.active = 1 WHERE u.id = ? AND u.deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(user_account_from_row)
+        .transpose()
+        .map_err(Into::into)
+    }
+
     async fn write_security_audit(
         &self,
         username: &str,
@@ -1183,6 +1431,62 @@ fn random_secret(length: usize) -> String {
         .collect()
 }
 
+fn normalize_email(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
+}
+
+fn user_account_from_row(row: SqliteRow) -> Result<UserAccount, sqlx::Error> {
+    Ok(UserAccount {
+        id: row.try_get("id")?,
+        email: row.try_get("email")?,
+        display_name: row.try_get("display_name")?,
+        disabled: row.try_get("disabled")?,
+        routing_id: row.try_get("routing_id")?,
+        routing_rotated_at: row.try_get("routing_rotated_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+async fn insert_unique_routing_id(
+    transaction: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    minimum_length: u8,
+    now: i64,
+) -> anyhow::Result<String> {
+    let sqids = Sqids::builder()
+        .alphabet("abcdefghijklmnopqrstuvwxyz0123456789".chars().collect())
+        .min_length(minimum_length)
+        .build()?;
+    for _ in 0..ROUTING_ID_INSERT_ATTEMPTS {
+        let public_number = (RandomOsRng.next_u64() & i64::MAX as u64).max(1);
+        let routing_id = sqids.encode(&[public_number])?;
+        if is_reserved_routing_id(&routing_id) {
+            continue;
+        }
+        let insert = sqlx::query(
+            "INSERT OR IGNORE INTO user_routing_ids (user_id, public_number, routing_id, active, created_at) VALUES (?, ?, ?, 1, ?)",
+        )
+        .bind(user_id)
+        .bind(public_number as i64)
+        .bind(&routing_id)
+        .bind(now)
+        .execute(&mut **transaction)
+        .await?;
+        if insert.rows_affected() == 1 {
+            return Ok(routing_id);
+        }
+    }
+    anyhow::bail!("failed to allocate a unique user routing ID")
+}
+
+fn is_reserved_routing_id(value: &str) -> bool {
+    matches!(
+        value,
+        "www" | "admin" | "api" | "login" | "account" | "mail" | "smtp" | "status"
+    )
+}
+
 fn initial_admin_password(configured_password: Option<String>) -> (String, bool) {
     match configured_password.filter(|password| !password.is_empty()) {
         Some(password) => (password, false),
@@ -1204,6 +1508,12 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS admin_sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, auth_method TEXT NOT NULL DEFAULT 'password', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, verified_at INTEGER NOT NULL DEFAULT 0, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS admin_passkeys (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, name TEXT NOT NULL, credential_id TEXT NOT NULL UNIQUE, passkey_json TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS admin_webauthn_challenges (challenge_hash TEXT PRIMARY KEY, username TEXT NOT NULL, kind TEXT NOT NULL, state_json TEXT NOT NULL, session_token_hash TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, disabled INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS user_identities (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, provider_id TEXT NOT NULL, provider_subject TEXT NOT NULL, email TEXT, email_verified INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(provider_id, provider_subject), FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS user_sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, auth_method TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'billing', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS group_members (group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, is_billing INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, PRIMARY KEY(group_id, user_id), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS user_routing_ids (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, public_number INTEGER NOT NULL UNIQUE, routing_id TEXT NOT NULL UNIQUE COLLATE NOCASE, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, revoked_at INTEGER, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS proxy_targets (code TEXT PRIMARY KEY, enabled INTEGER NOT NULL, upstream_url TEXT NOT NULL, route_prefix TEXT NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS traffic_daily (day TEXT NOT NULL, target_code TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, target_code))",
     "CREATE TABLE IF NOT EXISTS traffic_monthly (month TEXT PRIMARY KEY, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, quota_exceeded INTEGER NOT NULL DEFAULT 0)",
@@ -1212,6 +1522,9 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS admin_sessions_expires_at_idx ON admin_sessions(expires_at)",
     "CREATE INDEX IF NOT EXISTS admin_passkeys_username_idx ON admin_passkeys(username)",
     "CREATE INDEX IF NOT EXISTS admin_webauthn_challenges_expires_at_idx ON admin_webauthn_challenges(expires_at)",
+    "CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx ON user_sessions(expires_at)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS user_routing_ids_active_user_idx ON user_routing_ids(user_id) WHERE active = 1",
+    "CREATE UNIQUE INDEX IF NOT EXISTS group_members_billing_user_idx ON group_members(user_id) WHERE is_billing = 1",
     "CREATE INDEX IF NOT EXISTS request_events_created_at_idx ON request_events(created_at)",
 ];
 
@@ -1341,6 +1654,77 @@ mod tests {
         assert!(admins
             .iter()
             .any(|account| account.username == "operator" && account.role == "admin"));
+    }
+
+    #[tokio::test]
+    async fn creates_rotates_and_disables_sqids_user_routes() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let user = database
+            .create_user("admin", " Person@Example.COM ", "Person", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(user.email, "person@example.com");
+        assert!(user.routing_id.len() >= 12);
+        assert!(user
+            .routing_id
+            .chars()
+            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit()));
+        assert_eq!(
+            database
+                .user_by_routing_id(&user.routing_id.to_ascii_uppercase())
+                .await
+                .unwrap()
+                .unwrap()
+                .user_id,
+            user.id
+        );
+        assert!(matches!(
+            database
+                .rotate_user_routing_id("user:1", user.id, 12, 24, false)
+                .await
+                .unwrap(),
+            RoutingRotationOutcome::Cooldown { .. }
+        ));
+        let next = database
+            .rotate_user_routing_id("admin", user.id, 12, 24, true)
+            .await
+            .unwrap();
+        let RoutingRotationOutcome::Rotated { routing_id } = next else {
+            panic!("administrator rotation should succeed");
+        };
+        assert_ne!(routing_id, user.routing_id);
+        assert!(database
+            .user_by_routing_id(&user.routing_id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(database
+            .set_user_disabled("admin", user.id, true)
+            .await
+            .unwrap());
+        assert!(database
+            .user_by_routing_id(&routing_id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn user_email_and_active_route_are_unique() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let first = database
+            .create_user("admin", "person@example.com", "Person", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(database
+            .create_user("admin", "PERSON@example.com", "Duplicate", 12)
+            .await
+            .unwrap()
+            .is_none());
+        let users = database.list_users().await.unwrap();
+        assert_eq!(users, [first]);
     }
 
     #[tokio::test]

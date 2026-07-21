@@ -29,6 +29,8 @@ pub struct Config {
     #[serde(default)]
     pub quota: QuotaConfig,
     #[serde(default)]
+    pub user_access: UserAccessConfig,
+    #[serde(default)]
     pub webauthn: WebauthnConfig,
     /// The outbound proxy is owned by the service configuration and requires a
     /// restart because the shared HTTP client is constructed once at startup.
@@ -191,6 +193,18 @@ pub struct QuotaConfig {
     pub on_exceeded: String,
     #[serde(default = "default_request_event_retention_days")]
     pub request_event_retention_days: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserAccessConfig {
+    #[serde(default)]
+    pub base_domain: String,
+    #[serde(default = "default_user_access_mode")]
+    pub mode: String,
+    #[serde(default = "default_routing_id_min_length")]
+    pub routing_id_min_length: u8,
+    #[serde(default = "default_routing_rotation_cooldown_hours")]
+    pub routing_rotation_cooldown_hours: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -382,6 +396,22 @@ impl Config {
         if let Ok(value) = std::env::var("MIRRORPROXY_WEBAUTHN_BREAK_GLASS_USERNAME") {
             self.webauthn.break_glass_username = value;
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_BASE_DOMAIN") {
+            self.user_access.base_domain = value.trim().trim_end_matches('.').to_ascii_lowercase();
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACCESS_MODE") {
+            self.user_access.mode = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ROUTING_ID_MIN_LENGTH") {
+            self.user_access.routing_id_min_length = value.parse().map_err(|_| {
+                anyhow::anyhow!("MIRRORPROXY_ROUTING_ID_MIN_LENGTH must be an integer")
+            })?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS") {
+            self.user_access.routing_rotation_cooldown_hours = value.parse().map_err(|_| {
+                anyhow::anyhow!("MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS must be an integer")
+            })?;
+        }
         if let Ok(value) = std::env::var("MIRRORPROXY_OUTBOUND_PROXY_ENABLED") {
             self.outbound_proxy.enabled =
                 parse_env_bool("MIRRORPROXY_OUTBOUND_PROXY_ENABLED", &value)?;
@@ -444,6 +474,7 @@ impl Config {
             "stop_proxy" | "throttle" => {}
             other => anyhow::bail!("quota.on_exceeded must be stop_proxy or throttle, got {other}"),
         }
+        self.user_access.validate(&self.public_base_url)?;
         self.webauthn.validate()?;
         self.outbound_proxy.validate()?;
         for (name, auth) in &self.upstream_auth {
@@ -640,6 +671,7 @@ impl Default for Config {
             rate_limit: RateLimitConfig::default(),
             cache: CacheConfig::default(),
             quota: QuotaConfig::default(),
+            user_access: UserAccessConfig::default(),
             webauthn: WebauthnConfig::default(),
             outbound_proxy: OutboundProxyConfig::default(),
             forward_client_authorization: false,
@@ -822,6 +854,63 @@ impl Default for WebauthnConfig {
     }
 }
 
+impl Default for UserAccessConfig {
+    fn default() -> Self {
+        Self {
+            base_domain: String::new(),
+            mode: default_user_access_mode(),
+            routing_id_min_length: default_routing_id_min_length(),
+            routing_rotation_cooldown_hours: default_routing_rotation_cooldown_hours(),
+        }
+    }
+}
+
+impl UserAccessConfig {
+    pub fn validate(&self, public_base_url: &str) -> anyhow::Result<()> {
+        if self.mode != "public" && self.mode != "subdomain_required" {
+            anyhow::bail!("user_access.mode must be public or subdomain_required");
+        }
+        if !(8..=32).contains(&self.routing_id_min_length) {
+            anyhow::bail!("user_access.routing_id_min_length must be between 8 and 32");
+        }
+        if self.routing_rotation_cooldown_hours > 24 * 365 {
+            anyhow::bail!("user_access.routing_rotation_cooldown_hours cannot exceed 8760");
+        }
+        let domain = self.base_domain.trim();
+        if domain.is_empty() {
+            if self.mode == "subdomain_required" {
+                anyhow::bail!("user_access.base_domain is required for subdomain_required mode");
+            }
+            return Ok(());
+        }
+        if domain.starts_with('.')
+            || domain.ends_with('.')
+            || domain.contains("..")
+            || domain.contains('*')
+            || domain.parse::<IpAddr>().is_ok()
+            || !domain.chars().all(|character| {
+                character.is_ascii_lowercase()
+                    || character.is_ascii_digit()
+                    || character == '.'
+                    || character == '-'
+            })
+        {
+            anyhow::bail!("user_access.base_domain must be a lowercase concrete DNS domain");
+        }
+        let public_url = Url::parse(public_base_url).map_err(|_| {
+            anyhow::anyhow!(
+                "public_base_url must be set when user_access.base_domain is configured"
+            )
+        })?;
+        if public_url.scheme() != "https" || public_url.host_str() != Some(domain) {
+            anyhow::bail!(
+                "public_base_url must use HTTPS and exactly match user_access.base_domain"
+            );
+        }
+        Ok(())
+    }
+}
+
 impl OutboundProxyConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !self.enabled {
@@ -920,6 +1009,18 @@ fn default_webauthn_rp_name() -> String {
 
 fn default_break_glass_username() -> String {
     "admin".to_string()
+}
+
+fn default_user_access_mode() -> String {
+    "public".to_string()
+}
+
+fn default_routing_id_min_length() -> u8 {
+    12
+}
+
+fn default_routing_rotation_cooldown_hours() -> u32 {
+    24
 }
 
 fn default_database_path() -> String {
@@ -1713,5 +1814,42 @@ password = "proxy-password"
             ..Config::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validates_user_subdomain_access_configuration() {
+        let valid = Config {
+            public_base_url: "https://mirror.example.com".to_string(),
+            user_access: UserAccessConfig {
+                base_domain: "mirror.example.com".to_string(),
+                mode: "subdomain_required".to_string(),
+                ..UserAccessConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(valid.validate().is_ok());
+
+        for (base_domain, public_base_url, mode) in [
+            ("", "", "subdomain_required"),
+            ("*.example.com", "https://mirror.example.com", "public"),
+            ("mirror.example.com", "http://mirror.example.com", "public"),
+            ("mirror.example.com", "https://other.example.com", "public"),
+            (
+                "mirror.example.com",
+                "https://mirror.example.com",
+                "private",
+            ),
+        ] {
+            let invalid = Config {
+                public_base_url: public_base_url.to_string(),
+                user_access: UserAccessConfig {
+                    base_domain: base_domain.to_string(),
+                    mode: mode.to_string(),
+                    ..UserAccessConfig::default()
+                },
+                ..Config::default()
+            };
+            assert!(invalid.validate().is_err(), "{base_domain} / {mode}");
+        }
     }
 }

@@ -86,6 +86,14 @@ timezone = "local"
 on_exceeded = "stop_proxy"
 request_event_retention_days = 30
 
+# Optional accounting-only user subdomains. Configure wildcard DNS and TLS for
+# *.mirror.example.com before setting mode to "subdomain_required".
+[user_access]
+base_domain = ""
+mode = "public"
+routing_id_min_length = 12
+routing_rotation_cooldown_hours = 24
+
 # Optional administrator Passkey/WebAuthn configuration. RP ID cannot be
 # changed after passkeys are registered. RP origin must be the exact HTTPS
 # origin used for /admin; wildcard user subdomains are never accepted.
