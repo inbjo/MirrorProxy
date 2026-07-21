@@ -184,7 +184,7 @@ test('changes the administrator password and revokes the active session', async 
   await page.getByRole('button', { name: 'Administrators & security' }).click()
   await page.getByLabel('Current password').fill('correct-password')
   await page.getByLabel('New password (12 characters minimum)').fill('replacement-password')
-  await page.getByRole('button', { name: 'Change password and revoke all sessions' }).click()
+  await page.getByRole('button', { name: 'Change password', exact: true }).click()
   await expect.poll(() => passwordRequest).toEqual({ current_password: 'correct-password', new_password: 'replacement-password' })
   await expect.poll(() => loggedOut).toBe(true)
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
@@ -307,6 +307,7 @@ test('signs in by email and rotates the accounting-only routing address', async 
 test('configures SMTP, queues a test email, and resends an invitation', async ({ page }) => {
   let smtpUpdate: Record<string, unknown> | undefined
   let testRecipient: Record<string, unknown> | undefined
+  let invitationRequest: Record<string, unknown> | undefined
   let resent = false
   await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
@@ -330,7 +331,14 @@ test('configures SMTP, queues a test email, and resends an invitation', async ({
     resent = true
     await route.fulfill({ status: 202 })
   })
-  await page.route('**/admin/api/invitations', route => route.fulfill({ json: [{ id: 9, email: 'new@example.com', display_name: 'New User', status: 'pending', expires_at: 1784851200 }] }))
+  await page.route('**/admin/api/invitations', async route => {
+    if (route.request().method() === 'POST') {
+      invitationRequest = route.request().postDataJSON() as Record<string, unknown>
+      await route.fulfill({ status: 202 })
+      return
+    }
+    await route.fulfill({ json: [{ id: 9, email: 'new@example.com', display_name: 'New User', status: 'pending', expires_at: 1784851200 }] })
+  })
 
   await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
@@ -342,6 +350,10 @@ test('configures SMTP, queues a test email, and resends an invitation', async ({
   await page.getByLabel('Test recipient').fill('ops@example.com')
   await page.getByRole('button', { name: 'Send test email' }).click()
   await expect.poll(() => testRecipient).toEqual({ recipient: 'ops@example.com' })
+  await expect(page.getByLabel('Display name')).toHaveCount(0)
+  await page.getByLabel('Email', { exact: true }).fill('invited.user@example.com')
+  await page.getByRole('button', { name: 'Send invitation' }).click()
+  await expect.poll(() => invitationRequest).toEqual({ email: 'invited.user@example.com', display_name: 'invited.user' })
   await page.getByRole('button', { name: 'Resend' }).click()
   await expect.poll(() => resent).toBe(true)
 })

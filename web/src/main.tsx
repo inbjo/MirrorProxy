@@ -861,8 +861,8 @@ function AdminConsole({ locale, onClose }: { locale: Locale; onClose: () => void
         action: '超限动作', forwardAuth: '转发客户端认证头', rate: '启用请求限流', rpm: '每分钟请求数', adapters: '启用代理', upstreams: '上游地址', baseDomain: '用户子域名主域', accessMode: '包代理访问模式', infrastructureReady: '通配符 DNS、TLS 与原始 Host 转发已就绪', routingLength: '子域名最短长度', rotationCooldown: '子域名更换冷却（小时）', registrationMode: '注册模式', allowedDomains: '企业邮箱域名', emailTtl: '邮件登录有效期（分钟）',
         save: '保存配置', saving: '保存中…', refresh: '刷新统计', top: 'Top targets', daily: '当月日明细',
         close: '关闭控制台', badLogin: '登录失败，请检查管理员密码。', saveError: '配置保存失败。', restart: '以下字段将在重启后生效：',
-        quotaStopped: '代理已因月流量上限停止', noData: '本月尚无代理流量。', passwordHint: '首次启动时密码只会出现在本机日志中。',
-        security: '安全', currentPassword: '当前密码', newPassword: '新密码（至少 12 位）', changePassword: '修改密码并退出所有会话', passwordChanged: '密码已修改，请使用新密码重新登录。', passwordError: '密码修改失败，请确认当前密码。', passwordConfirm: '修改密码将使所有管理员会话失效，确定继续吗？',
+        quotaStopped: '代理已因月流量上限停止', noData: '本月尚无代理流量。', passwordHint: '初始密码见本机启动日志；修改密码后会退出所有管理员会话。',
+        security: '修改密码', currentPassword: '当前密码', newPassword: '新密码（至少 12 位）', changePassword: '修改密码', passwordChanged: '密码已修改，请使用新密码重新登录。', passwordError: '密码修改失败，请确认当前密码。', passwordConfirm: '修改密码将使所有管理员会话失效，确定继续吗？',
         administrators: '管理员账号', createAdministrator: '创建管理员', role: '角色', disable: '禁用', enable: '启用', adminCreateError: '管理员创建失败。',
         passkeys: 'Passkey', usePasskey: '使用 Passkey 登录', addPasskey: '登记 Passkey', passkeyName: 'Passkey 名称', deletePasskey: '删除', passkeyError: 'Passkey 操作失败。', webauthnEnabled: '启用管理员 Passkey', webauthnRpId: 'RP ID（主域名）', webauthnOrigin: 'RP Origin（HTTPS）', webauthnName: 'RP 名称', requirePasskey: '除应急账号外强制使用 Passkey', breakGlass: '应急管理员账号',
         generator: 'CLI 改源命令', target: '目标', mirror: '镜像站', scope: '作用域', distribution: '发行版代号', ready: '可直接执行', guidance: '当前仅生成配置指引', copyCommand: '复制命令', copiedCommand: '已复制',
@@ -877,8 +877,8 @@ function AdminConsole({ locale, onClose }: { locale: Locale; onClose: () => void
         action: 'Exceeded action', forwardAuth: 'Forward client authorization', rate: 'Enable request rate limit', rpm: 'Requests / minute', adapters: 'Enabled adapters', upstreams: 'Upstream endpoints', baseDomain: 'User subdomain base', accessMode: 'Package proxy access mode', infrastructureReady: 'Wildcard DNS, TLS, and original Host forwarding are ready', routingLength: 'Minimum routing ID length', rotationCooldown: 'Rotation cooldown (hours)', registrationMode: 'Registration mode', allowedDomains: 'Allowed email domains', emailTtl: 'Email login lifetime (minutes)',
         save: 'Save configuration', saving: 'Saving…', refresh: 'Refresh stats', top: 'Top targets', daily: 'Daily detail',
         close: 'Close console', badLogin: 'Sign in failed. Check the administrator password.', saveError: 'Configuration save failed.', restart: 'These fields apply after restart:',
-        quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is printed only in the local startup log.',
-        security: 'Security', currentPassword: 'Current password', newPassword: 'New password (12 characters minimum)', changePassword: 'Change password and revoke all sessions', passwordChanged: 'Password changed. Sign in again with the new password.', passwordError: 'Password update failed. Check the current password.', passwordConfirm: 'This revokes every administrator session. Continue?',
+        quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is in the local startup log; changing it signs out every administrator session.',
+        security: 'Change password', currentPassword: 'Current password', newPassword: 'New password (12 characters minimum)', changePassword: 'Change password', passwordChanged: 'Password changed. Sign in again with the new password.', passwordError: 'Password update failed. Check the current password.', passwordConfirm: 'This revokes every administrator session. Continue?',
         administrators: 'Administrators', createAdministrator: 'Create administrator', role: 'Role', disable: 'Disable', enable: 'Enable', adminCreateError: 'Administrator creation failed.',
         passkeys: 'Passkeys', usePasskey: 'Sign in with a passkey', addPasskey: 'Register passkey', passkeyName: 'Passkey name', deletePasskey: 'Delete', passkeyError: 'Passkey operation failed.', webauthnEnabled: 'Enable administrator passkeys', webauthnRpId: 'RP ID (primary domain)', webauthnOrigin: 'RP origin (HTTPS)', webauthnName: 'RP name', requirePasskey: 'Require passkeys except break-glass account', breakGlass: 'Break-glass administrator',
         generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', distribution: 'Distribution codename', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied', auditLog: 'Audit log', noAudit: 'No audit entries yet.',
@@ -1170,7 +1170,20 @@ function AdminSessionManagement({ locale, onCurrentRevoked }: { locale: Locale; 
     if (!response.ok) return
     if (session.current) onCurrentRevoked(); else await load()
   }
-  return <section className="settings-card"><div className="settings-card-head"><h4>{locale === 'zh' ? '登录会话' : 'Administrator sessions'}</h4><p>{locale === 'zh' ? '如果发现陌生设备，可立即撤销对应会话。' : 'Revoke any session you do not recognize.'}</p></div><div className="admin-account-list">{sessions.map((session) => <div className="admin-account-row" key={session.id}><span><strong>{session.auth_method === 'passkey' ? 'Passkey' : (locale === 'zh' ? '密码' : 'Password')}{session.current ? ` · ${locale === 'zh' ? '当前会话' : 'current'}` : ''}</strong><small>{locale === 'zh' ? '最近使用' : 'Last used'} {new Date(session.last_used_at * 1000).toLocaleString()} · {locale === 'zh' ? '过期时间' : 'expires'} {new Date(session.expires_at * 1000).toLocaleString()}</small></span><button className={session.current ? 'danger-button' : ''} onClick={() => revoke(session)}>{locale === 'zh' ? '撤销' : 'Revoke'}</button></div>)}</div></section>
+  return (
+    <section className="settings-card session-card">
+      <div className="settings-card-head">
+        <h4>{locale === 'zh' ? '登录会话' : 'Administrator sessions'}</h4>
+        <p>{locale === 'zh' ? '如果发现陌生设备，可立即撤销对应会话。' : 'Revoke any session you do not recognize.'}</p>
+      </div>
+      <div className="admin-account-list">{sessions.map((session) => (
+        <div className="admin-account-row" key={session.id}>
+          <span><strong>{session.auth_method === 'passkey' ? 'Passkey' : (locale === 'zh' ? '密码' : 'Password')}{session.current ? ` · ${locale === 'zh' ? '当前会话' : 'current'}` : ''}</strong><small>{locale === 'zh' ? '最近使用' : 'Last used'} {new Date(session.last_used_at * 1000).toLocaleString()} · {locale === 'zh' ? '过期时间' : 'expires'} {new Date(session.expires_at * 1000).toLocaleString()}</small></span>
+          <button className={session.current ? 'danger-button session-revoke' : 'revoke-button'} onClick={() => revoke(session)}>{locale === 'zh' ? '撤销' : 'Revoke'}</button>
+        </div>
+      ))}</div>
+    </section>
+  )
 }
 
 type AuthProviderView = {
@@ -1233,7 +1246,6 @@ function AdminEmailSettings({ locale }: { locale: Locale }) {
   const [testRecipient, setTestRecipient] = React.useState('')
   const [invitations, setInvitations] = React.useState<InvitationView[]>([])
   const [inviteEmail, setInviteEmail] = React.useState('')
-  const [inviteName, setInviteName] = React.useState('')
   const [notice, setNotice] = React.useState('')
   const load = React.useCallback(async () => {
     const [smtpResponse, invitationsResponse] = await Promise.all([fetch('/admin/api/smtp'), fetch('/admin/api/invitations')])
@@ -1255,9 +1267,9 @@ function AdminEmailSettings({ locale }: { locale: Locale }) {
   }
   const invite = async (event: React.FormEvent) => {
     event.preventDefault()
-    const response = await fetch('/admin/api/invitations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: inviteEmail, display_name: inviteName }) })
+    const response = await fetch('/admin/api/invitations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: inviteEmail, display_name: inviteEmail.split('@')[0] }) })
     setNotice(response.ok ? (locale === 'zh' ? '邀请邮件已加入发送队列。' : 'Invitation queued for delivery.') : (locale === 'zh' ? '无法创建邀请。' : 'Unable to create invitation.'))
-    if (response.ok) { setInviteEmail(''); setInviteName(''); await load() }
+    if (response.ok) { setInviteEmail(''); await load() }
   }
   const revoke = async (id: number) => { await fetch(`/admin/api/invitations/${id}`, { method: 'DELETE' }); await load() }
   const resend = async (id: number) => {
@@ -1287,13 +1299,13 @@ function AdminEmailSettings({ locale }: { locale: Locale }) {
         <label>{locale === 'zh' ? '发件邮箱' : 'From address'}<input type="email" value={smtp.from_address} onChange={(event) => setSmtp({ ...smtp, from_address: event.target.value })} /></label>
         <label className="toggle-field"><input type="checkbox" checked={smtp.enabled} onChange={(event) => setSmtp({ ...smtp, enabled: event.target.checked })} />{locale === 'zh' ? '启用邮件发送' : 'Enable email delivery'}</label>
         <button className="primary-button" type="submit">{locale === 'zh' ? '保存发件设置' : 'Save mail settings'}</button>
-      </form><form className="compact-form inline-form" onSubmit={testSmtp}><label>{locale === 'zh' ? '测试收件人' : 'Test recipient'}<input required type="email" value={testRecipient} onChange={(event) => setTestRecipient(event.target.value)} /></label><button type="submit">{locale === 'zh' ? '发送测试邮件' : 'Send test email'}</button></form></div>
-      <div className="settings-card"><div className="settings-card-head"><h4>{locale === 'zh' ? '邀请用户' : 'Invite users'}</h4><p>{locale === 'zh' ? '在关闭开放注册时，通过邮件邀请指定用户。' : 'Invite specific users when public registration is disabled.'}</p></div><form className="compact-form" onSubmit={invite}><label>{locale === 'zh' ? '邀请邮箱' : 'Email'}<input required type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label><label>{locale === 'zh' ? '显示名称' : 'Display name'}<input required value={inviteName} onChange={(event) => setInviteName(event.target.value)} /></label><button className="primary-button" type="submit">{locale === 'zh' ? '发送邀请' : 'Send invitation'}</button></form></div>
+      </form><form className="compact-form inline-form mail-test-form" onSubmit={testSmtp}><label>{locale === 'zh' ? '测试收件人' : 'Test recipient'}<input required type="email" value={testRecipient} onChange={(event) => setTestRecipient(event.target.value)} /></label><button className="secondary-button" type="submit">{locale === 'zh' ? '发送测试邮件' : 'Send test email'}</button></form></div>
+      <div className="settings-card"><div className="settings-card-head"><h4>{locale === 'zh' ? '邀请用户' : 'Invite users'}</h4><p>{locale === 'zh' ? '填写邮箱即可发送邀请，用户可在首次登录后修改个人信息。' : 'Enter an email address to invite a user. They can update their profile after signing in.'}</p></div><form className="compact-form invite-form" onSubmit={invite}><label>{locale === 'zh' ? '邀请邮箱' : 'Email'}<input required type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="name@example.com" /></label><button className="primary-button" type="submit">{locale === 'zh' ? '发送邀请' : 'Send invitation'}</button></form></div>
       {notice ? <p className="inline-notice">{notice}</p> : null}
       <div className="admin-account-list">{invitations.map((invitation) => (
         <div className="admin-account-row" key={invitation.id}>
           <span><strong>{invitation.email}</strong><small>{invitation.status === 'pending' ? (locale === 'zh' ? '待接受' : 'pending') : invitation.status} · {new Date(invitation.expires_at * 1000).toLocaleString()}</small></span>
-          {invitation.status === 'pending' ? <span><button onClick={() => resend(invitation.id)}>{locale === 'zh' ? '重新发送' : 'Resend'}</button><button onClick={() => revoke(invitation.id)}>{locale === 'zh' ? '撤销' : 'Revoke'}</button></span> : null}
+          {invitation.status === 'pending' ? <span><button className="secondary-button compact-button" onClick={() => resend(invitation.id)}>{locale === 'zh' ? '重新发送' : 'Resend'}</button><button className="revoke-button" onClick={() => revoke(invitation.id)}>{locale === 'zh' ? '撤销' : 'Revoke'}</button></span> : null}
         </div>
       ))}</div>
     </section>
