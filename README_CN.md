@@ -808,6 +808,7 @@ MIRRORPROXY_MASTER_KEY=替换为上面生成的值
 MIRRORPROXY_REGISTRATION_MODE=invite_only
 MIRRORPROXY_ALLOWED_EMAIL_DOMAINS=example.com,subsidiary.example.com
 MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES=10
+MIRRORPROXY_DEFAULT_USER_MONTHLY_GB=100
 ```
 
 在 `/admin` 配置 SMTP 和邀请。支持 STARTTLS、SMTPS、带认证或无认证 SMTP。SMTP
@@ -818,6 +819,12 @@ MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES=10
 注册默认是 `invite_only`；`domain_allowlist` 允许指定企业域名的已验证邮箱，`open`
 允许任意已验证邮箱，`disabled` 只允许已有用户登录。普通用户在 `/login` 登录，在
 `/account` 查看或更换自己的 `accounting_only` 子域名。
+
+用户控制台还会展示今日和本月流量、请求数、错误数、按镜像类型统计、近期趋势，以及个人
+和计费组剩余额度。`MIRRORPROXY_DEFAULT_USER_MONTHLY_GB` 留空表示普通用户默认不限流量。
+超级管理员可在 `/admin` 创建计费组、设置共享月额度、为每个用户指定唯一计费组，并选择
+默认、自定义或不限量的个人额度。每个用户子域请求会在同一个 SQLite 事务中原子预留全局、
+计费组和个人三层额度。
 
 管理员 Passkey 为可选功能，协议由 `webauthn-rs` 实现。登记凭据前需要配置固定 RP ID
 和管理后台实际使用的完整 HTTPS Origin：

@@ -195,6 +195,8 @@ pub struct QuotaConfig {
     pub on_exceeded: String,
     #[serde(default = "default_request_event_retention_days")]
     pub request_event_retention_days: u32,
+    #[serde(default)]
+    pub default_user_monthly_gb: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -438,6 +440,15 @@ impl Config {
             self.registration.email_token_ttl_minutes = value.parse().map_err(|_| {
                 anyhow::anyhow!("MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES must be an integer")
             })?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_DEFAULT_USER_MONTHLY_GB") {
+            self.quota.default_user_monthly_gb = if value.trim().is_empty() {
+                None
+            } else {
+                Some(value.parse().map_err(|_| {
+                    anyhow::anyhow!("MIRRORPROXY_DEFAULT_USER_MONTHLY_GB must be an integer")
+                })?)
+            };
         }
         if let Ok(value) = std::env::var("MIRRORPROXY_OUTBOUND_PROXY_ENABLED") {
             self.outbound_proxy.enabled =
@@ -866,6 +877,7 @@ impl Default for QuotaConfig {
             timezone: default_quota_timezone(),
             on_exceeded: default_quota_on_exceeded(),
             request_event_retention_days: default_request_event_retention_days(),
+            default_user_monthly_gb: None,
         }
     }
 }
@@ -1542,6 +1554,7 @@ password = "proxy-password"
             ("MIRRORPROXY_REGISTRATION_MODE", "domain_allowlist"),
             ("MIRRORPROXY_ALLOWED_EMAIL_DOMAINS", "corp.example"),
             ("MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES", "15"),
+            ("MIRRORPROXY_DEFAULT_USER_MONTHLY_GB", "25"),
         ];
         for (name, value) in variables {
             std::env::set_var(name, value);
@@ -1567,6 +1580,7 @@ password = "proxy-password"
         assert_eq!(config.registration.mode, "domain_allowlist");
         assert_eq!(config.registration.allowed_email_domains, ["corp.example"]);
         assert_eq!(config.registration.email_token_ttl_minutes, 15);
+        assert_eq!(config.quota.default_user_monthly_gb, Some(25));
     }
 
     #[test]

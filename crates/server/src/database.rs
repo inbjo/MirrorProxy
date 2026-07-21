@@ -164,7 +164,33 @@ pub struct ProxyTrafficRecord<'a> {
     pub response_bytes: u64,
     pub stream_error: bool,
     pub reserved_bytes: u64,
+    pub user_id: Option<i64>,
+    pub group_id: Option<i64>,
     pub request_event_retention_days: u32,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct BillingGroup {
+    pub id: i64,
+    pub name: String,
+    pub monthly_limit_bytes: Option<u64>,
+    pub member_count: u64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct UserBillingProfile {
+    pub user_id: i64,
+    pub group_id: Option<i64>,
+    pub group_name: Option<String>,
+    pub group_monthly_limit_bytes: Option<u64>,
+    pub quota_mode: String,
+    pub user_monthly_limit_bytes: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HierarchicalReservationOutcome {
+    Reserved { group_id: Option<i64> },
+    Exceeded { scope: &'static str },
 }
 
 #[derive(Serialize)]
@@ -190,6 +216,33 @@ pub struct TrafficOverview {
     pub response_bytes: u64,
     pub error_count: u64,
     pub quota_exceeded: bool,
+    pub daily: Vec<TrafficDailyPoint>,
+    pub targets: Vec<TrafficTargetPoint>,
+}
+
+#[derive(Serialize)]
+pub struct QuotaUsage {
+    pub limit_bytes: Option<u64>,
+    pub used_bytes: u64,
+    pub remaining_bytes: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct GroupUsage {
+    pub id: i64,
+    pub name: String,
+    pub quota: QuotaUsage,
+}
+
+#[derive(Serialize)]
+pub struct UserUsageOverview {
+    pub month: String,
+    pub today_response_bytes: u64,
+    pub request_count: u64,
+    pub response_bytes: u64,
+    pub error_count: u64,
+    pub quota: QuotaUsage,
+    pub group: Option<GroupUsage>,
     pub daily: Vec<TrafficDailyPoint>,
     pub targets: Vec<TrafficTargetPoint>,
 }
@@ -1597,16 +1650,250 @@ impl Database {
         Ok(())
     }
 
-    pub async fn monthly_response_bytes(&self, month: &str) -> anyhow::Result<u64> {
-        let row = sqlx::query("SELECT response_bytes FROM traffic_monthly WHERE month = ?")
-            .bind(month)
-            .fetch_optional(&self.pool)
+    pub async fn list_billing_groups(&self) -> anyhow::Result<Vec<BillingGroup>> {
+        sqlx::query(
+            "SELECT g.id, g.name, q.monthly_limit_bytes, COUNT(m.user_id) AS member_count FROM groups g LEFT JOIN group_quota_settings q ON q.group_id = g.id LEFT JOIN group_members m ON m.group_id = g.id AND m.is_billing = 1 WHERE g.kind = 'billing' GROUP BY g.id, g.name, q.monthly_limit_bytes ORDER BY g.name",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok::<_, sqlx::Error>(BillingGroup {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                monthly_limit_bytes: row
+                    .try_get::<Option<i64>, _>("monthly_limit_bytes")?
+                    .map(as_u64),
+                member_count: as_u64(row.try_get("member_count")?),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    }
+
+    pub async fn create_billing_group(
+        &self,
+        actor: &str,
+        name: &str,
+        monthly_limit_bytes: Option<u64>,
+    ) -> anyhow::Result<Option<BillingGroup>> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let insert = sqlx::query(
+            "INSERT OR IGNORE INTO groups (name, kind, created_at, updated_at) VALUES (?, 'billing', ?, ?)",
+        )
+        .bind(name)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await?;
+        if insert.rows_affected() == 0 {
+            return Ok(None);
+        }
+        let id = insert.last_insert_rowid();
+        sqlx::query("INSERT INTO group_quota_settings (group_id, monthly_limit_bytes, updated_at) VALUES (?, ?, ?)")
+            .bind(id)
+            .bind(monthly_limit_bytes.map(limit_to_i64))
+            .bind(now)
+            .execute(&mut *transaction)
             .await?;
-        let bytes = row
-            .map(|row| row.try_get::<i64, _>("response_bytes"))
-            .transpose()?
-            .unwrap_or(0);
-        Ok(bytes.max(0) as u64)
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'billing_group_created', ?)")
+            .bind(now).bind(actor).bind(format!("group_id={id}")).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(Some(BillingGroup {
+            id,
+            name: name.to_string(),
+            monthly_limit_bytes,
+            member_count: 0,
+        }))
+    }
+
+    pub async fn update_billing_group(
+        &self,
+        actor: &str,
+        id: i64,
+        name: &str,
+        monthly_limit_bytes: Option<u64>,
+    ) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let update = sqlx::query(
+            "UPDATE groups SET name = ?, updated_at = ? WHERE id = ? AND kind = 'billing'",
+        )
+        .bind(name)
+        .bind(now)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+        if update.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query("INSERT INTO group_quota_settings (group_id, monthly_limit_bytes, updated_at) VALUES (?, ?, ?) ON CONFLICT(group_id) DO UPDATE SET monthly_limit_bytes = excluded.monthly_limit_bytes, updated_at = excluded.updated_at")
+            .bind(id).bind(monthly_limit_bytes.map(limit_to_i64)).bind(now).execute(&mut *transaction).await?;
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'billing_group_updated', ?)")
+            .bind(now).bind(actor).bind(format!("group_id={id}")).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn set_user_billing_profile(
+        &self,
+        actor: &str,
+        user_id: i64,
+        group_id: Option<i64>,
+        quota_mode: &str,
+        user_monthly_limit_bytes: Option<u64>,
+    ) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let user_exists = sqlx::query("SELECT 1 FROM users WHERE id = ? AND deleted_at IS NULL")
+            .bind(user_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .is_some();
+        if !user_exists {
+            return Ok(false);
+        }
+        if let Some(group_id) = group_id {
+            let group_exists =
+                sqlx::query("SELECT 1 FROM groups WHERE id = ? AND kind = 'billing'")
+                    .bind(group_id)
+                    .fetch_optional(&mut *transaction)
+                    .await?
+                    .is_some();
+            if !group_exists {
+                return Ok(false);
+            }
+        }
+        sqlx::query("DELETE FROM group_members WHERE user_id = ? AND is_billing = 1")
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        if let Some(group_id) = group_id {
+            sqlx::query("INSERT INTO group_members (group_id, user_id, is_billing, created_at) VALUES (?, ?, 1, ?) ON CONFLICT(group_id, user_id) DO UPDATE SET is_billing = 1")
+                .bind(group_id).bind(user_id).bind(now).execute(&mut *transaction).await?;
+        }
+        if quota_mode == "default" {
+            sqlx::query("DELETE FROM user_quota_overrides WHERE user_id = ?")
+                .bind(user_id)
+                .execute(&mut *transaction)
+                .await?;
+        } else {
+            sqlx::query("INSERT INTO user_quota_overrides (user_id, mode, monthly_limit_bytes, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET mode = excluded.mode, monthly_limit_bytes = excluded.monthly_limit_bytes, updated_at = excluded.updated_at")
+                .bind(user_id).bind(quota_mode).bind(user_monthly_limit_bytes.map(limit_to_i64)).bind(now).execute(&mut *transaction).await?;
+        }
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'user_billing_updated', ?)")
+            .bind(now).bind(actor).bind(format!("user_id={user_id}")).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn user_billing_profile(
+        &self,
+        user_id: i64,
+    ) -> anyhow::Result<Option<UserBillingProfile>> {
+        let row = sqlx::query(
+            "SELECT u.id AS user_id, g.id AS group_id, g.name AS group_name, gq.monthly_limit_bytes AS group_limit, uq.mode AS quota_mode, uq.monthly_limit_bytes AS user_limit FROM users u LEFT JOIN group_members gm ON gm.user_id = u.id AND gm.is_billing = 1 LEFT JOIN groups g ON g.id = gm.group_id LEFT JOIN group_quota_settings gq ON gq.group_id = g.id LEFT JOIN user_quota_overrides uq ON uq.user_id = u.id WHERE u.id = ? AND u.deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            Ok::<_, sqlx::Error>(UserBillingProfile {
+                user_id: row.try_get("user_id")?,
+                group_id: row.try_get("group_id")?,
+                group_name: row.try_get("group_name")?,
+                group_monthly_limit_bytes: row
+                    .try_get::<Option<i64>, _>("group_limit")?
+                    .map(as_u64),
+                quota_mode: row
+                    .try_get::<Option<String>, _>("quota_mode")?
+                    .unwrap_or_else(|| "default".to_string()),
+                user_monthly_limit_bytes: row.try_get::<Option<i64>, _>("user_limit")?.map(as_u64),
+            })
+        })
+        .transpose()
+        .map_err(Into::into)
+    }
+
+    pub async fn try_reserve_hierarchical_bytes(
+        &self,
+        month: &str,
+        user_id: i64,
+        global_limit: Option<u64>,
+        default_user_limit: Option<u64>,
+        bytes: u64,
+    ) -> anyhow::Result<HierarchicalReservationOutcome> {
+        let bytes = limit_to_i64(bytes);
+        let mut transaction = self.pool.begin().await?;
+        let profile = sqlx::query(
+            "SELECT g.id AS group_id, gq.monthly_limit_bytes AS group_limit, uq.mode AS quota_mode, uq.monthly_limit_bytes AS user_limit FROM users u LEFT JOIN group_members gm ON gm.user_id = u.id AND gm.is_billing = 1 LEFT JOIN groups g ON g.id = gm.group_id LEFT JOIN group_quota_settings gq ON gq.group_id = g.id LEFT JOIN user_quota_overrides uq ON uq.user_id = u.id WHERE u.id = ? AND u.disabled = 0 AND u.deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(profile) = profile else {
+            return Ok(HierarchicalReservationOutcome::Exceeded { scope: "user" });
+        };
+        let group_id: Option<i64> = profile.try_get("group_id")?;
+        let group_limit = profile.try_get::<Option<i64>, _>("group_limit")?;
+        let quota_mode = profile.try_get::<Option<String>, _>("quota_mode")?;
+        let override_limit = profile.try_get::<Option<i64>, _>("user_limit")?;
+        let user_limit = match quota_mode.as_deref() {
+            Some("unlimited") => None,
+            Some("custom") => override_limit,
+            _ => default_user_limit.map(limit_to_i64),
+        };
+
+        sqlx::query("INSERT OR IGNORE INTO traffic_monthly (month) VALUES (?)")
+            .bind(month)
+            .execute(&mut *transaction)
+            .await?;
+        if let Some(limit) = global_limit.map(limit_to_i64) {
+            let result = sqlx::query("UPDATE traffic_monthly SET reserved_bytes = reserved_bytes + ? WHERE month = ? AND response_bytes + reserved_bytes + ? <= ?")
+                .bind(bytes).bind(month).bind(bytes).bind(limit).execute(&mut *transaction).await?;
+            if result.rows_affected() == 0 {
+                return Ok(HierarchicalReservationOutcome::Exceeded { scope: "global" });
+            }
+        }
+
+        sqlx::query("INSERT OR IGNORE INTO user_traffic_monthly (month, user_id) VALUES (?, ?)")
+            .bind(month)
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        let user_result = if let Some(limit) = user_limit {
+            sqlx::query("UPDATE user_traffic_monthly SET reserved_bytes = reserved_bytes + ? WHERE month = ? AND user_id = ? AND response_bytes + reserved_bytes + ? <= ?")
+                .bind(bytes).bind(month).bind(user_id).bind(bytes).bind(limit).execute(&mut *transaction).await?
+        } else {
+            sqlx::query("UPDATE user_traffic_monthly SET reserved_bytes = reserved_bytes + ? WHERE month = ? AND user_id = ?")
+                .bind(bytes).bind(month).bind(user_id).execute(&mut *transaction).await?
+        };
+        if user_result.rows_affected() == 0 {
+            return Ok(HierarchicalReservationOutcome::Exceeded { scope: "user" });
+        }
+
+        if let Some(group_id) = group_id {
+            sqlx::query(
+                "INSERT OR IGNORE INTO group_traffic_monthly (month, group_id) VALUES (?, ?)",
+            )
+            .bind(month)
+            .bind(group_id)
+            .execute(&mut *transaction)
+            .await?;
+            let group_result = if let Some(limit) = group_limit {
+                sqlx::query("UPDATE group_traffic_monthly SET reserved_bytes = reserved_bytes + ? WHERE month = ? AND group_id = ? AND response_bytes + reserved_bytes + ? <= ?")
+                    .bind(bytes).bind(month).bind(group_id).bind(bytes).bind(limit).execute(&mut *transaction).await?
+            } else {
+                sqlx::query("UPDATE group_traffic_monthly SET reserved_bytes = reserved_bytes + ? WHERE month = ? AND group_id = ?")
+                    .bind(bytes).bind(month).bind(group_id).execute(&mut *transaction).await?
+            };
+            if group_result.rows_affected() == 0 {
+                return Ok(HierarchicalReservationOutcome::Exceeded { scope: "group" });
+            }
+        }
+        transaction.commit().await?;
+        Ok(HierarchicalReservationOutcome::Reserved { group_id })
     }
 
     pub async fn try_reserve_monthly_bytes(
@@ -1653,6 +1940,16 @@ impl Database {
         .bind(reserved)
         .execute(&mut *transaction)
         .await?;
+        if let Some(user_id) = record.user_id {
+            sqlx::query("INSERT INTO user_traffic_daily (day, user_id, target_code, request_count, response_bytes, error_count) VALUES (?, ?, ?, 1, ?, ?) ON CONFLICT(day, user_id, target_code) DO UPDATE SET request_count = request_count + 1, response_bytes = response_bytes + excluded.response_bytes, error_count = error_count + excluded.error_count")
+                .bind(record.day).bind(user_id).bind(record.target_code).bind(bytes).bind(errors).execute(&mut *transaction).await?;
+            sqlx::query("INSERT INTO user_traffic_monthly (month, user_id, request_count, response_bytes, error_count) VALUES (?, ?, 1, ?, ?) ON CONFLICT(month, user_id) DO UPDATE SET request_count = request_count + 1, response_bytes = response_bytes + excluded.response_bytes, error_count = error_count + excluded.error_count, reserved_bytes = MAX(0, reserved_bytes - ?)")
+                .bind(record.month).bind(user_id).bind(bytes).bind(errors).bind(reserved).execute(&mut *transaction).await?;
+        }
+        if let Some(group_id) = record.group_id {
+            sqlx::query("INSERT INTO group_traffic_monthly (month, group_id, request_count, response_bytes, error_count) VALUES (?, ?, 1, ?, ?) ON CONFLICT(month, group_id) DO UPDATE SET request_count = request_count + 1, response_bytes = response_bytes + excluded.response_bytes, error_count = error_count + excluded.error_count, reserved_bytes = MAX(0, reserved_bytes - ?)")
+                .bind(record.month).bind(group_id).bind(bytes).bind(errors).bind(reserved).execute(&mut *transaction).await?;
+        }
         sqlx::query(
             "INSERT INTO request_events (created_at, target_code, method, path, status_code, response_bytes) VALUES (?, ?, ?, ?, ?, ?)",
         )
@@ -1747,6 +2044,75 @@ impl Database {
         })
     }
 
+    pub async fn user_usage_overview(
+        &self,
+        user_id: i64,
+        day: &str,
+        month: &str,
+        default_user_limit: Option<u64>,
+    ) -> anyhow::Result<Option<UserUsageOverview>> {
+        let Some(profile) = self.user_billing_profile(user_id).await? else {
+            return Ok(None);
+        };
+        let monthly = sqlx::query("SELECT request_count, response_bytes, error_count FROM user_traffic_monthly WHERE month = ? AND user_id = ?")
+            .bind(month).bind(user_id).fetch_optional(&self.pool).await?;
+        let (request_count, response_bytes, error_count) = monthly
+            .map(|row| {
+                Ok::<_, sqlx::Error>((
+                    row.try_get::<i64, _>("request_count")?,
+                    row.try_get::<i64, _>("response_bytes")?,
+                    row.try_get::<i64, _>("error_count")?,
+                ))
+            })
+            .transpose()?
+            .unwrap_or((0, 0, 0));
+        let today = sqlx::query("SELECT COALESCE(SUM(response_bytes), 0) AS bytes FROM user_traffic_daily WHERE day = ? AND user_id = ?")
+            .bind(day).bind(user_id).fetch_one(&self.pool).await?.try_get::<i64, _>("bytes")?;
+        let month_pattern = format!("{month}-%");
+        let daily = sqlx::query("SELECT day, target_code, request_count, response_bytes, error_count FROM user_traffic_daily WHERE user_id = ? AND day LIKE ? ORDER BY day, target_code")
+            .bind(user_id).bind(&month_pattern).fetch_all(&self.pool).await?.into_iter().map(|row| Ok::<_, sqlx::Error>(TrafficDailyPoint { day: row.try_get("day")?, target_code: row.try_get("target_code")?, request_count: as_u64(row.try_get("request_count")?), response_bytes: as_u64(row.try_get("response_bytes")?), error_count: as_u64(row.try_get("error_count")?) })).collect::<Result<Vec<_>, _>>()?;
+        let targets = sqlx::query("SELECT target_code, SUM(request_count) AS request_count, SUM(response_bytes) AS response_bytes, SUM(error_count) AS error_count FROM user_traffic_daily WHERE user_id = ? AND day LIKE ? GROUP BY target_code ORDER BY response_bytes DESC, request_count DESC")
+            .bind(user_id).bind(&month_pattern).fetch_all(&self.pool).await?.into_iter().map(|row| Ok::<_, sqlx::Error>(TrafficTargetPoint { target_code: row.try_get("target_code")?, request_count: as_u64(row.try_get("request_count")?), response_bytes: as_u64(row.try_get("response_bytes")?), error_count: as_u64(row.try_get("error_count")?) })).collect::<Result<Vec<_>, _>>()?;
+        let user_limit = match profile.quota_mode.as_str() {
+            "unlimited" => None,
+            "custom" => profile.user_monthly_limit_bytes,
+            _ => default_user_limit,
+        };
+        let used = as_u64(response_bytes);
+        let quota = quota_usage(user_limit, used);
+        let group = if let (Some(id), Some(name)) = (profile.group_id, profile.group_name) {
+            let used = sqlx::query(
+                "SELECT response_bytes FROM group_traffic_monthly WHERE month = ? AND group_id = ?",
+            )
+            .bind(month)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|row| row.try_get::<i64, _>("response_bytes"))
+            .transpose()?
+            .map(as_u64)
+            .unwrap_or(0);
+            Some(GroupUsage {
+                id,
+                name,
+                quota: quota_usage(profile.group_monthly_limit_bytes, used),
+            })
+        } else {
+            None
+        };
+        Ok(Some(UserUsageOverview {
+            month: month.to_string(),
+            today_response_bytes: as_u64(today),
+            request_count: as_u64(request_count),
+            response_bytes: used,
+            error_count: as_u64(error_count),
+            quota,
+            group,
+            daily,
+            targets,
+        }))
+    }
+
     pub async fn recent_audit_log(&self, limit: u32) -> anyhow::Result<Vec<AuditLogEntry>> {
         let limit = i64::from(limit.clamp(1, 100));
         sqlx::query(
@@ -1771,6 +2137,18 @@ impl Database {
 
 fn as_u64(value: i64) -> u64 {
     value.max(0) as u64
+}
+
+fn limit_to_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn quota_usage(limit_bytes: Option<u64>, used_bytes: u64) -> QuotaUsage {
+    QuotaUsage {
+        limit_bytes,
+        used_bytes,
+        remaining_bytes: limit_bytes.map(|limit| limit.saturating_sub(used_bytes)),
+    }
 }
 
 fn ensure_parent_directory(database_path: &str) -> anyhow::Result<()> {
@@ -1898,6 +2276,11 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS user_sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, auth_method TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'billing', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS group_members (group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, is_billing INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, PRIMARY KEY(group_id, user_id), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS group_quota_settings (group_id INTEGER PRIMARY KEY, monthly_limit_bytes INTEGER, updated_at INTEGER NOT NULL, FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS user_quota_overrides (user_id INTEGER PRIMARY KEY, mode TEXT NOT NULL, monthly_limit_bytes INTEGER, updated_at INTEGER NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS user_traffic_daily (day TEXT NOT NULL, user_id INTEGER NOT NULL, target_code TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, user_id, target_code), FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS user_traffic_monthly (month TEXT NOT NULL, user_id INTEGER NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(month, user_id), FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS group_traffic_monthly (month TEXT NOT NULL, group_id INTEGER NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(month, group_id), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS user_routing_ids (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, public_number INTEGER NOT NULL UNIQUE, routing_id TEXT NOT NULL UNIQUE COLLATE NOCASE, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, revoked_at INTEGER, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS smtp_settings (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), enabled INTEGER NOT NULL DEFAULT 0, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 587, security TEXT NOT NULL DEFAULT 'starttls', username TEXT, encrypted_password TEXT, from_name TEXT NOT NULL DEFAULT 'MirrorProxy', from_address TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS email_invitations (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, display_name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'pending', expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, accepted_at INTEGER, revoked_at INTEGER)",
@@ -1915,6 +2298,7 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx ON user_sessions(expires_at)",
     "CREATE UNIQUE INDEX IF NOT EXISTS user_routing_ids_active_user_idx ON user_routing_ids(user_id) WHERE active = 1",
     "CREATE UNIQUE INDEX IF NOT EXISTS group_members_billing_user_idx ON group_members(user_id) WHERE is_billing = 1",
+    "CREATE INDEX IF NOT EXISTS user_traffic_daily_user_idx ON user_traffic_daily(user_id, day)",
     "CREATE INDEX IF NOT EXISTS email_invitations_email_idx ON email_invitations(email, status)",
     "CREATE INDEX IF NOT EXISTS email_login_tokens_email_idx ON email_login_tokens(email, expires_at)",
     "CREATE INDEX IF NOT EXISTS email_outbox_pending_idx ON email_outbox(status, next_attempt_at)",
@@ -2341,6 +2725,8 @@ mod tests {
                 response_bytes: 1024,
                 stream_error: false,
                 reserved_bytes: 0,
+                user_id: None,
+                group_id: None,
                 request_event_retention_days: 30,
             })
             .await
@@ -2356,15 +2742,13 @@ mod tests {
                 response_bytes: 12,
                 stream_error: false,
                 reserved_bytes: 0,
+                user_id: None,
+                group_id: None,
                 request_event_retention_days: 30,
             })
             .await
             .unwrap();
 
-        assert_eq!(
-            database.monthly_response_bytes("2026-07").await.unwrap(),
-            1036
-        );
         database.mark_month_quota_exceeded("2026-07").await.unwrap();
         let overview = database.traffic_overview("2026-07").await.unwrap();
         assert_eq!(overview.request_count, 2);
@@ -2393,6 +2777,8 @@ mod tests {
                 response_bytes: 1,
                 stream_error: false,
                 reserved_bytes: 0,
+                user_id: None,
+                group_id: None,
                 request_event_retention_days: 1,
             })
             .await
@@ -2428,6 +2814,8 @@ mod tests {
                 response_bytes: 4,
                 stream_error: false,
                 reserved_bytes: 6,
+                user_id: None,
+                group_id: None,
                 request_event_retention_days: 30,
             })
             .await
@@ -2436,6 +2824,108 @@ mod tests {
             .try_reserve_monthly_bytes("2026-07", 10, 6)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn hierarchical_quota_reservations_are_atomic_and_usage_is_attributed() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let first = database
+            .create_user("admin", "first@example.com", "First", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        let second = database
+            .create_user("admin", "second@example.com", "Second", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        let group = database
+            .create_billing_group("admin", "Engineering", Some(10))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(database
+            .set_user_billing_profile("admin", first.id, Some(group.id), "custom", Some(8))
+            .await
+            .unwrap());
+        assert!(database
+            .set_user_billing_profile("admin", second.id, Some(group.id), "unlimited", None)
+            .await
+            .unwrap());
+
+        assert_eq!(
+            database
+                .try_reserve_hierarchical_bytes("2026-07", first.id, Some(20), None, 6)
+                .await
+                .unwrap(),
+            HierarchicalReservationOutcome::Reserved {
+                group_id: Some(group.id)
+            }
+        );
+        assert_eq!(
+            database
+                .try_reserve_hierarchical_bytes("2026-07", first.id, Some(20), None, 3)
+                .await
+                .unwrap(),
+            HierarchicalReservationOutcome::Exceeded { scope: "user" }
+        );
+        database
+            .record_proxy_response(ProxyTrafficRecord {
+                day: "2026-07-10",
+                month: "2026-07",
+                target_code: "npm",
+                method: "GET",
+                path: "/npm/react",
+                status_code: 200,
+                response_bytes: 4,
+                stream_error: false,
+                reserved_bytes: 6,
+                user_id: Some(first.id),
+                group_id: Some(group.id),
+                request_event_retention_days: 30,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            database
+                .try_reserve_hierarchical_bytes("2026-07", first.id, Some(20), None, 4)
+                .await
+                .unwrap(),
+            HierarchicalReservationOutcome::Reserved { .. }
+        ));
+        assert_eq!(
+            database
+                .try_reserve_hierarchical_bytes("2026-07", second.id, Some(20), None, 3)
+                .await
+                .unwrap(),
+            HierarchicalReservationOutcome::Exceeded { scope: "group" }
+        );
+        database
+            .record_proxy_response(ProxyTrafficRecord {
+                day: "2026-07-10",
+                month: "2026-07",
+                target_code: "npm",
+                method: "GET",
+                path: "/npm/vue",
+                status_code: 200,
+                response_bytes: 4,
+                stream_error: false,
+                reserved_bytes: 4,
+                user_id: Some(first.id),
+                group_id: Some(group.id),
+                request_event_retention_days: 30,
+            })
+            .await
+            .unwrap();
+        let usage = database
+            .user_usage_overview(first.id, "2026-07-10", "2026-07", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(usage.today_response_bytes, 8);
+        assert_eq!(usage.quota.used_bytes, 8);
+        assert_eq!(usage.quota.remaining_bytes, Some(0));
+        assert_eq!(usage.group.unwrap().quota.used_bytes, 8);
     }
 
     #[tokio::test]

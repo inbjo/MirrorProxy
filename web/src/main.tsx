@@ -42,7 +42,7 @@ type PublicConfig = {
   user_access?: { enabled: boolean; mode: string }
 }
 type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access'> & {
-  quota: PublicConfig['quota'] & { request_event_retention_days: number }
+  quota: PublicConfig['quota'] & { request_event_retention_days: number; default_user_monthly_gb: number | null }
   trusted_proxies: string[]
   forward_client_authorization: boolean
   database_path: string
@@ -335,18 +335,32 @@ export function App() {
 }
 
 type UserProfile = { user: { id: number; email: string; display_name: string; routing_id: string; routing_rotated_at: number }; proxy_base_url: string | null }
+type QuotaUsage = { limit_bytes: number | null; used_bytes: number; remaining_bytes: number | null }
+type UserUsage = {
+  month: string
+  today_response_bytes: number
+  request_count: number
+  response_bytes: number
+  error_count: number
+  quota: QuotaUsage
+  group: { id: number; name: string; quota: QuotaUsage } | null
+  daily: Array<{ day: string; target_code: string; response_bytes: number; request_count: number; error_count: number }>
+  targets: Array<{ target_code: string; response_bytes: number; request_count: number; error_count: number }>
+}
 
 function UserPage() {
   const [email, setEmail] = React.useState(() => new URLSearchParams(location.search).get('email') ?? '')
   const [code, setCode] = React.useState('')
   const [profile, setProfile] = React.useState<UserProfile | null>(null)
+  const [usage, setUsage] = React.useState<UserUsage | null>(null)
   const [message, setMessage] = React.useState('')
   const invitation = new URLSearchParams(location.search).get('invitation')
   const magicToken = new URLSearchParams(location.search).get('token')
 
   const loadProfile = React.useCallback(async () => {
-    const response = await fetch('/api/account/profile')
-    if (response.ok) setProfile(await response.json() as UserProfile)
+    const [profileResponse, usageResponse] = await Promise.all([fetch('/api/account/profile'), fetch('/api/account/usage')])
+    if (profileResponse.ok) setProfile(await profileResponse.json() as UserProfile)
+    if (usageResponse.ok) setUsage(await usageResponse.json() as UserUsage)
   }, [])
 
   React.useEffect(() => { loadProfile().catch(() => undefined) }, [loadProfile])
@@ -374,7 +388,7 @@ function UserPage() {
     await loadProfile()
   }
 
-  return <main className="admin-page"><header className="topbar admin-page-header"><a className="brand-mark" href="/"><ServerCog size={18} /> MirrorProxy Account</a></header><section className="admin-console" aria-label="User account"><div className="console-head"><div><span className="console-kicker">ACCOUNT / EMAIL</span><h2>{profile ? 'Your MirrorProxy account' : 'Email sign in'}</h2></div></div>{profile ? <section className="login-card"><h3>{profile.user.display_name}</h3><p>{profile.user.email}</p><label>Accounting-only proxy address<input readOnly value={profile.proxy_base_url ?? profile.user.routing_id} /></label><p>Anyone who knows this address can use your traffic allowance. Rotate it if you suspect it leaked.</p><button className="danger-button" onClick={rotate}>Generate a new routing address</button>{message ? <p>{message}</p> : null}</section> : <div className="console-grid"><form className="login-card" onSubmit={requestLogin}><h3>Request a sign-in code</h3><label>Email<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="primary-button" type="submit">Send code and magic link</button></form><form className="login-card" onSubmit={verify}><h3>Enter verification code</h3><label>Six-digit code<input required inputMode="numeric" pattern="[0-9]{6}" value={code} onChange={(event) => setCode(event.target.value)} /></label><button className="primary-button" type="submit">Sign in</button>{message ? <p>{message}</p> : null}</form></div>}</section></main>
+  return <main className="admin-page"><header className="topbar admin-page-header"><a className="brand-mark" href="/"><ServerCog size={18} /> MirrorProxy Account</a></header><section className="admin-console" aria-label="User account"><div className="console-head"><div><span className="console-kicker">ACCOUNT / EMAIL</span><h2>{profile ? 'Your MirrorProxy account' : 'Email sign in'}</h2></div></div>{profile ? <div className="console-grid"><section className="login-card"><h3>{profile.user.display_name}</h3><p>{profile.user.email}</p><label>Accounting-only proxy address<input readOnly value={profile.proxy_base_url ?? profile.user.routing_id} /></label><p>Anyone who knows this address can use your traffic allowance. Rotate it if you suspect it leaked.</p><button className="danger-button" onClick={rotate}>Generate a new routing address</button>{message ? <p>{message}</p> : null}</section>{usage ? <section className="console-overview"><div className="console-section-head"><div><h3>Traffic usage</h3><p>{usage.month}{usage.group ? ` · ${usage.group.name}` : ''}</p></div></div><div className="console-metrics"><ConsoleMetric label="Today" value={byteLabel(usage.today_response_bytes)} /><ConsoleMetric label="This month" value={byteLabel(usage.response_bytes)} /><ConsoleMetric label="Personal remaining" value={usage.quota.remaining_bytes === null ? '∞' : byteLabel(usage.quota.remaining_bytes)} /><ConsoleMetric label="Requests" value={usage.request_count.toLocaleString()} /></div>{usage.group ? <p>Billing group remaining: {usage.group.quota.remaining_bytes === null ? '∞' : byteLabel(usage.group.quota.remaining_bytes)}</p> : null}<div className="stats-columns"><div><h4>By mirror type</h4>{usage.targets.map((target) => <div className="stat-row" key={target.target_code}><span>{target.target_code}</span><strong>{byteLabel(target.response_bytes)}</strong><small>{target.request_count} req</small></div>)}</div><div><h4>Recent trend</h4>{usage.daily.slice(-30).map((point) => <div className="stat-row" key={`${point.day}-${point.target_code}`}><span>{point.day.slice(5)} · {point.target_code}</span><strong>{byteLabel(point.response_bytes)}</strong><small>{point.error_count} err</small></div>)}</div></div></section> : null}</div> : <div className="console-grid"><form className="login-card" onSubmit={requestLogin}><h3>Request a sign-in code</h3><label>Email<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="primary-button" type="submit">Send code and magic link</button></form><form className="login-card" onSubmit={verify}><h3>Enter verification code</h3><label>Six-digit code<input required inputMode="numeric" pattern="[0-9]{6}" value={code} onChange={(event) => setCode(event.target.value)} /></label><button className="primary-button" type="submit">Sign in</button>{message ? <p>{message}</p> : null}</form></div>}</section></main>
 }
 
 function PublicApp() {
@@ -1055,7 +1069,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
   }
 
   const update = <K extends keyof AdminConfig>(key: K, value: AdminConfig[K]) => setDraft((current) => current ? { ...current, [key]: value } : current)
-  const updateQuota = (key: keyof AdminConfig['quota'], value: string | boolean | number) => setDraft((current) => current ? { ...current, quota: { ...current.quota, [key]: value } } : current)
+  const updateQuota = (key: keyof AdminConfig['quota'], value: string | boolean | number | null) => setDraft((current) => current ? { ...current, quota: { ...current.quota, [key]: value } } : current)
   const updateRate = (key: keyof AdminConfig['rate_limit'], value: string | boolean | number) => setDraft((current) => current ? { ...current, rate_limit: { ...current.rate_limit, [key]: value } } : current)
   const updateCache = (key: keyof AdminConfig['cache'], value: string | boolean | number) => setDraft((current) => current ? { ...current, cache: { ...current.cache, [key]: value } } : current)
   const updateUserAccess = (key: keyof AdminConfig['user_access'], value: string | number) => setDraft((current) => current ? { ...current, user_access: { ...current.user_access, [key]: value } } : current)
@@ -1092,11 +1106,13 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
           {error ? <p className="form-error">{error}</p> : null}{restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
           <div className="config-fields"><label>{text.registrationMode}<select value={draft.registration.mode} onChange={(event) => updateRegistration('mode', event.target.value)}><option value="invite_only">invite_only</option><option value="domain_allowlist">domain_allowlist</option><option value="open">open</option><option value="disabled">disabled</option></select></label><label>{text.allowedDomains}<input value={draft.registration.allowed_email_domains.join(', ')} onChange={(event) => updateRegistration('allowed_email_domains', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /></label><label>{text.emailTtl}<input min="1" max="60" type="number" value={draft.registration.email_token_ttl_minutes} onChange={(event) => updateRegistration('email_token_ttl_minutes', Number(event.target.value))} /></label></div>
           <div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label className="wide-field">{text.trustedProxies}<input aria-describedby="trusted-proxies-hint" value={draft.trusted_proxies.join(', ')} onChange={(event) => update('trusted_proxies', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small id="trusted-proxies-hint">{text.trustedProxiesHint}</small></label><label>{text.baseDomain}<input value={draft.user_access.base_domain} onChange={(event) => updateUserAccess('base_domain', event.target.value)} /></label><label>{text.accessMode}<select value={draft.user_access.mode} onChange={(event) => updateUserAccess('mode', event.target.value)}><option value="public">public</option><option value="subdomain_required">subdomain_required</option></select></label><label>{text.routingLength}<input min="8" max="32" type="number" value={draft.user_access.routing_id_min_length} onChange={(event) => updateUserAccess('routing_id_min_length', Number(event.target.value))} /></label><label>{text.rotationCooldown}<input min="0" max="8760" type="number" value={draft.user_access.routing_rotation_cooldown_hours} onChange={(event) => updateUserAccess('routing_rotation_cooldown_hours', Number(event.target.value))} /></label><label>{text.quotaGb}<input min="0" type="number" value={draft.quota.monthly_gb} onChange={(event) => updateQuota('monthly_gb', Number(event.target.value))} /></label><label>{text.retentionDays}<input min="1" type="number" value={draft.quota.request_event_retention_days} onChange={(event) => updateQuota('request_event_retention_days', Number(event.target.value))} /></label><label>{text.timezone}<input value={draft.quota.timezone} onChange={(event) => updateQuota('timezone', event.target.value)} /></label><label>{text.action}<select value={draft.quota.on_exceeded} onChange={(event) => updateQuota('on_exceeded', event.target.value)}><option value="stop_proxy">stop_proxy · 503</option><option value="throttle">throttle · 429</option></select></label><label className="toggle-field"><input type="checkbox" checked={draft.quota.enabled} onChange={(event) => updateQuota('enabled', event.target.checked)} />{text.quota}</label><label className="toggle-field"><input type="checkbox" checked={draft.forward_client_authorization} onChange={(event) => update('forward_client_authorization', event.target.checked)} />{text.forwardAuth}</label><label className="toggle-field"><input type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<input min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label><label>{text.cacheDirectory}<input value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><label>{text.cacheMaxEntry}<input min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label className="toggle-field"><input type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label><label>{text.webauthnRpId}<input value={draft.webauthn.rp_id} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_id: event.target.value })} /></label><label>{text.webauthnOrigin}<input value={draft.webauthn.rp_origin} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_origin: event.target.value })} /></label><label>{text.webauthnName}<input value={draft.webauthn.rp_name} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_name: event.target.value })} /></label><label>{text.breakGlass}<input value={draft.webauthn.break_glass_username} onChange={(event) => update('webauthn', { ...draft.webauthn, break_glass_username: event.target.value })} /></label><label className="toggle-field"><input type="checkbox" checked={draft.webauthn.enabled} onChange={(event) => update('webauthn', { ...draft.webauthn, enabled: event.target.checked })} />{text.webauthnEnabled}</label><label className="toggle-field"><input type="checkbox" checked={draft.webauthn.require_passkey} onChange={(event) => update('webauthn', { ...draft.webauthn, require_passkey: event.target.checked })} />{text.requirePasskey}</label></div>
+          <div className="config-fields"><label>Default user quota (GB)<input min="0" type="number" value={draft.quota.default_user_monthly_gb ?? ''} placeholder="Unlimited" onChange={(event) => updateQuota('default_user_monthly_gb', event.target.value === '' ? null : Number(event.target.value))} /></label></div>
           <h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><input type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div>
           <h4>{text.upstreams}</h4><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : Object.entries(value).map(([target, url]) => <label key={`${key}.${target}`}><span>{key}.{target}</span><input value={url} onChange={(event) => updateAdditionalOsUpstream(target, event.target.value)} /></label>))}</div>
           {catalog ? <SourceCommandGenerator catalog={catalog} baseUrl={draft.public_base_url} text={text} /> : null}
           {draft.webauthn.enabled && 'credentials' in navigator ? <section className="administrator-management"><h4>{text.passkeys}</h4><div className="admin-account-list">{passkeys.map((passkey) => <div className="admin-account-row" key={passkey.id}><span><strong>{passkey.name}</strong><small>{passkey.last_used_at ? new Date(passkey.last_used_at * 1000).toLocaleString() : new Date(passkey.created_at * 1000).toLocaleDateString()}</small></span><button onClick={() => removePasskey(passkey)}>{text.deletePasskey}</button></div>)}</div><form className="security-form" onSubmit={registerPasskey}><label>{text.passkeyName}<input required maxLength={80} value={passkeyName} onChange={(event) => setPasskeyName(event.target.value)} /></label><button className="primary-button" disabled={passkeyBusy} type="submit"><KeyRound size={16} /> {text.addPasskey}</button></form></section> : null}
           {identity?.role === 'super_admin' ? <AdminEmailSettings /> : null}
+          {identity?.role === 'super_admin' ? <AdminBillingManagement /> : null}
           {identity?.role === 'super_admin' ? <section className="administrator-management"><h4>{text.administrators}</h4><div className="admin-account-list">{admins.map((account) => <div className="admin-account-row" key={account.username}><span><strong>{account.username}</strong><small>{account.role}</small></span><button disabled={account.username === identity.username} onClick={() => setAdministratorDisabled(account, !account.disabled)}>{account.disabled ? text.enable : text.disable}</button></div>)}</div><form className="security-form" onSubmit={createAdministrator}><label>{text.username}<input required value={newAdminUsername} onChange={(event) => setNewAdminUsername(event.target.value)} /></label><label>{text.password}<input required minLength={12} type="password" value={newAdminPassword} onChange={(event) => setNewAdminPassword(event.target.value)} /></label><label>{text.role}<select value={newAdminRole} onChange={(event) => setNewAdminRole(event.target.value)}><option value="admin">admin</option><option value="super_admin">super_admin</option></select></label><button className="primary-button" type="submit">{text.createAdministrator}</button></form></section> : null}
           <form className="security-form" onSubmit={changePassword}><div><h4><KeyRound size={14} /> {text.security}</h4><p>{text.passwordHint}</p></div><label>{text.currentPassword}<input required autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>{text.newPassword}<input required minLength={12} autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label><button className="danger-button" disabled={passwordBusy} type="submit"><KeyRound size={16} /> {text.changePassword}</button></form>
           <section className="audit-log"><h4>{'auditLog' in text ? text.auditLog : 'Audit log'}</h4>{auditLog.length ? auditLog.slice(0, 8).map((entry) => <div className="audit-row" key={`${entry.created_at}-${entry.username}-${entry.action}`}><span>{new Date(entry.created_at * 1000).toLocaleString()}</span><strong>{entry.action}</strong><small>{entry.username} / {entry.detail}</small></div>) : <p className="empty-stat">{'noAudit' in text ? text.noAudit : 'No audit entries yet.'}</p>}</section>
@@ -1190,6 +1206,73 @@ function AdminEmailSettings() {
       ))}</div>
     </section>
   )
+}
+
+type BillingGroupView = { id: number; name: string; monthly_limit_bytes: number | null; member_count: number }
+type AdminUserView = { id: number; email: string; display_name: string; disabled: boolean; routing_id: string }
+type UserBillingView = { group_id: number | null; quota_mode: 'default' | 'unlimited' | 'custom'; user_monthly_limit_bytes: number | null }
+
+function BillingGroupRow({ group, reload }: { group: BillingGroupView; reload: () => Promise<void> }) {
+  const [name, setName] = React.useState(group.name)
+  const [quota, setQuota] = React.useState(group.monthly_limit_bytes === null ? '' : String(group.monthly_limit_bytes / (1024 ** 3)))
+  const save = async () => {
+    const response = await fetch(`/admin/api/groups/${group.id}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, monthly_gb: quota === '' ? null : Number(quota) }) })
+    if (response.ok) await reload()
+  }
+  return <div className="admin-account-row"><span><strong>{group.name}</strong><small>{group.member_count} members · {group.monthly_limit_bytes === null ? 'unlimited' : byteLabel(group.monthly_limit_bytes)}</small></span><span><input aria-label={`${group.name} name`} value={name} onChange={(event) => setName(event.target.value)} /><input aria-label={`${group.name} quota`} min="0" type="number" placeholder="Unlimited GB" value={quota} onChange={(event) => setQuota(event.target.value)} /><button onClick={save}>Save</button></span></div>
+}
+
+function BillingUserRow({ initialUser, groups }: { initialUser: AdminUserView; groups: BillingGroupView[] }) {
+  const [user, setUser] = React.useState(initialUser)
+  const [billing, setBilling] = React.useState<UserBillingView | null>(null)
+  const [usage, setUsage] = React.useState<UserUsage | null>(null)
+  const [customGb, setCustomGb] = React.useState('')
+  const load = React.useCallback(async () => {
+    const [billingResponse, usageResponse] = await Promise.all([fetch(`/admin/api/users/${user.id}/billing`), fetch(`/admin/api/users/${user.id}/usage`)])
+    if (billingResponse.ok) {
+      const value = await billingResponse.json() as UserBillingView
+      setBilling(value)
+      setCustomGb(value.user_monthly_limit_bytes === null ? '' : String(value.user_monthly_limit_bytes / (1024 ** 3)))
+    }
+    if (usageResponse.ok) setUsage(await usageResponse.json() as UserUsage)
+  }, [user.id])
+  React.useEffect(() => { load().catch(() => undefined) }, [load])
+  const save = async () => {
+    if (!billing) return
+    await fetch(`/admin/api/users/${user.id}/billing`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ group_id: billing.group_id, quota_mode: billing.quota_mode, monthly_gb: billing.quota_mode === 'custom' ? Number(customGb) : null }) })
+    await load()
+  }
+  const toggle = async () => {
+    const response = await fetch(`/admin/api/users/${user.id}/status`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ disabled: !user.disabled }) })
+    if (response.ok) setUser({ ...user, disabled: !user.disabled })
+  }
+  const rotate = async () => { await fetch(`/admin/api/users/${user.id}/routing-id/rotate`, { method: 'POST' }) }
+  return <div className="admin-account-row"><span><strong>{user.display_name}</strong><small>{user.email} · {user.disabled ? 'disabled' : user.routing_id}{usage ? ` · ${byteLabel(usage.response_bytes)} this month` : ''}</small></span>{billing ? <span><select aria-label={`${user.email} billing group`} value={billing.group_id ?? ''} onChange={(event) => setBilling({ ...billing, group_id: event.target.value ? Number(event.target.value) : null })}><option value="">No billing group</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><select aria-label={`${user.email} quota mode`} value={billing.quota_mode} onChange={(event) => setBilling({ ...billing, quota_mode: event.target.value as UserBillingView['quota_mode'] })}><option value="default">Default quota</option><option value="unlimited">Unlimited</option><option value="custom">Custom</option></select>{billing.quota_mode === 'custom' ? <input required aria-label={`${user.email} custom quota`} min="0" type="number" value={customGb} onChange={(event) => setCustomGb(event.target.value)} /> : null}<button disabled={billing.quota_mode === 'custom' && customGb === ''} onClick={save}>Save billing</button><button onClick={rotate}>Rotate address</button><button onClick={toggle}>{user.disabled ? 'Enable' : 'Disable'}</button></span> : null}</div>
+}
+
+function AdminBillingManagement() {
+  const [groups, setGroups] = React.useState<BillingGroupView[]>([])
+  const [users, setUsers] = React.useState<AdminUserView[]>([])
+  const [name, setName] = React.useState('')
+  const [quota, setQuota] = React.useState('')
+  const load = React.useCallback(async () => {
+    const [groupResponse, userResponse] = await Promise.all([fetch('/admin/api/groups'), fetch('/admin/api/users')])
+    if (groupResponse.ok) {
+      const value = await groupResponse.json() as unknown
+      if (Array.isArray(value)) setGroups(value as BillingGroupView[])
+    }
+    if (userResponse.ok) {
+      const value = await userResponse.json() as unknown
+      if (Array.isArray(value)) setUsers(value as AdminUserView[])
+    }
+  }, [])
+  React.useEffect(() => { load().catch(() => undefined) }, [load])
+  const create = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const response = await fetch('/admin/api/groups', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, monthly_gb: quota === '' ? null : Number(quota) }) })
+    if (response.ok) { setName(''); setQuota(''); await load() }
+  }
+  return <section className="administrator-management"><h4>Users, billing groups, and quotas</h4><form className="security-form" onSubmit={create}><label>Group name<input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label><label>Shared monthly quota (GB)<input min="0" type="number" placeholder="Unlimited" value={quota} onChange={(event) => setQuota(event.target.value)} /></label><button className="primary-button" type="submit">Create billing group</button></form><div className="admin-account-list">{groups.map((group) => <BillingGroupRow key={group.id} group={group} reload={load} />)}</div><h4>Users</h4><div className="admin-account-list">{users.map((user) => <BillingUserRow key={user.id} initialUser={user} groups={groups} />)}</div></section>
 }
 
 function ConsoleMetric({ label, value }: { label: string; value: string }) { return <div className="console-metric"><small>{label}</small><strong>{value}</strong></div> }

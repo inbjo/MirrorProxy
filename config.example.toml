@@ -85,6 +85,9 @@ monthly_gb = 500
 timezone = "local"
 on_exceeded = "stop_proxy"
 request_event_retention_days = 30
+# Omit for unlimited. Individual user overrides and billing-group limits are
+# configured from /admin.
+# default_user_monthly_gb = 100
 
 # Optional accounting-only user subdomains. Configure wildcard DNS and TLS for
 # *.mirror.example.com before setting mode to "subdomain_required".

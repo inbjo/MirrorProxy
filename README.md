@@ -852,6 +852,7 @@ MIRRORPROXY_MASTER_KEY=replace-with-the-generated-value
 MIRRORPROXY_REGISTRATION_MODE=invite_only
 MIRRORPROXY_ALLOWED_EMAIL_DOMAINS=example.com,subsidiary.example.com
 MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES=10
+MIRRORPROXY_DEFAULT_USER_MONTHLY_GB=100
 ```
 
 Configure SMTP and invitations from `/admin`. STARTTLS, SMTPS, authenticated,
@@ -866,6 +867,14 @@ Registration defaults to `invite_only`. `domain_allowlist` accepts verified
 addresses from configured domains, `open` accepts any verified address, and
 `disabled` only permits existing users to sign in. Ordinary users sign in at
 `/login` and manage or rotate their accounting-only address at `/account`.
+
+The account page also shows today's and monthly traffic, requests, errors,
+per-mirror usage, recent trends, and remaining personal and billing-group
+quota. Leave `MIRRORPROXY_DEFAULT_USER_MONTHLY_GB` empty for unlimited users.
+From `/admin`, a super administrator can create billing groups, set shared
+monthly limits, assign exactly one billing group per user, and select a default,
+custom, or unlimited personal quota. Global, group, and user capacity is
+reserved atomically in one SQLite transaction for each user-subdomain request.
 
 Administrator Passkeys are optional and use `webauthn-rs`. Configure the exact
 HTTPS admin origin and a stable RP ID before registering credentials:

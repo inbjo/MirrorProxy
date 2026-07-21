@@ -17,7 +17,7 @@ const adminConfig = {
   ...publicConfig,
   trusted_proxies: ['127.0.0.1'],
   forward_client_authorization: false,
-  quota: { ...publicConfig.quota, request_event_retention_days: 30 },
+  quota: { ...publicConfig.quota, request_event_retention_days: 30, default_user_monthly_gb: null },
   database_path: 'mirrorproxy.sqlite3',
   listen_addr: '127.0.0.1:3000',
   upstreams: { npm: 'https://registry.npmjs.org' },
@@ -247,6 +247,10 @@ test('signs in by email and rotates the accounting-only routing address', async 
       proxy_base_url: `https://${routingId}.mirror.example`,
     },
   } : { status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/api/account/usage', route => route.fulfill(signedIn ? { json: {
+    month: '2026-07', today_response_bytes: 1024, request_count: 3, response_bytes: 4096, error_count: 0,
+    quota: { limit_bytes: 1073741824, used_bytes: 4096, remaining_bytes: 1073737728 }, group: null, daily: [], targets: [],
+  } } : { status: 401, json: { error: 'unauthorized' } }))
   await page.route('**/api/auth/email/request', async route => {
     requested = route.request().postDataJSON() as Record<string, unknown>
     await route.fulfill({ status: 202 })
@@ -268,6 +272,8 @@ test('signs in by email and rotates the accounting-only routing address', async 
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect.poll(() => verified).toEqual({ email: 'person+tag@example.com', code: '123456' })
   await expect(page.getByDisplayValue('https://first-routing-id.mirror.example')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Traffic usage' })).toBeVisible()
+  await expect(page.getByText('1.0 KB', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Generate a new routing address' }).click()
   await expect(page.getByDisplayValue('https://rotated-routing-id.mirror.example')).toBeVisible()
 })
@@ -311,4 +317,37 @@ test('configures SMTP, queues a test email, and resends an invitation', async ({
   await expect.poll(() => testRecipient).toEqual({ recipient: 'ops@example.com' })
   await page.getByRole('button', { name: 'Resend' }).click()
   await expect.poll(() => resent).toBe(true)
+})
+
+test('assigns a user to a billing group with a custom quota', async ({ page }) => {
+  let billingUpdate: Record<string, unknown> | undefined
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
+  await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
+  await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
+  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/groups', route => route.fulfill({ json: [{ id: 3, name: 'Engineering', monthly_limit_bytes: 107374182400, member_count: 0 }] }))
+  await page.route('**/admin/api/users', route => route.fulfill({ json: [{ id: 7, email: 'person@example.com', display_name: 'Person', disabled: false, routing_id: 'route-id' }] }))
+  await page.route('**/admin/api/users/7/billing', async route => {
+    if (route.request().method() === 'PUT') {
+      billingUpdate = route.request().postDataJSON() as Record<string, unknown>
+      await route.fulfill({ status: 204 })
+      return
+    }
+    await route.fulfill({ json: { group_id: null, quota_mode: 'default', user_monthly_limit_bytes: null } })
+  })
+  await page.route('**/admin/api/users/7/usage', route => route.fulfill({ json: {
+    month: '2026-07', today_response_bytes: 0, request_count: 0, response_bytes: 0, error_count: 0,
+    quota: { limit_bytes: null, used_bytes: 0, remaining_bytes: null }, group: null, daily: [], targets: [],
+  } }))
+
+  await page.goto('/admin')
+  await page.getByLabel('Administrator password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByLabel('person@example.com billing group').selectOption('3')
+  await page.getByLabel('person@example.com quota mode').selectOption('custom')
+  await page.getByLabel('person@example.com custom quota').fill('25')
+  await page.getByRole('button', { name: 'Save billing' }).click()
+  await expect.poll(() => billingUpdate).toEqual({ group_id: 3, quota_mode: 'custom', monthly_gb: 25 })
 })

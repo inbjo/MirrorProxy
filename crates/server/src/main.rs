@@ -995,6 +995,19 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/admin/api/users", get(list_users).post(create_user))
         .route("/admin/api/users/{id}/status", post(update_user_status))
         .route(
+            "/admin/api/users/{id}/billing",
+            get(admin_user_billing).put(update_user_billing),
+        )
+        .route("/admin/api/users/{id}/usage", get(admin_user_usage))
+        .route(
+            "/admin/api/groups",
+            get(list_billing_groups).post(create_billing_group),
+        )
+        .route(
+            "/admin/api/groups/{id}",
+            axum::routing::put(update_billing_group),
+        )
+        .route(
             "/admin/api/users/{id}/routing-id/rotate",
             post(admin_rotate_user_routing_id),
         )
@@ -1020,6 +1033,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/api/auth/session", get(user_session))
         .route("/api/auth/logout", post(user_logout))
         .route("/api/account/profile", get(user_profile))
+        .route("/api/account/usage", get(user_usage))
         .route(
             "/api/account/routing-id/rotate",
             post(user_rotate_routing_id),
@@ -1498,59 +1512,56 @@ async fn rate_limit_middleware(
     let target_code = proxy_target_for_path(&path);
     if let Some(target_code) = target_code {
         let (day, month) = quota_period(&config.quota.timezone);
-        if config.quota.enabled && quota_exceeded_for_request(&state, &config, &month, &path).await
-        {
-            state.observability.observe_rejection("monthly_quota");
-            let (status, retry_after) = if config.quota.on_exceeded == "throttle" {
-                (
-                    StatusCode::TOO_MANY_REQUESTS,
-                    HeaderValue::from_static("60"),
+        let user_context = request.extensions().get::<UserRoutingContext>().cloned();
+        let global_limit = config
+            .quota
+            .enabled
+            .then(|| config.quota.monthly_gb.saturating_mul(1024 * 1024 * 1024));
+        let default_user_limit = config
+            .quota
+            .default_user_monthly_gb
+            .map(|gb| gb.saturating_mul(1024 * 1024 * 1024));
+        let (reserved_bytes, group_id) = if let Some(context) = &user_context {
+            match state
+                .database
+                .try_reserve_hierarchical_bytes(
+                    &month,
+                    context.user_id,
+                    global_limit,
+                    default_user_limit,
+                    QUOTA_RESERVATION_BYTES,
                 )
-            } else {
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    HeaderValue::from_static("3600"),
-                )
-            };
-            return (
-                status,
-                [(header::RETRY_AFTER, retry_after)],
-                Json(serde_json::json!({
-                    "error": "monthly traffic quota exceeded",
-                    "quota": {
-                        "monthly_gb": config.quota.monthly_gb,
-                        "timezone": config.quota.timezone,
-                        "on_exceeded": config.quota.on_exceeded
+                .await
+            {
+                Ok(database::HierarchicalReservationOutcome::Reserved { group_id }) => {
+                    (QUOTA_RESERVATION_BYTES, group_id)
+                }
+                Ok(database::HierarchicalReservationOutcome::Exceeded { scope }) => {
+                    if scope == "global" {
+                        let _ = state.database.mark_month_quota_exceeded(&month).await;
                     }
-                })),
-            )
-                .into_response();
-        }
-
-        let reserved_bytes = if config.quota.enabled {
-            let limit = config.quota.monthly_gb.saturating_mul(1024 * 1024 * 1024);
+                    return quota_rejection(&state, &config, scope);
+                }
+                Err(error) => {
+                    tracing::error!(%error, "hierarchical quota reservation failed");
+                    return quota_rejection(&state, &config, "internal");
+                }
+            }
+        } else if let Some(limit) = global_limit {
             match state
                 .database
                 .try_reserve_monthly_bytes(&month, limit, QUOTA_RESERVATION_BYTES)
                 .await
             {
-                Ok(true) => QUOTA_RESERVATION_BYTES,
-                Ok(false) | Err(_) => {
-                    state.observability.observe_rejection("monthly_quota");
-                    let status = if config.quota.on_exceeded == "throttle" {
-                        StatusCode::TOO_MANY_REQUESTS
-                    } else {
-                        StatusCode::SERVICE_UNAVAILABLE
-                    };
-                    return (
-                        status,
-                        Json(serde_json::json!({"error": "monthly traffic quota exceeded"})),
-                    )
-                        .into_response();
+                Ok(true) => (QUOTA_RESERVATION_BYTES, None),
+                Ok(false) => return quota_rejection(&state, &config, "global"),
+                Err(error) => {
+                    tracing::error!(%error, "global quota reservation failed");
+                    return quota_rejection(&state, &config, "internal");
                 }
             }
         } else {
-            0
+            (0, None)
         };
         let response = next.run(request).await;
         return track_proxy_response(
@@ -1563,6 +1574,8 @@ async fn rate_limit_middleware(
             method,
             path,
             reserved_bytes,
+            user_context.map(|context| context.user_id),
+            group_id,
             config.quota.request_event_retention_days,
         );
     }
@@ -1570,31 +1583,28 @@ async fn rate_limit_middleware(
     next.run(request).await
 }
 
-async fn quota_exceeded_for_request(
-    state: &AppState,
-    config: &Config,
-    month: &str,
-    path: &str,
-) -> bool {
-    if !config.quota.enabled || !is_proxy_path(path) {
-        return false;
-    }
-    let limit = config.quota.monthly_gb.saturating_mul(1024 * 1024 * 1024);
-    match state.database.monthly_response_bytes(month).await {
-        Ok(used) => {
-            let exceeded = used >= limit;
-            if exceeded {
-                if let Err(error) = state.database.mark_month_quota_exceeded(month).await {
-                    tracing::error!(%error, "failed to mark monthly quota as exceeded");
-                }
-            }
-            exceeded
-        }
-        Err(error) => {
-            tracing::error!(%error, "failed to read monthly quota usage");
-            true
-        }
-    }
+fn quota_rejection(state: &AppState, config: &Config, scope: &str) -> Response {
+    state.observability.observe_rejection("monthly_quota");
+    let (status, retry_after) = if config.quota.on_exceeded == "throttle" {
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            HeaderValue::from_static("60"),
+        )
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            HeaderValue::from_static("3600"),
+        )
+    };
+    (
+        status,
+        [(header::RETRY_AFTER, retry_after)],
+        Json(serde_json::json!({
+            "error": "monthly traffic quota exceeded",
+            "scope": scope,
+        })),
+    )
+        .into_response()
 }
 
 fn quota_period(timezone: &str) -> (String, String) {
@@ -1698,6 +1708,8 @@ fn track_proxy_response(
     method: String,
     path: String,
     reserved_bytes: u64,
+    user_id: Option<i64>,
+    group_id: Option<i64>,
     request_event_retention_days: u32,
 ) -> Response {
     let status_code = response.status().as_u16();
@@ -1716,6 +1728,8 @@ fn track_proxy_response(
             method,
             path,
             reserved_bytes,
+            user_id,
+            group_id,
             request_event_retention_days,
         ),
         move |(
@@ -1730,6 +1744,8 @@ fn track_proxy_response(
             method,
             path,
             reserved_bytes,
+            user_id,
+            group_id,
             request_event_retention_days,
         )| async move {
             match futures_util::StreamExt::next(&mut stream).await {
@@ -1747,6 +1763,8 @@ fn track_proxy_response(
                         method,
                         path,
                         reserved_bytes,
+                        user_id,
+                        group_id,
                         request_event_retention_days,
                     ),
                 )),
@@ -1762,6 +1780,8 @@ fn track_proxy_response(
                             response_bytes,
                             stream_error: true,
                             reserved_bytes,
+                            user_id,
+                            group_id,
                             request_event_retention_days,
                         })
                         .await
@@ -1788,6 +1808,8 @@ fn track_proxy_response(
                             method,
                             path,
                             reserved_bytes,
+                            user_id,
+                            group_id,
                             request_event_retention_days,
                         ),
                     ))
@@ -1807,6 +1829,8 @@ fn track_proxy_response(
                             response_bytes,
                             stream_error,
                             reserved_bytes,
+                            user_id,
+                            group_id,
                             request_event_retention_days,
                         })
                         .await
@@ -3097,12 +3121,230 @@ async fn admin_rotate_user_routing_id(
     )
 }
 
+#[derive(Deserialize)]
+struct BillingGroupRequest {
+    name: String,
+    monthly_gb: Option<u64>,
+}
+
+async fn list_billing_groups(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    if let Err(response) = require_super_admin(&headers, &state).await {
+        return response;
+    }
+    match state.database.list_billing_groups().await {
+        Ok(groups) => Json(groups).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to list billing groups");
+            internal_error_response()
+        }
+    }
+}
+
+async fn create_billing_group(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<BillingGroupRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    let name = request.name.trim();
+    if name.is_empty() || name.chars().count() > 80 {
+        return bad_request_response("group name must contain 1 to 80 characters".to_string());
+    }
+    let limit = match quota_gb_to_bytes(request.monthly_gb) {
+        Ok(limit) => limit,
+        Err(message) => return bad_request_response(message.to_string()),
+    };
+    match state
+        .database
+        .create_billing_group(&identity.username, name, limit)
+        .await
+    {
+        Ok(Some(group)) => (StatusCode::CREATED, Json(group)).into_response(),
+        Ok(None) => conflict_response("billing group name already exists"),
+        Err(error) => {
+            tracing::error!(%error, "failed to create billing group");
+            internal_error_response()
+        }
+    }
+}
+
+async fn update_billing_group(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+    Json(request): Json<BillingGroupRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    let name = request.name.trim();
+    if name.is_empty() || name.chars().count() > 80 {
+        return bad_request_response("group name must contain 1 to 80 characters".to_string());
+    }
+    let limit = match quota_gb_to_bytes(request.monthly_gb) {
+        Ok(limit) => limit,
+        Err(message) => return bad_request_response(message.to_string()),
+    };
+    match state
+        .database
+        .update_billing_group(&identity.username, id, name, limit)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "billing group not found"})),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to update billing group");
+            internal_error_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct UserBillingRequest {
+    group_id: Option<i64>,
+    quota_mode: String,
+    monthly_gb: Option<u64>,
+}
+
+async fn admin_user_billing(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+) -> Response {
+    if let Err(response) = require_super_admin(&headers, &state).await {
+        return response;
+    }
+    match state.database.user_billing_profile(id).await {
+        Ok(Some(profile)) => Json(profile).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "user not found"})),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to load user billing profile");
+            internal_error_response()
+        }
+    }
+}
+
+async fn update_user_billing(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+    Json(request): Json<UserBillingRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    if !matches!(
+        request.quota_mode.as_str(),
+        "default" | "unlimited" | "custom"
+    ) || (request.quota_mode == "custom" && request.monthly_gb.is_none())
+        || (request.quota_mode != "custom" && request.monthly_gb.is_some())
+    {
+        return bad_request_response("quota_mode and monthly_gb are inconsistent".to_string());
+    }
+    let limit = match quota_gb_to_bytes(request.monthly_gb) {
+        Ok(limit) => limit,
+        Err(message) => return bad_request_response(message.to_string()),
+    };
+    match state
+        .database
+        .set_user_billing_profile(
+            &identity.username,
+            id,
+            request.group_id,
+            &request.quota_mode,
+            limit,
+        )
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "user or billing group not found"})),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to update user billing profile");
+            internal_error_response()
+        }
+    }
+}
+
+fn quota_gb_to_bytes(value: Option<u64>) -> Result<Option<u64>, &'static str> {
+    value
+        .map(|gb| {
+            gb.checked_mul(1024 * 1024 * 1024)
+                .ok_or("monthly quota is too large")
+        })
+        .transpose()
+}
+
+async fn admin_user_usage(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+) -> Response {
+    if let Err(response) = require_super_admin(&headers, &state).await {
+        return response;
+    }
+    user_usage_response(&state, id).await
+}
+
 async fn user_session(headers: HeaderMap, State(state): State<AppState>) -> Response {
     match authenticated_user(&headers, &state).await {
         Ok(Some(identity)) => Json(identity).into_response(),
         Ok(None) => unauthorized_response(),
         Err(error) => {
             tracing::error!(%error, "user session lookup failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn user_usage(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let identity = match authenticated_user(&headers, &state).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "user usage authorization failed");
+            return internal_error_response();
+        }
+    };
+    user_usage_response(&state, identity.user_id).await
+}
+
+async fn user_usage_response(state: &AppState, user_id: i64) -> Response {
+    let config = state.config();
+    let (day, month) = quota_period(&config.quota.timezone);
+    let default_limit = config
+        .quota
+        .default_user_monthly_gb
+        .map(|gb| gb.saturating_mul(1024 * 1024 * 1024));
+    match state
+        .database
+        .user_usage_overview(user_id, &day, &month, default_limit)
+        .await
+    {
+        Ok(Some(overview)) => Json(overview).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "user not found"})),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to load user traffic usage");
             internal_error_response()
         }
     }
@@ -4476,6 +4718,8 @@ on_exceeded = "stop_proxy"
                 response_bytes: 256,
                 stream_error: false,
                 reserved_bytes: 0,
+                user_id: None,
+                group_id: None,
                 request_event_retention_days: 30,
             })
             .await
@@ -5053,6 +5297,8 @@ on_exceeded = "stop_proxy"
             "GET".to_string(),
             "/npm/react".to_string(),
             0,
+            None,
+            None,
             30,
         );
 
@@ -5060,7 +5306,14 @@ on_exceeded = "stop_proxy"
             to_bytes(response.into_body(), usize::MAX).await.unwrap(),
             "hello"
         );
-        assert_eq!(database.monthly_response_bytes("2026-07").await.unwrap(), 5);
+        assert_eq!(
+            database
+                .traffic_overview("2026-07")
+                .await
+                .unwrap()
+                .response_bytes,
+            5
+        );
         let (_, metrics) = observability.encode().unwrap();
         assert!(String::from_utf8(metrics)
             .unwrap()
@@ -5114,6 +5367,65 @@ on_exceeded = "stop_proxy"
         );
         let body = to_bytes(proxy.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("monthly traffic quota exceeded"));
+    }
+
+    #[tokio::test]
+    async fn user_subdomain_enforces_personal_quota_when_global_quota_is_disabled() {
+        let (mut state, _) = admin_test_state().await;
+        let user = state
+            .database
+            .create_user("admin", "quota@example.com", "Quota User", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        state.config = Arc::new(RwLock::new(Config {
+            public_base_url: "https://mirror.example.com".to_string(),
+            user_access: config::UserAccessConfig {
+                base_domain: "mirror.example.com".to_string(),
+                ..config::UserAccessConfig::default()
+            },
+            quota: config::QuotaConfig {
+                default_user_monthly_gb: Some(0),
+                ..config::QuotaConfig::default()
+            },
+            ..Config::default()
+        }));
+        let app = Router::new()
+            .route("/npm/{*path}", get(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                rate_limit_middleware,
+            ))
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                user_routing_middleware,
+            ))
+            .with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/npm/react")
+                    .header(
+                        header::HOST,
+                        format!("{}.mirror.example.com", user.routing_id),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["scope"],
+            "user"
+        );
     }
 
     #[tokio::test]
