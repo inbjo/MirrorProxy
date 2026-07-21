@@ -27,6 +27,9 @@ opentelemetry-otlp = { version = "0.32", default-features = false, features = ["
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["rt-tokio", "trace"] }
 oauth2 = "5"
 openidconnect = "4"
+# webauthn-rs-core currently uses OpenSSL even when attestation is disabled.
+# Build it from source so MUSL release artifacts do not require a target sysroot.
+openssl-sys = { version = "0.9", features = ["vendored"] }
 prometheus = "0.14"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "gzip", "brotli", "deflate", "json", "socks"] }
 rand = "0.8"
@@ -44,7 +47,7 @@ tracing-opentelemetry = { version = "0.33", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
-webauthn-rs = { version = "0.5.5", features = ["danger-allow-state-serialisation"] }
+webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
