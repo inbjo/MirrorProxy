@@ -251,6 +251,8 @@ test('signs in by email and rotates the accounting-only routing address', async 
     month: '2026-07', today_response_bytes: 1024, request_count: 3, response_bytes: 4096, error_count: 0,
     quota: { limit_bytes: 1073741824, used_bytes: 4096, remaining_bytes: 1073737728 }, group: null, daily: [], targets: [],
   } } : { status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/api/account/providers', route => route.fulfill(signedIn ? { json: [] } : { status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/api/auth/providers', route => route.fulfill({ json: [] }))
   await page.route('**/api/auth/email/request', async route => {
     requested = route.request().postDataJSON() as Record<string, unknown>
     await route.fulfill({ status: 202 })
@@ -271,11 +273,11 @@ test('signs in by email and rotates the accounting-only routing address', async 
   await page.getByLabel('Six-digit code').fill('123456')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect.poll(() => verified).toEqual({ email: 'person+tag@example.com', code: '123456' })
-  await expect(page.getByDisplayValue('https://first-routing-id.mirror.example')).toBeVisible()
+  await expect(page.locator('input[readonly]')).toHaveValue('https://first-routing-id.mirror.example')
   await expect(page.getByRole('heading', { name: 'Traffic usage' })).toBeVisible()
   await expect(page.getByText('1.0 KB', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Generate a new routing address' }).click()
-  await expect(page.getByDisplayValue('https://rotated-routing-id.mirror.example')).toBeVisible()
+  await expect(page.locator('input[readonly]')).toHaveValue('https://rotated-routing-id.mirror.example')
 })
 
 test('configures SMTP, queues a test email, and resends an invitation', async ({ page }) => {
@@ -350,4 +352,43 @@ test('assigns a user to a billing group with a custom quota', async ({ page }) =
   await page.getByLabel('person@example.com custom quota').fill('25')
   await page.getByRole('button', { name: 'Save billing' }).click()
   await expect.poll(() => billingUpdate).toEqual({ group_id: 3, quota_mode: 'custom', monthly_gb: 25 })
+})
+
+test('offers OAuth login and preserves the invitation in the authorization URL', async ({ page }) => {
+  await page.route('**/api/account/profile', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/api/account/usage', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/api/account/providers', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/api/auth/providers', route => route.fulfill({ json: [{ slug: 'github', display_name: 'GitHub', kind: 'oauth2' }] }))
+
+  await page.goto('/login?invitation=invite-secret')
+  const github = page.getByRole('link', { name: 'Continue with GitHub' })
+  await expect(github).toBeVisible()
+  await expect(github).toHaveAttribute('href', '/api/auth/github/start?invitation=invite-secret')
+})
+
+test('configures an OpenID Connect provider without exposing its saved secret', async ({ page }) => {
+  let providerUpdate: Record<string, unknown> | undefined
+  const templates = [{ preset: 'google', display_name: 'Google', kind: 'oidc', issuer_url: 'https://accounts.google.com', authorization_url: null, token_url: null, userinfo_url: null, emails_url: null, scopes: ['openid', 'email', 'profile'] }]
+  const providers = [{ id: 4, slug: 'google', display_name: 'Google', kind: 'oidc', preset: 'google', enabled: true, client_id: 'client-id', has_client_secret: true, issuer_url: 'https://accounts.google.com', authorization_url: null, token_url: null, userinfo_url: null, emails_url: null, scopes: ['openid', 'email', 'profile'], subject_field: 'id', email_field: 'email', email_verified_field: null, display_name_field: 'name', allow_registration: true, auto_link_by_email: false }]
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
+  await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
+  await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
+  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/auth-providers/4', async route => {
+    providerUpdate = route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ json: { id: 4 } })
+  })
+  await page.route('**/admin/api/auth-providers', route => route.fulfill({ json: { providers, templates } }))
+
+  await page.goto('/admin')
+  await page.getByLabel('Administrator password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByRole('button', { name: 'Edit' }).click()
+  await expect(page.getByLabel('Client secret')).toHaveValue('')
+  await page.getByLabel('Button label').fill('Company Google')
+  await page.getByRole('button', { name: 'Update provider' }).click()
+  await expect.poll(() => providerUpdate?.display_name).toBe('Company Google')
+  await expect.poll(() => providerUpdate?.client_secret).toBeNull()
 })

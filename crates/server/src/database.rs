@@ -154,6 +154,60 @@ pub struct UserSession {
     pub identity: UserIdentity,
 }
 
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct AuthProvider {
+    pub id: i64,
+    pub slug: String,
+    pub display_name: String,
+    pub kind: String,
+    pub preset: String,
+    pub enabled: bool,
+    pub client_id: String,
+    #[serde(skip_serializing)]
+    pub encrypted_client_secret: Option<String>,
+    pub issuer_url: Option<String>,
+    pub authorization_url: Option<String>,
+    pub token_url: Option<String>,
+    pub userinfo_url: Option<String>,
+    pub emails_url: Option<String>,
+    pub scopes: Vec<String>,
+    pub subject_field: String,
+    pub email_field: String,
+    pub email_verified_field: Option<String>,
+    pub display_name_field: String,
+    pub allow_registration: bool,
+    pub auto_link_by_email: bool,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct ExternalUserIdentity {
+    pub id: i64,
+    pub provider_slug: String,
+    pub provider_name: String,
+    pub provider_subject: String,
+    pub email: Option<String>,
+    pub email_verified: bool,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct StoredAuthFlow {
+    pub provider_id: i64,
+    pub encrypted_payload: String,
+    pub mode: String,
+    pub user_id: Option<i64>,
+}
+
+pub struct ExternalRegistration<'a> {
+    pub actor: &'a str,
+    pub email: &'a str,
+    pub display_name: &'a str,
+    pub routing_min_length: u8,
+    pub provider_slug: &'a str,
+    pub provider_subject: &'a str,
+    pub invitation_id: Option<i64>,
+}
+
 pub struct ProxyTrafficRecord<'a> {
     pub day: &'a str,
     pub month: &'a str,
@@ -1072,6 +1126,80 @@ impl Database {
         }))
     }
 
+    pub async fn create_user_with_external_identity(
+        &self,
+        registration: ExternalRegistration<'_>,
+    ) -> anyhow::Result<Option<UserAccount>> {
+        let email = normalize_email(registration.email);
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let insert = sqlx::query("INSERT OR IGNORE INTO users (email, display_name, disabled, created_at, updated_at) VALUES (?, ?, 0, ?, ?)")
+            .bind(&email)
+            .bind(registration.display_name)
+            .bind(now)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await?;
+        if insert.rows_affected() == 0 {
+            return Ok(None);
+        }
+        let user_id = insert.last_insert_rowid();
+        let routing_id = insert_unique_routing_id(
+            &mut transaction,
+            user_id,
+            registration.routing_min_length,
+            now,
+        )
+        .await?;
+        sqlx::query("INSERT INTO user_identities (user_id, provider_id, provider_subject, email, email_verified, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)")
+            .bind(user_id)
+            .bind(registration.provider_slug)
+            .bind(registration.provider_subject)
+            .bind(&email)
+            .bind(now)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await?;
+        if let Some(invitation_id) = registration.invitation_id {
+            let accepted = sqlx::query("UPDATE email_invitations SET status = 'accepted', accepted_at = ? WHERE id = ? AND email = ? AND status = 'pending' AND expires_at > ?")
+                .bind(now)
+                .bind(invitation_id)
+                .bind(&email)
+                .bind(now)
+                .execute(&mut *transaction)
+                .await?;
+            if accepted.rows_affected() != 1 {
+                anyhow::bail!("email invitation is no longer valid");
+            }
+        }
+        for (action, detail) in [
+            ("user_created", format!("user_id={user_id}")),
+            (
+                "user_identity_bound",
+                format!("user_id={user_id}; provider={}", registration.provider_slug),
+            ),
+        ] {
+            sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, ?, ?)")
+                .bind(now)
+                .bind(registration.actor)
+                .bind(action)
+                .bind(detail)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+        Ok(Some(UserAccount {
+            id: user_id,
+            email,
+            display_name: registration.display_name.to_string(),
+            disabled: false,
+            routing_id,
+            routing_rotated_at: now,
+            created_at: now,
+            updated_at: now,
+        }))
+    }
+
     pub async fn list_users(&self) -> anyhow::Result<Vec<UserAccount>> {
         sqlx::query(
             "SELECT u.id, u.email, u.display_name, u.disabled, u.created_at, u.updated_at, r.routing_id, r.created_at AS routing_rotated_at FROM users u JOIN user_routing_ids r ON r.user_id = u.id AND r.active = 1 WHERE u.deleted_at IS NULL ORDER BY u.id",
@@ -1287,6 +1415,222 @@ impl Database {
                 display_name: row.try_get("display_name")?,
             },
         }))
+    }
+
+    pub async fn audit_user_login(&self, user_id: i64, auth_method: &str) -> anyhow::Result<()> {
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'user_login_succeeded', ?)")
+            .bind(unix_timestamp())
+            .bind(format!("user:{user_id}"))
+            .bind(format!("method={auth_method}"))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_auth_providers(&self) -> anyhow::Result<Vec<AuthProvider>> {
+        sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, encrypted_client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers ORDER BY display_name")
+            .fetch_all(&self.pool).await?.into_iter().map(auth_provider_from_row).collect()
+    }
+
+    pub async fn auth_provider_by_slug(&self, slug: &str) -> anyhow::Result<Option<AuthProvider>> {
+        sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, encrypted_client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers WHERE slug = ? COLLATE NOCASE")
+            .bind(slug).fetch_optional(&self.pool).await?.map(auth_provider_from_row).transpose()
+    }
+
+    pub async fn auth_provider_by_id(&self, id: i64) -> anyhow::Result<Option<AuthProvider>> {
+        sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, encrypted_client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers WHERE id = ?")
+            .bind(id).fetch_optional(&self.pool).await?.map(auth_provider_from_row).transpose()
+    }
+
+    pub async fn save_auth_provider(
+        &self,
+        actor: &str,
+        provider: &AuthProvider,
+        preserve_secret: bool,
+    ) -> anyhow::Result<i64> {
+        let now = unix_timestamp();
+        let encrypted_secret = if preserve_secret && provider.id != 0 {
+            sqlx::query("SELECT encrypted_client_secret FROM auth_providers WHERE id = ?")
+                .bind(provider.id)
+                .fetch_optional(&self.pool)
+                .await?
+                .map(|row| row.try_get::<Option<String>, _>("encrypted_client_secret"))
+                .transpose()?
+                .flatten()
+        } else {
+            provider.encrypted_client_secret.clone()
+        };
+        let scopes = serde_json::to_string(&provider.scopes)?;
+        let mut transaction = self.pool.begin().await?;
+        let id = if provider.id == 0 {
+            sqlx::query("INSERT INTO auth_providers (slug, display_name, kind, preset, enabled, client_id, encrypted_client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(&provider.slug).bind(&provider.display_name).bind(&provider.kind).bind(&provider.preset).bind(provider.enabled).bind(&provider.client_id).bind(&encrypted_secret).bind(&provider.issuer_url).bind(&provider.authorization_url).bind(&provider.token_url).bind(&provider.userinfo_url).bind(&provider.emails_url).bind(&scopes).bind(&provider.subject_field).bind(&provider.email_field).bind(&provider.email_verified_field).bind(&provider.display_name_field).bind(provider.allow_registration).bind(provider.auto_link_by_email).bind(now).bind(now).execute(&mut *transaction).await?.last_insert_rowid()
+        } else {
+            let previous_slug: String =
+                sqlx::query_scalar("SELECT slug FROM auth_providers WHERE id = ?")
+                    .bind(provider.id)
+                    .fetch_optional(&mut *transaction)
+                    .await?
+                    .context("authentication provider not found")?;
+            let result = sqlx::query("UPDATE auth_providers SET slug=?, display_name=?, kind=?, preset=?, enabled=?, client_id=?, encrypted_client_secret=?, issuer_url=?, authorization_url=?, token_url=?, userinfo_url=?, emails_url=?, scopes_json=?, subject_field=?, email_field=?, email_verified_field=?, display_name_field=?, allow_registration=?, auto_link_by_email=?, updated_at=? WHERE id=?")
+                .bind(&provider.slug).bind(&provider.display_name).bind(&provider.kind).bind(&provider.preset).bind(provider.enabled).bind(&provider.client_id).bind(&encrypted_secret).bind(&provider.issuer_url).bind(&provider.authorization_url).bind(&provider.token_url).bind(&provider.userinfo_url).bind(&provider.emails_url).bind(&scopes).bind(&provider.subject_field).bind(&provider.email_field).bind(&provider.email_verified_field).bind(&provider.display_name_field).bind(provider.allow_registration).bind(provider.auto_link_by_email).bind(now).bind(provider.id).execute(&mut *transaction).await?;
+            if result.rows_affected() == 0 {
+                anyhow::bail!("authentication provider not found");
+            }
+            if previous_slug != provider.slug {
+                sqlx::query("UPDATE user_identities SET provider_id = ?, updated_at = ? WHERE provider_id = ? COLLATE NOCASE")
+                    .bind(&provider.slug)
+                    .bind(now)
+                    .bind(previous_slug)
+                    .execute(&mut *transaction)
+                    .await?;
+            }
+            provider.id
+        };
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'auth_provider_saved', ?)")
+            .bind(now).bind(actor).bind(format!("provider_id={id}")).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(id)
+    }
+
+    pub async fn delete_auth_provider(&self, actor: &str, id: i64) -> anyhow::Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query("DELETE FROM auth_providers WHERE id = ? AND NOT EXISTS (SELECT 1 FROM user_identities WHERE provider_id = auth_providers.slug COLLATE NOCASE)")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'auth_provider_deleted', ?)")
+            .bind(unix_timestamp()).bind(actor).bind(format!("provider_id={id}")).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn auth_provider_identity_count(&self, id: i64) -> anyhow::Result<u64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_identities i JOIN auth_providers p ON p.slug = i.provider_id COLLATE NOCASE WHERE p.id = ?")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count as u64)
+    }
+
+    pub async fn store_user_auth_flow(
+        &self,
+        state: &str,
+        provider_id: i64,
+        encrypted_payload: &str,
+        mode: &str,
+        user_id: Option<i64>,
+        expires_at: i64,
+    ) -> anyhow::Result<()> {
+        let now = unix_timestamp();
+        sqlx::query("DELETE FROM user_auth_flows WHERE expires_at <= ? OR used_at IS NOT NULL")
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("INSERT INTO user_auth_flows (state_hash, provider_id, encrypted_payload, mode, user_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind(hash_token(state)).bind(provider_id).bind(encrypted_payload).bind(mode).bind(user_id).bind(expires_at).bind(now).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn take_user_auth_flow(&self, state: &str) -> anyhow::Result<Option<StoredAuthFlow>> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query("SELECT provider_id, encrypted_payload, mode, user_id FROM user_auth_flows WHERE state_hash = ? AND expires_at > ? AND used_at IS NULL")
+            .bind(hash_token(state)).bind(now).fetch_optional(&mut *transaction).await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let updated = sqlx::query(
+            "UPDATE user_auth_flows SET used_at = ? WHERE state_hash = ? AND used_at IS NULL",
+        )
+        .bind(now)
+        .bind(hash_token(state))
+        .execute(&mut *transaction)
+        .await?;
+        if updated.rows_affected() != 1 {
+            return Ok(None);
+        }
+        transaction.commit().await?;
+        Ok(Some(StoredAuthFlow {
+            provider_id: row.try_get("provider_id")?,
+            encrypted_payload: row.try_get("encrypted_payload")?,
+            mode: row.try_get("mode")?,
+            user_id: row.try_get("user_id")?,
+        }))
+    }
+
+    pub async fn user_by_external_identity(
+        &self,
+        provider_slug: &str,
+        subject: &str,
+    ) -> anyhow::Result<Option<UserAccount>> {
+        sqlx::query("SELECT u.id, u.email, u.display_name, u.disabled, u.created_at, u.updated_at, r.routing_id, r.created_at AS routing_rotated_at FROM user_identities i JOIN users u ON u.id = i.user_id JOIN user_routing_ids r ON r.user_id = u.id AND r.active = 1 WHERE i.provider_id = ? COLLATE NOCASE AND i.provider_subject = ? AND u.deleted_at IS NULL")
+            .bind(provider_slug).bind(subject).fetch_optional(&self.pool).await?.map(user_account_from_row).transpose().map_err(Into::into)
+    }
+
+    pub async fn bind_external_identity(
+        &self,
+        actor: &str,
+        user_id: i64,
+        provider_slug: &str,
+        subject: &str,
+        email: Option<&str>,
+        email_verified: bool,
+    ) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query("INSERT OR IGNORE INTO user_identities (user_id, provider_id, provider_subject, email, email_verified, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind(user_id).bind(provider_slug).bind(subject).bind(email.map(normalize_email)).bind(email_verified).bind(now).bind(now).execute(&mut *transaction).await?;
+        if result.rows_affected() == 0 {
+            let owner = sqlx::query("SELECT user_id FROM user_identities WHERE provider_id = ? COLLATE NOCASE AND provider_subject = ?")
+                .bind(provider_slug).bind(subject).fetch_one(&mut *transaction).await?.try_get::<i64, _>("user_id")?;
+            return Ok(owner == user_id);
+        }
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'user_identity_bound', ?)")
+            .bind(now).bind(actor).bind(format!("user_id={user_id}; provider={provider_slug}")).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn list_external_identities(
+        &self,
+        user_id: i64,
+    ) -> anyhow::Result<Vec<ExternalUserIdentity>> {
+        sqlx::query("SELECT i.id, i.provider_id, COALESCE(p.display_name, i.provider_id) AS provider_name, i.provider_subject, i.email, i.email_verified, i.created_at FROM user_identities i LEFT JOIN auth_providers p ON p.slug = i.provider_id COLLATE NOCASE WHERE i.user_id = ? ORDER BY i.created_at")
+            .bind(user_id).fetch_all(&self.pool).await?.into_iter().map(|row| Ok::<_, sqlx::Error>(ExternalUserIdentity { id: row.try_get("id")?, provider_slug: row.try_get("provider_id")?, provider_name: row.try_get("provider_name")?, provider_subject: row.try_get("provider_subject")?, email: row.try_get("email")?, email_verified: row.try_get("email_verified")?, created_at: row.try_get("created_at")? })).collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub async fn delete_external_identity(
+        &self,
+        actor: &str,
+        user_id: i64,
+        identity_id: i64,
+    ) -> anyhow::Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query("DELETE FROM user_identities WHERE id = ? AND user_id = ?")
+            .bind(identity_id)
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'user_identity_unbound', ?)")
+            .bind(unix_timestamp()).bind(actor).bind(format!("user_id={user_id}; identity_id={identity_id}")).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn external_identity_count(&self, user_id: i64) -> anyhow::Result<u64> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM user_identities WHERE user_id = ?")
+                .bind(user_id)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(count as u64)
     }
 
     pub async fn smtp_settings(&self) -> anyhow::Result<Option<SmtpSettings>> {
@@ -2198,6 +2542,32 @@ fn normalize_email(email: &str) -> String {
     email.trim().to_ascii_lowercase()
 }
 
+fn auth_provider_from_row(row: SqliteRow) -> anyhow::Result<AuthProvider> {
+    let scopes_json: String = row.try_get("scopes_json")?;
+    Ok(AuthProvider {
+        id: row.try_get("id")?,
+        slug: row.try_get("slug")?,
+        display_name: row.try_get("display_name")?,
+        kind: row.try_get("kind")?,
+        preset: row.try_get("preset")?,
+        enabled: row.try_get("enabled")?,
+        client_id: row.try_get("client_id")?,
+        encrypted_client_secret: row.try_get("encrypted_client_secret")?,
+        issuer_url: row.try_get("issuer_url")?,
+        authorization_url: row.try_get("authorization_url")?,
+        token_url: row.try_get("token_url")?,
+        userinfo_url: row.try_get("userinfo_url")?,
+        emails_url: row.try_get("emails_url")?,
+        scopes: serde_json::from_str(&scopes_json).context("stored provider scopes are invalid")?,
+        subject_field: row.try_get("subject_field")?,
+        email_field: row.try_get("email_field")?,
+        email_verified_field: row.try_get("email_verified_field")?,
+        display_name_field: row.try_get("display_name_field")?,
+        allow_registration: row.try_get("allow_registration")?,
+        auto_link_by_email: row.try_get("auto_link_by_email")?,
+    })
+}
+
 fn user_account_from_row(row: SqliteRow) -> Result<UserAccount, sqlx::Error> {
     Ok(UserAccount {
         id: row.try_get("id")?,
@@ -2287,6 +2657,8 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS email_login_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, code_hash TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, invitation_id INTEGER, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL, FOREIGN KEY(invitation_id) REFERENCES email_invitations(id) ON DELETE SET NULL)",
     "CREATE TABLE IF NOT EXISTS email_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT NOT NULL, subject TEXT NOT NULL, encrypted_body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, last_error TEXT, created_at INTEGER NOT NULL, sent_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS email_rate_limits (limit_key TEXT PRIMARY KEY, window_start INTEGER NOT NULL, request_count INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS auth_providers (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL UNIQUE COLLATE NOCASE, display_name TEXT NOT NULL, kind TEXT NOT NULL, preset TEXT NOT NULL DEFAULT 'custom', enabled INTEGER NOT NULL DEFAULT 0, client_id TEXT NOT NULL, encrypted_client_secret TEXT, issuer_url TEXT, authorization_url TEXT, token_url TEXT, userinfo_url TEXT, emails_url TEXT, scopes_json TEXT NOT NULL, subject_field TEXT NOT NULL DEFAULT 'id', email_field TEXT NOT NULL DEFAULT 'email', email_verified_field TEXT, display_name_field TEXT NOT NULL DEFAULT 'name', allow_registration INTEGER NOT NULL DEFAULT 0, auto_link_by_email INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS user_auth_flows (state_hash TEXT PRIMARY KEY, provider_id INTEGER NOT NULL, encrypted_payload TEXT NOT NULL, mode TEXT NOT NULL, user_id INTEGER, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL, FOREIGN KEY(provider_id) REFERENCES auth_providers(id) ON DELETE CASCADE, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS proxy_targets (code TEXT PRIMARY KEY, enabled INTEGER NOT NULL, upstream_url TEXT NOT NULL, route_prefix TEXT NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS traffic_daily (day TEXT NOT NULL, target_code TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, target_code))",
     "CREATE TABLE IF NOT EXISTS traffic_monthly (month TEXT PRIMARY KEY, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, quota_exceeded INTEGER NOT NULL DEFAULT 0)",
@@ -2302,6 +2674,7 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS email_invitations_email_idx ON email_invitations(email, status)",
     "CREATE INDEX IF NOT EXISTS email_login_tokens_email_idx ON email_login_tokens(email, expires_at)",
     "CREATE INDEX IF NOT EXISTS email_outbox_pending_idx ON email_outbox(status, next_attempt_at)",
+    "CREATE INDEX IF NOT EXISTS user_auth_flows_expires_idx ON user_auth_flows(expires_at)",
     "CREATE INDEX IF NOT EXISTS request_events_created_at_idx ON request_events(created_at)",
 ];
 
@@ -2940,5 +3313,223 @@ mod tests {
         assert!(entries.iter().any(|entry| entry.username == "admin"
             && entry.action == "update runtime configuration"
             && entry.detail == "runtime_config"));
+    }
+
+    #[tokio::test]
+    async fn stores_provider_secrets_and_preserves_them_on_update() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let mut provider = test_auth_provider("github", "encrypted-secret");
+        let id = database
+            .save_auth_provider("admin", &provider, false)
+            .await
+            .unwrap();
+        provider.id = id;
+        provider.display_name = "GitHub Enterprise".to_string();
+        provider.encrypted_client_secret = None;
+        database
+            .save_auth_provider("admin", &provider, true)
+            .await
+            .unwrap();
+
+        let stored = database.auth_provider_by_id(id).await.unwrap().unwrap();
+        assert_eq!(stored.display_name, "GitHub Enterprise");
+        assert_eq!(
+            stored.encrypted_client_secret.as_deref(),
+            Some("encrypted-secret")
+        );
+        let serialized = serde_json::to_string(&stored).unwrap();
+        assert!(!serialized.contains("encrypted-secret"));
+    }
+
+    #[tokio::test]
+    async fn authentication_flows_are_hashed_and_consumed_once() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let provider_id = database
+            .save_auth_provider("admin", &test_auth_provider("github", "secret"), false)
+            .await
+            .unwrap();
+        database
+            .store_user_auth_flow(
+                "raw-state",
+                provider_id,
+                "encrypted-flow",
+                "login",
+                None,
+                unix_timestamp() + 60,
+            )
+            .await
+            .unwrap();
+        let stored_state: String = sqlx::query_scalar("SELECT state_hash FROM user_auth_flows")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+        assert_ne!(stored_state, "raw-state");
+        assert_eq!(
+            database
+                .take_user_auth_flow("raw-state")
+                .await
+                .unwrap()
+                .unwrap()
+                .encrypted_payload,
+            "encrypted-flow"
+        );
+        assert!(database
+            .take_user_auth_flow("raw-state")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn external_identity_is_unique_and_provider_slug_changes_follow_bindings() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let first = database
+            .create_user("admin", "first@example.com", "First", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        let second = database
+            .create_user("admin", "second@example.com", "Second", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut provider = test_auth_provider("github", "secret");
+        provider.id = database
+            .save_auth_provider("admin", &provider, false)
+            .await
+            .unwrap();
+        assert!(database
+            .bind_external_identity(
+                "user",
+                first.id,
+                "github",
+                "subject-1",
+                Some("first@example.com"),
+                true,
+            )
+            .await
+            .unwrap());
+        assert!(!database
+            .bind_external_identity(
+                "user",
+                second.id,
+                "github",
+                "subject-1",
+                Some("second@example.com"),
+                true,
+            )
+            .await
+            .unwrap());
+        provider.slug = "company-github".to_string();
+        provider.encrypted_client_secret = None;
+        database
+            .save_auth_provider("admin", &provider, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            database
+                .user_by_external_identity("company-github", "subject-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            first.id
+        );
+        assert_eq!(
+            database
+                .auth_provider_identity_count(provider.id)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn external_registration_is_atomic_and_accepts_the_matching_invitation() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let invitation_id = database
+            .create_email_invitation(
+                "admin",
+                "first@example.com",
+                "First",
+                "invitation-token",
+                unix_timestamp() + 60,
+            )
+            .await
+            .unwrap();
+        let first = database
+            .create_user_with_external_identity(ExternalRegistration {
+                actor: "oauth:github",
+                email: "first@example.com",
+                display_name: "First",
+                routing_min_length: 12,
+                provider_slug: "github",
+                provider_subject: "subject-1",
+                invitation_id: Some(invitation_id),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            database
+                .email_invitation(invitation_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "accepted"
+        );
+        assert_eq!(
+            database
+                .user_by_external_identity("github", "subject-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            first.id
+        );
+
+        assert!(database
+            .create_user_with_external_identity(ExternalRegistration {
+                actor: "oauth:github",
+                email: "orphan@example.com",
+                display_name: "Orphan",
+                routing_min_length: 12,
+                provider_slug: "github",
+                provider_subject: "subject-1",
+                invitation_id: None,
+            },)
+            .await
+            .is_err());
+        assert!(database
+            .user_by_email("orphan@example.com")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    fn test_auth_provider(slug: &str, encrypted_secret: &str) -> AuthProvider {
+        AuthProvider {
+            id: 0,
+            slug: slug.to_string(),
+            display_name: "GitHub".to_string(),
+            kind: "oauth2".to_string(),
+            preset: "github".to_string(),
+            enabled: true,
+            client_id: "client-id".to_string(),
+            encrypted_client_secret: Some(encrypted_secret.to_string()),
+            issuer_url: None,
+            authorization_url: Some("https://github.com/login/oauth/authorize".to_string()),
+            token_url: Some("https://github.com/login/oauth/access_token".to_string()),
+            userinfo_url: Some("https://api.github.com/user".to_string()),
+            emails_url: Some("https://api.github.com/user/emails".to_string()),
+            scopes: vec!["read:user".to_string(), "user:email".to_string()],
+            subject_field: "id".to_string(),
+            email_field: "email".to_string(),
+            email_verified_field: None,
+            display_name_field: "name".to_string(),
+            allow_registration: true,
+            auto_link_by_email: false,
+        }
     }
 }

@@ -626,6 +626,21 @@ feat: add smtp invitations and passwordless email login
 
 ### 14.6 OAuth2 和 OIDC
 
+状态：已完成。已使用 `oauth2-rs` 5 和 `openidconnect-rs` 4 实现 Authorization Code
+登录与账号绑定，所有 Provider 使用 S256 PKCE、服务端哈希的一次性 state 和十分钟流程
+有效期；OIDC 额外校验 nonce、Issuer、Audience、签名、过期时间及可用的 Access Token
+Hash。内置 GitHub、GitLab、Gitee、Google、Microsoft、Keycloak、Authentik 与通用
+OAuth2/OIDC 模板。Provider Client Secret 和流程内容由持久化
+`MIRRORPROXY_MASTER_KEY` 使用 XChaCha20-Poly1305 加密，API、日志和审计仅暴露是否已配置。
+控制面 HTTP Client 强制直连且禁止自动重定向，不继承镜像上游代理。
+
+只有 Provider 明确验证的邮箱才允许自动关联或注册；自动关联、Provider 注册开关、全局
+注册模式、企业域名和邮件邀请会共同生效，已有外部身份仍可在关闭注册后登录。用户可在
+`/account` 手动绑定或解绑，邮件登录不可用时不能删除最后一个外部身份。`/admin` 提供
+Provider 新增、编辑、启停、删除和连通性检查，删除已有关联身份的 Provider 会被拒绝。
+全工作区 223 项 Rust 测试、Clippy、前端 10 项单元测试、生产构建、13 项 Playwright
+浏览器流程、客户端 smoke、Compose 配置和差异检查均已通过。
+
 建议 Commit：
 
 ```text

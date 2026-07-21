@@ -495,6 +495,9 @@ pub(crate) async fn verify_email_login(
             return internal_error_response();
         }
     };
+    if let Err(error) = state.database.audit_user_login(user.id, "email").await {
+        tracing::error!(%error, "failed to audit email user login");
+    }
     let mut response = Json(serde_json::json!({
         "user_id": session.identity.user_id,
         "email": session.identity.email,

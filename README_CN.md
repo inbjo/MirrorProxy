@@ -820,6 +820,20 @@ MIRRORPROXY_DEFAULT_USER_MONTHLY_GB=100
 允许任意已验证邮箱，`disabled` 只允许已有用户登录。普通用户在 `/login` 登录，在
 `/account` 查看或更换自己的 `accounting_only` 子域名。
 
+超级管理员还可以在 `/admin` 配置 OAuth2 或 OpenID Connect 登录。内置 GitHub、GitLab、
+Gitee、Google、Microsoft、Keycloak 和 Authentik 模板，也可以填写通用 OAuth2 端点或
+标准 OIDC Issuer。向身份平台登记的回调地址必须精确设置为
+`https://mirror.example.com/api/auth/<slug>/callback`。Microsoft 模板中的 Issuer 应替换为
+实际租户 ID 对应的地址，不建议生产环境使用 `common` 租户。
+
+外部登录统一使用 Authorization Code 和 S256 PKCE，并校验一次性 state；OIDC 还校验
+nonce、Issuer、Audience、签名、有效期以及返回时提供的 Access Token Hash。只有 Provider
+明确返回已验证邮箱时才允许自动关联或创建用户，自动关联和新用户注册还必须分别由 Provider
+开关与全局注册策略允许。已有用户可以在 `/account` 手动绑定或解绑 Provider；如果邮件登录
+不可用，系统会阻止解绑最后一个外部身份。OAuth Client Secret 使用同一个持久化
+`MIRRORPROXY_MASTER_KEY` 加密，API、日志和审计不会返回密钥。OAuth/OIDC 控制面请求直连，
+不会继承镜像下载使用的全局上游代理，并且禁止自动跟随重定向。
+
 用户控制台还会展示今日和本月流量、请求数、错误数、按镜像类型统计、近期趋势，以及个人
 和计费组剩余额度。`MIRRORPROXY_DEFAULT_USER_MONTHLY_GB` 留空表示普通用户默认不限流量。
 超级管理员可在 `/admin` 创建计费组、设置共享月额度、为每个用户指定唯一计费组，并选择

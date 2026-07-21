@@ -868,6 +868,25 @@ addresses from configured domains, `open` accepts any verified address, and
 `disabled` only permits existing users to sign in. Ordinary users sign in at
 `/login` and manage or rotate their accounting-only address at `/account`.
 
+A super administrator can also configure OAuth2 and OpenID Connect sign-in from
+`/admin`. Templates are included for GitHub, GitLab, Gitee, Google, Microsoft,
+Keycloak, and Authentik, along with generic OAuth2 endpoints and OIDC issuers.
+Register the exact callback URL with the identity provider, for example
+`https://mirror.example.com/api/auth/<slug>/callback`. Replace the Microsoft
+template issuer with the tenant-specific issuer; the `common` tenant is not
+recommended for production.
+
+External sign-in uses Authorization Code with S256 PKCE and one-time state.
+OIDC additionally verifies nonce, issuer, audience, signature, expiry, and the
+access-token hash when supplied. Automatic linking and registration require an
+email explicitly verified by the provider, the corresponding provider switch,
+and the global registration policy. Existing users may link and unlink providers
+from `/account`; MirrorProxy prevents removal of the final external identity when
+email sign-in is unavailable. OAuth client secrets are encrypted with the same
+persistent `MIRRORPROXY_MASTER_KEY` and are never returned through APIs, logs, or
+audit entries. OAuth/OIDC control-plane requests connect directly, do not inherit
+the global mirror upstream proxy, and never follow redirects automatically.
+
 The account page also shows today's and monthly traffic, requests, errors,
 per-mirror usage, recent trends, and remaining personal and billing-group
 quota. Leave `MIRRORPROXY_DEFAULT_USER_MONTHLY_GB` empty for unlimited users.

@@ -25,6 +25,8 @@ opentelemetry = { version = "0.32", default-features = false, features = ["trace
 opentelemetry-http = { version = "0.32", default-features = false }
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"] }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["rt-tokio", "trace"] }
+oauth2 = "5"
+openidconnect = "4"
 prometheus = "0.14"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "gzip", "brotli", "deflate", "json", "socks"] }
 rand = "0.8"

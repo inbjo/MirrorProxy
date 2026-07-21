@@ -1,6 +1,7 @@
 mod config;
 mod database;
 mod email;
+mod oauth;
 mod observability;
 mod proxy;
 mod secrets;
@@ -1028,11 +1029,35 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             "/admin/api/invitations/{id}/resend",
             post(email::resend_invitation),
         )
+        .route(
+            "/admin/api/auth-providers",
+            get(oauth::list_admin_providers).post(oauth::create_provider),
+        )
+        .route(
+            "/admin/api/auth-providers/{id}",
+            axum::routing::put(oauth::update_provider).delete(oauth::delete_provider),
+        )
+        .route(
+            "/admin/api/auth-providers/{id}/test",
+            post(oauth::test_provider),
+        )
         .route("/api/auth/email/request", post(email::request_email_login))
         .route("/api/auth/email/verify", post(email::verify_email_login))
+        .route("/api/auth/providers", get(oauth::public_providers))
+        .route("/api/auth/{slug}/start", get(oauth::start_login))
+        .route("/api/auth/{slug}/callback", get(oauth::callback))
         .route("/api/auth/session", get(user_session))
         .route("/api/auth/logout", post(user_logout))
         .route("/api/account/profile", get(user_profile))
+        .route("/api/account/providers", get(oauth::account_providers))
+        .route(
+            "/api/account/providers/{slug}/link/start",
+            get(oauth::start_link),
+        )
+        .route(
+            "/api/account/providers/{id}",
+            delete(oauth::unlink_identity),
+        )
         .route("/api/account/usage", get(user_usage))
         .route(
             "/api/account/routing-id/rotate",
