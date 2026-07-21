@@ -146,8 +146,7 @@ p {
 }
 
 .admin-trigger,
-.console-actions button,
-.console-close {
+.console-actions button {
   display: inline-flex;
   gap: 7px;
   align-items: center;
@@ -577,7 +576,6 @@ p {
 }
 
 .console-head h2 { margin-top: 8px; color: var(--text); font-size: 28px; }
-.console-close { min-height: 34px; font-size: 12px; }
 
 .login-card {
   display: grid;
