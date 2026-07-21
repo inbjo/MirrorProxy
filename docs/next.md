@@ -555,6 +555,12 @@ feat: separate admin portal and harden administrator authentication
 
 ### 14.3 管理员 Passkey
 
+状态：已完成。已使用 `webauthn-rs` 实现管理员 Passkey 登记、登录、命名和删除，
+Challenge 服务端一次性存储、随机 UUID User Handle、精确 RP ID/HTTPS Origin 校验、
+最近认证保护、强制 Passkey 策略、双凭据防锁死检查及 break-glass/CLI 恢复路径。
+全工作区测试、Clippy、前端单元测试和生产构建均已通过；Playwright 已使用 Chromium
+虚拟认证器验证真实的 `navigator.credentials.create()` 和 `get()` 流程。
+
 建议 Commit：
 
 ```text

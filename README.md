@@ -817,6 +817,31 @@ The new cookie APIs live under `/admin/api/*`. The former `/api/admin/*` Bearer
 APIs remain available for migration compatibility but are no longer used by the
 web portal.
 
+Administrator Passkeys are optional and use `webauthn-rs`. Configure the exact
+HTTPS admin origin and a stable RP ID before registering credentials:
+
+```dotenv
+MIRRORPROXY_WEBAUTHN_ENABLED=true
+MIRRORPROXY_WEBAUTHN_RP_ID=mirror.example.com
+MIRRORPROXY_WEBAUTHN_RP_ORIGIN=https://mirror.example.com
+MIRRORPROXY_WEBAUTHN_RP_NAME=MirrorProxy
+MIRRORPROXY_WEBAUTHN_REQUIRE_PASSKEY=false
+MIRRORPROXY_WEBAUTHN_BREAK_GLASS_USERNAME=admin
+```
+
+An administrator can register and name multiple Windows Hello, Touch ID,
+platform, or hardware-key Passkeys from `/admin`. Registration and authentication
+challenge state is stored only on the server, expires after five minutes, is
+bound to the initiating administrator session when applicable, and is consumed
+once. The RP origin never accepts wildcard user subdomains. Do not change the RP
+ID after credentials exist.
+
+When `require_passkey` is enabled, password login is disabled for every account
+except the configured local break-glass administrator. MirrorProxy refuses to
+enable that policy until each affected active administrator has at least two
+Passkeys, and prevents deleting keys below that minimum. The break-glass password
+can still be recovered with the local CLI command above.
+
 `PUT /admin/api/config` accepts a validated full configuration document and
 persists it in SQLite with an audit record. Public URL, enabled adapters,
 upstreams, quota, and rate-limit settings apply to new requests immediately.

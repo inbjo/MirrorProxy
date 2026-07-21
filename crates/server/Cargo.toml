@@ -37,6 +37,8 @@ tracing = "0.1"
 tracing-opentelemetry = { version = "0.33", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+webauthn-rs = { version = "0.5.5", features = ["danger-allow-state-serialisation"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

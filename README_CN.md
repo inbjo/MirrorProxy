@@ -778,6 +778,27 @@ mirrorproxy-server --config config.toml admin reset-password admin
 新的 Cookie API 位于 `/admin/api/*`。旧 `/api/admin/*` Bearer API 暂时保留用于迁移
 兼容，但 Web 管理后台已不再使用。
 
+管理员 Passkey 为可选功能，协议由 `webauthn-rs` 实现。登记凭据前需要配置固定 RP ID
+和管理后台实际使用的完整 HTTPS Origin：
+
+```dotenv
+MIRRORPROXY_WEBAUTHN_ENABLED=true
+MIRRORPROXY_WEBAUTHN_RP_ID=mirror.example.com
+MIRRORPROXY_WEBAUTHN_RP_ORIGIN=https://mirror.example.com
+MIRRORPROXY_WEBAUTHN_RP_NAME=MirrorProxy
+MIRRORPROXY_WEBAUTHN_REQUIRE_PASSKEY=false
+MIRRORPROXY_WEBAUTHN_BREAK_GLASS_USERNAME=admin
+```
+
+管理员可在 `/admin` 登记并命名多个 Windows Hello、Touch ID、系统 Passkey 或硬件
+安全密钥。登记和认证 Challenge 状态只保存在服务端，五分钟过期；需要登录的操作会绑定
+发起会话，状态只能消费一次。RP Origin 不接受任何通配符用户子域名。已有凭据后不要修改
+RP ID。
+
+启用 `require_passkey` 后，除本机应急管理员外，其他管理员不能再用密码登录。系统只在
+所有受影响的有效管理员都至少有两个 Passkey 时允许开启该策略，并阻止删除到低于这个
+数量。应急管理员密码仍可使用上面的本机 CLI 命令恢复。
+
 `PUT /admin/api/config` 接收完整且校验通过的配置，写入 SQLite 并记录审计日志。
 公开地址、启用 adapter、上游、配额和限流会立即影响后续请求；
 `timeout.request_secs` 会持久化但响应会标记需要重启。`listen_addr` 与

@@ -24,6 +24,7 @@ const adminConfig = {
   timeout: { request_secs: 30 },
   rate_limit: { enabled: true, requests_per_minute: 120 },
   cache: { enabled: false, directory: 'cache', max_entry_mb: 8, max_total_mb: 256 },
+  webauthn: { enabled: false, rp_id: '', rp_origin: '', rp_name: 'MirrorProxy', require_passkey: false, break_glass_username: 'admin' },
 }
 
 const adminStats = {
@@ -162,4 +163,73 @@ test('changes the administrator password and revokes the active session', async 
   await expect.poll(() => passwordRequest).toEqual({ current_password: 'correct-password', new_password: 'replacement-password' })
   await expect.poll(() => loggedOut).toBe(true)
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
+})
+
+test('registers and signs in with a passkey through the browser WebAuthn API', async ({ page }) => {
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('WebAuthn.enable')
+  await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: {
+      protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
+      hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true,
+    },
+  })
+  let registeredCredential: Record<string, unknown> | undefined
+  let authenticatedCredential: Record<string, unknown> | undefined
+  let registered = false
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/admin/api/auth/passkey/options', route => route.fulfill({ json: { enabled: true, require_passkey: false } }))
+  await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
+  await page.route('**/admin/api/config', route => route.fulfill({ json: { ...adminConfig, webauthn: { ...adminConfig.webauthn, enabled: true, rp_id: 'localhost', rp_origin: 'https://localhost' } } }))
+  await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
+  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/auth/passkeys', route => route.fulfill({ json: registered ? [{ id: 1, name: 'Test platform key', created_at: 1784592000, last_used_at: null }] : [] }))
+  await page.route('**/admin/api/auth/passkeys/register/start', route => route.fulfill({ json: {
+    challenge_id: 'server-state-id',
+    options: { publicKey: {
+      rp: { id: 'localhost', name: 'MirrorProxy' },
+      user: { id: 'AAAAAAAAAAAAAAAAAAAAAA', name: 'admin', displayName: 'admin' },
+      challenge: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      timeout: 60000,
+      authenticatorSelection: { userVerification: 'required' },
+      attestation: 'none',
+    } },
+  } }))
+  await page.route('**/admin/api/auth/passkeys/register/finish', async route => {
+    const payload = route.request().postDataJSON() as { credential: Record<string, unknown> }
+    registeredCredential = payload.credential; registered = true
+    await route.fulfill({ status: 201 })
+  })
+  await page.route('**/admin/api/auth/logout', route => route.fulfill({ status: 204 }))
+  await page.route('**/admin/api/auth/passkey/login/start', route => route.fulfill({ json: {
+    challenge_id: 'server-authentication-state-id',
+    options: { publicKey: {
+      challenge: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE',
+      timeout: 60000,
+      rpId: 'localhost',
+      allowCredentials: [{ type: 'public-key', id: registeredCredential?.rawId }],
+      userVerification: 'required',
+    } },
+  } }))
+  await page.route('**/admin/api/auth/passkey/login/finish', async route => {
+    const payload = route.request().postDataJSON() as { credential: Record<string, unknown> }
+    authenticatedCredential = payload.credential
+    await route.fulfill({ json: { username: 'admin', role: 'super_admin' } })
+  })
+
+  await page.goto('/admin')
+  await page.getByLabel('Administrator password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByLabel('Passkey name').fill('Test platform key')
+  await page.getByRole('button', { name: 'Register passkey' }).click()
+  await expect.poll(() => registeredCredential?.type).toBe('public-key')
+  await expect(page.getByText('Test platform key')).toBeVisible()
+  await page.reload()
+  const passkeySignIn = page.getByRole('button', { name: 'Sign in with a passkey' })
+  await expect(passkeySignIn).toBeEnabled()
+  await passkeySignIn.click()
+  await expect.poll(() => authenticatedCredential?.type).toBe('public-key')
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
 })

@@ -15,12 +15,16 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Row, SqlitePool,
 };
+use uuid::Uuid;
+use webauthn_rs::prelude::{AuthenticationResult, Passkey};
 
 use crate::config::Config;
 
 const SESSION_LIFETIME_SECS: i64 = 24 * 60 * 60;
 const ADMIN_LOGIN_FAILURE_LIMIT: i64 = 5;
 const ADMIN_LOGIN_LOCK_SECS: i64 = 15 * 60;
+const WEBAUTHN_CHALLENGE_LIFETIME_SECS: i64 = 5 * 60;
+const RECENT_ADMIN_VERIFICATION_SECS: i64 = 10 * 60;
 
 #[derive(Clone)]
 pub struct Database {
@@ -61,6 +65,19 @@ pub struct AdminAccount {
     pub disabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminPasskeySummary {
+    pub id: i64,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+pub struct StoredAdminPasskey {
+    pub id: i64,
+    pub passkey: Passkey,
 }
 
 pub struct ProxyTrafficRecord<'a> {
@@ -182,6 +199,10 @@ impl Database {
                 "locked_until",
                 "ALTER TABLE admin_users ADD COLUMN locked_until INTEGER",
             ),
+            (
+                "user_handle",
+                "ALTER TABLE admin_users ADD COLUMN user_handle TEXT",
+            ),
         ] {
             if !columns.iter().any(|existing| existing == column) {
                 sqlx::query(statement)
@@ -190,6 +211,50 @@ impl Database {
                     .with_context(|| format!("failed to add admin_users.{column}"))?;
             }
         }
+        let users = sqlx::query("SELECT username FROM admin_users WHERE user_handle IS NULL")
+            .fetch_all(&self.pool)
+            .await?;
+        for row in users {
+            let username: String = row.try_get("username")?;
+            sqlx::query("UPDATE admin_users SET user_handle = ? WHERE username = ?")
+                .bind(Uuid::new_v4().to_string())
+                .bind(username)
+                .execute(&self.pool)
+                .await?;
+        }
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS admin_users_user_handle_idx ON admin_users(user_handle)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        let session_rows = sqlx::query("PRAGMA table_info(admin_sessions)")
+            .fetch_all(&self.pool)
+            .await?;
+        let session_columns = session_rows
+            .iter()
+            .filter_map(|row| row.try_get::<String, _>("name").ok())
+            .collect::<Vec<_>>();
+        for (column, statement) in [
+            (
+                "auth_method",
+                "ALTER TABLE admin_sessions ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'password'",
+            ),
+            (
+                "verified_at",
+                "ALTER TABLE admin_sessions ADD COLUMN verified_at INTEGER NOT NULL DEFAULT 0",
+            ),
+        ] {
+            if !session_columns.iter().any(|existing| existing == column) {
+                sqlx::query(statement)
+                    .execute(&self.pool)
+                    .await
+                    .with_context(|| format!("failed to add admin_sessions.{column}"))?;
+            }
+        }
+        sqlx::query("UPDATE admin_sessions SET verified_at = created_at WHERE verified_at = 0")
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -207,10 +272,11 @@ impl Database {
         let password_hash = hash_password(&password)?;
         let now = unix_timestamp();
         sqlx::query(
-            "INSERT INTO admin_users (username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO admin_users (username, password_hash, user_handle, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         )
         .bind("admin")
         .bind(password_hash)
+        .bind(Uuid::new_v4().to_string())
         .bind(now)
         .bind(now)
         .execute(&self.pool)
@@ -303,12 +369,13 @@ impl Database {
         let token = random_secret(48);
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO admin_sessions (token_hash, username, created_at, expires_at, last_used_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO admin_sessions (token_hash, username, auth_method, created_at, expires_at, last_used_at, verified_at) VALUES (?, ?, 'password', ?, ?, ?, ?)",
         )
         .bind(hash_token(&token))
         .bind(username)
         .bind(now)
         .bind(expires_at)
+        .bind(now)
         .bind(now)
         .execute(&mut *transaction)
         .await?;
@@ -446,11 +513,12 @@ impl Database {
     ) -> anyhow::Result<bool> {
         let now = unix_timestamp();
         let result = sqlx::query(
-            "INSERT OR IGNORE INTO admin_users (username, password_hash, role, disabled, failed_login_count, created_at, updated_at) VALUES (?, ?, ?, 0, 0, ?, ?)",
+            "INSERT OR IGNORE INTO admin_users (username, password_hash, role, disabled, failed_login_count, user_handle, created_at, updated_at) VALUES (?, ?, ?, 0, 0, ?, ?, ?)",
         )
         .bind(username)
         .bind(hash_password(password)?)
         .bind(role)
+        .bind(Uuid::new_v4().to_string())
         .bind(now)
         .bind(now)
         .execute(&self.pool)
@@ -551,6 +619,284 @@ impl Database {
         .await?;
         transaction.commit().await?;
         Ok(true)
+    }
+
+    pub async fn admin_user_handle(&self, username: &str) -> anyhow::Result<Option<Uuid>> {
+        let row =
+            sqlx::query("SELECT user_handle FROM admin_users WHERE username = ? AND disabled = 0")
+                .bind(username)
+                .fetch_optional(&self.pool)
+                .await?;
+        row.map(|row| {
+            let value: String = row.try_get("user_handle")?;
+            Uuid::parse_str(&value).context("stored administrator user handle is invalid")
+        })
+        .transpose()
+    }
+
+    pub async fn list_admin_passkeys(
+        &self,
+        username: &str,
+    ) -> anyhow::Result<Vec<AdminPasskeySummary>> {
+        sqlx::query(
+            "SELECT id, name, created_at, last_used_at FROM admin_passkeys WHERE username = ? ORDER BY created_at, id",
+        )
+        .bind(username)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(AdminPasskeySummary {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                created_at: row.try_get("created_at")?,
+                last_used_at: row.try_get("last_used_at")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(Into::into)
+    }
+
+    pub async fn admin_passkeys(&self, username: &str) -> anyhow::Result<Vec<StoredAdminPasskey>> {
+        sqlx::query("SELECT id, passkey_json FROM admin_passkeys WHERE username = ?")
+            .bind(username)
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| {
+                let id: i64 = row.try_get("id")?;
+                let json: String = row.try_get("passkey_json")?;
+                let passkey = serde_json::from_str(&json)
+                    .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+                Ok(StoredAdminPasskey { id, passkey })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()
+            .map_err(Into::into)
+    }
+
+    pub async fn add_admin_passkey(
+        &self,
+        username: &str,
+        name: &str,
+        passkey: &Passkey,
+    ) -> anyhow::Result<bool> {
+        let credential_id = serde_json::to_string(passkey.cred_id())?;
+        let passkey_json = serde_json::to_string(passkey)?;
+        let now = unix_timestamp();
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO admin_passkeys (username, name, credential_id, passkey_json, created_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(username)
+        .bind(name)
+        .bind(credential_id)
+        .bind(passkey_json)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 1 {
+            self.write_security_audit(username, "admin_passkey_registered", name)
+                .await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn update_admin_passkey_after_authentication(
+        &self,
+        username: &str,
+        result: &AuthenticationResult,
+    ) -> anyhow::Result<bool> {
+        let mut passkeys = self.admin_passkeys(username).await?;
+        let Some(stored) = passkeys
+            .iter_mut()
+            .find(|stored| stored.passkey.cred_id() == result.cred_id())
+        else {
+            return Ok(false);
+        };
+        if !result.user_verified() {
+            return Ok(false);
+        }
+        stored.passkey.update_credential(result);
+        let update = sqlx::query(
+            "UPDATE admin_passkeys SET passkey_json = ?, last_used_at = ? WHERE id = ? AND username = ?",
+        )
+        .bind(serde_json::to_string(&stored.passkey)?)
+        .bind(unix_timestamp())
+        .bind(stored.id)
+        .bind(username)
+        .execute(&self.pool)
+        .await?;
+        Ok(update.rows_affected() == 1)
+    }
+
+    pub async fn delete_admin_passkey(&self, username: &str, id: i64) -> anyhow::Result<bool> {
+        let result = sqlx::query("DELETE FROM admin_passkeys WHERE id = ? AND username = ?")
+            .bind(id)
+            .bind(username)
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() == 1 {
+            self.write_security_audit(
+                username,
+                "admin_passkey_deleted",
+                &format!("passkey_id={id}"),
+            )
+            .await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn admin_passkey_count(&self, username: Option<&str>) -> anyhow::Result<u64> {
+        let row = if let Some(username) = username {
+            sqlx::query("SELECT COUNT(*) AS count FROM admin_passkeys WHERE username = ?")
+                .bind(username)
+                .fetch_one(&self.pool)
+                .await?
+        } else {
+            sqlx::query("SELECT COUNT(*) AS count FROM admin_passkeys")
+                .fetch_one(&self.pool)
+                .await?
+        };
+        Ok(row.try_get::<i64, _>("count")?.max(0) as u64)
+    }
+
+    pub async fn admins_without_minimum_passkeys(
+        &self,
+        minimum: u32,
+        except_username: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        sqlx::query(
+            "SELECT u.username FROM admin_users u WHERE u.disabled = 0 AND u.username != ? AND (SELECT COUNT(*) FROM admin_passkeys p WHERE p.username = u.username) < ? ORDER BY u.username",
+        )
+        .bind(except_username)
+        .bind(i64::from(minimum))
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| row.try_get("username"))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    }
+
+    pub async fn store_webauthn_challenge(
+        &self,
+        username: &str,
+        kind: &str,
+        state_json: &str,
+        session_token: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let challenge = random_secret(48);
+        let now = unix_timestamp();
+        sqlx::query("DELETE FROM admin_webauthn_challenges WHERE expires_at <= ?")
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO admin_webauthn_challenges (challenge_hash, username, kind, state_json, session_token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(hash_token(&challenge))
+        .bind(username)
+        .bind(kind)
+        .bind(state_json)
+        .bind(session_token.map(hash_token))
+        .bind(now)
+        .bind(now + WEBAUTHN_CHALLENGE_LIFETIME_SECS)
+        .execute(&self.pool)
+        .await?;
+        Ok(challenge)
+    }
+
+    pub async fn take_webauthn_challenge(
+        &self,
+        challenge: &str,
+        kind: &str,
+        session_token: Option<&str>,
+    ) -> anyhow::Result<Option<(String, String)>> {
+        let challenge_hash = hash_token(challenge);
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT username, state_json, session_token_hash, expires_at FROM admin_webauthn_challenges WHERE challenge_hash = ? AND kind = ?",
+        )
+        .bind(&challenge_hash)
+        .bind(kind)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        sqlx::query("DELETE FROM admin_webauthn_challenges WHERE challenge_hash = ?")
+            .bind(&challenge_hash)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let stored_session: Option<String> = row.try_get("session_token_hash")?;
+        let supplied_session = session_token.map(hash_token);
+        let expires_at: i64 = row.try_get("expires_at")?;
+        if stored_session != supplied_session || expires_at <= unix_timestamp() {
+            return Ok(None);
+        }
+        Ok(Some((row.try_get("username")?, row.try_get("state_json")?)))
+    }
+
+    pub async fn is_recent_admin_session(&self, token: &str) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS count FROM admin_sessions WHERE token_hash = ? AND expires_at > ? AND verified_at >= ?",
+        )
+        .bind(hash_token(token))
+        .bind(now)
+        .bind(now - RECENT_ADMIN_VERIFICATION_SECS)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get::<i64, _>("count")? == 1)
+    }
+
+    pub async fn create_passkey_session(
+        &self,
+        username: &str,
+        source: &str,
+    ) -> anyhow::Result<Option<AdminSession>> {
+        let row = sqlx::query("SELECT role FROM admin_users WHERE username = ? AND disabled = 0")
+            .bind(username)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let role: String = row.try_get("role")?;
+        let now = unix_timestamp();
+        let expires_at = now + SESSION_LIFETIME_SECS;
+        let token = random_secret(48);
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO admin_sessions (token_hash, username, auth_method, created_at, expires_at, last_used_at, verified_at) VALUES (?, ?, 'passkey', ?, ?, ?, ?)",
+        )
+        .bind(hash_token(&token))
+        .bind(username)
+        .bind(now)
+        .bind(expires_at)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'admin_passkey_login_succeeded', ?)",
+        )
+        .bind(now)
+        .bind(username)
+        .bind(source)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(Some(AdminSession {
+            token,
+            expires_at,
+            username: username.to_string(),
+            role,
+        }))
     }
 
     async fn write_security_audit(
@@ -854,14 +1200,18 @@ fn unix_timestamp() -> i64 {
 const MIGRATIONS: &[&str] = &[
     "PRAGMA journal_mode = WAL",
     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS admin_users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'super_admin', disabled INTEGER NOT NULL DEFAULT 0, failed_login_count INTEGER NOT NULL DEFAULT 0, locked_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS admin_sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS admin_users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'super_admin', disabled INTEGER NOT NULL DEFAULT 0, failed_login_count INTEGER NOT NULL DEFAULT 0, locked_until INTEGER, user_handle TEXT UNIQUE, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS admin_sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, auth_method TEXT NOT NULL DEFAULT 'password', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, verified_at INTEGER NOT NULL DEFAULT 0, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS admin_passkeys (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, name TEXT NOT NULL, credential_id TEXT NOT NULL UNIQUE, passkey_json TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS admin_webauthn_challenges (challenge_hash TEXT PRIMARY KEY, username TEXT NOT NULL, kind TEXT NOT NULL, state_json TEXT NOT NULL, session_token_hash TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS proxy_targets (code TEXT PRIMARY KEY, enabled INTEGER NOT NULL, upstream_url TEXT NOT NULL, route_prefix TEXT NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS traffic_daily (day TEXT NOT NULL, target_code TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, target_code))",
     "CREATE TABLE IF NOT EXISTS traffic_monthly (month TEXT PRIMARY KEY, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, quota_exceeded INTEGER NOT NULL DEFAULT 0)",
     "CREATE TABLE IF NOT EXISTS request_events (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, target_code TEXT, method TEXT NOT NULL, path TEXT NOT NULL, status_code INTEGER NOT NULL, response_bytes INTEGER NOT NULL DEFAULT 0)",
     "CREATE TABLE IF NOT EXISTS config_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, username TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS admin_sessions_expires_at_idx ON admin_sessions(expires_at)",
+    "CREATE INDEX IF NOT EXISTS admin_passkeys_username_idx ON admin_passkeys(username)",
+    "CREATE INDEX IF NOT EXISTS admin_webauthn_challenges_expires_at_idx ON admin_webauthn_challenges(expires_at)",
     "CREATE INDEX IF NOT EXISTS request_events_created_at_idx ON request_events(created_at)",
 ];
 

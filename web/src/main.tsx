@@ -50,6 +50,14 @@ type AdminConfig = Omit<PublicConfig, 'quota'> & {
   timeout: { request_secs: number }
   rate_limit: { enabled: boolean; requests_per_minute: number }
   cache: { enabled: boolean; directory: string; max_entry_mb: number }
+  webauthn: {
+    enabled: boolean
+    rp_id: string
+    rp_origin: string
+    rp_name: string
+    require_passkey: boolean
+    break_glass_username: string
+  }
 }
 type AdminStats = {
   month: string
@@ -81,6 +89,7 @@ type AuditLogEntry = {
 }
 type AdminIdentity = { username: string; role: string }
 type AdminAccount = AdminIdentity & { disabled: boolean; created_at: number; updated_at: number }
+type AdminPasskey = { id: number; name: string; created_at: number; last_used_at: number | null }
 type SourceCatalog = {
   providers: MirrorProvider[]
   targets: SourceTarget[]
@@ -677,6 +686,65 @@ const byteLabel = (bytes: number | null) => {
   return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
 }
 
+const decodeBase64Url = (value: string) => {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+  return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0))
+}
+
+const encodeBase64Url = (value: ArrayBuffer) => {
+  const bytes = new Uint8Array(value)
+  let binary = ''
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte) })
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+const creationOptions = (options: { publicKey: Record<string, any> }): CredentialCreationOptions => {
+  const publicKey = structuredClone(options.publicKey)
+  publicKey.challenge = decodeBase64Url(publicKey.challenge)
+  publicKey.user.id = decodeBase64Url(publicKey.user.id)
+  publicKey.excludeCredentials = publicKey.excludeCredentials?.map((credential: Record<string, any>) => ({ ...credential, id: decodeBase64Url(credential.id) }))
+  return { publicKey: publicKey as PublicKeyCredentialCreationOptions }
+}
+
+const requestOptions = (options: { publicKey: Record<string, any> }): CredentialRequestOptions => {
+  const publicKey = structuredClone(options.publicKey)
+  publicKey.challenge = decodeBase64Url(publicKey.challenge)
+  publicKey.allowCredentials = publicKey.allowCredentials?.map((credential: Record<string, any>) => ({ ...credential, id: decodeBase64Url(credential.id) }))
+  return { publicKey: publicKey as PublicKeyCredentialRequestOptions }
+}
+
+const registrationCredentialJson = (credential: PublicKeyCredential) => {
+  const response = credential.response as AuthenticatorAttestationResponse
+  return {
+    id: credential.id,
+    rawId: encodeBase64Url(credential.rawId),
+    type: credential.type,
+    response: {
+      attestationObject: encodeBase64Url(response.attestationObject),
+      clientDataJSON: encodeBase64Url(response.clientDataJSON),
+      transports: typeof response.getTransports === 'function' ? response.getTransports() : undefined,
+    },
+    extensions: credential.getClientExtensionResults(),
+  }
+}
+
+const authenticationCredentialJson = (credential: PublicKeyCredential) => {
+  const response = credential.response as AuthenticatorAssertionResponse
+  return {
+    id: credential.id,
+    rawId: encodeBase64Url(credential.rawId),
+    type: credential.type,
+    response: {
+      authenticatorData: encodeBase64Url(response.authenticatorData),
+      clientDataJSON: encodeBase64Url(response.clientDataJSON),
+      signature: encodeBase64Url(response.signature),
+      userHandle: response.userHandle ? encodeBase64Url(response.userHandle) : null,
+    },
+    extensions: credential.getClientExtensionResults(),
+  }
+}
+
 function AdminPage() {
   const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en', ['en', 'zh']))
   const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light', ['light', 'dark']))
@@ -718,6 +786,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         quotaStopped: '代理已因月流量上限停止', noData: '本月尚无代理流量。', passwordHint: '首次启动时密码只会出现在本机日志中。',
         security: '安全', currentPassword: '当前密码', newPassword: '新密码（至少 12 位）', changePassword: '修改密码并退出所有会话', passwordChanged: '密码已修改，请使用新密码重新登录。', passwordError: '密码修改失败，请确认当前密码。', passwordConfirm: '修改密码将使所有管理员会话失效，确定继续吗？',
         administrators: '管理员账号', createAdministrator: '创建管理员', role: '角色', disable: '禁用', enable: '启用', adminCreateError: '管理员创建失败。',
+        passkeys: 'Passkey', usePasskey: '使用 Passkey 登录', addPasskey: '登记 Passkey', passkeyName: 'Passkey 名称', deletePasskey: '删除', passkeyError: 'Passkey 操作失败。', webauthnEnabled: '启用管理员 Passkey', webauthnRpId: 'RP ID（主域名）', webauthnOrigin: 'RP Origin（HTTPS）', webauthnName: 'RP 名称', requirePasskey: '除应急账号外强制使用 Passkey', breakGlass: '应急管理员账号',
         generator: 'CLI 改源命令', target: '目标', mirror: '镜像站', scope: '作用域', distribution: '发行版代号', ready: '可直接执行', guidance: '当前仅生成配置指引', copyCommand: '复制命令', copiedCommand: '已复制',
       }
     : {
@@ -730,6 +799,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is printed only in the local startup log.',
         security: 'Security', currentPassword: 'Current password', newPassword: 'New password (12 characters minimum)', changePassword: 'Change password and revoke all sessions', passwordChanged: 'Password changed. Sign in again with the new password.', passwordError: 'Password update failed. Check the current password.', passwordConfirm: 'This revokes every administrator session. Continue?',
         administrators: 'Administrators', createAdministrator: 'Create administrator', role: 'Role', disable: 'Disable', enable: 'Enable', adminCreateError: 'Administrator creation failed.',
+        passkeys: 'Passkeys', usePasskey: 'Sign in with a passkey', addPasskey: 'Register passkey', passkeyName: 'Passkey name', deletePasskey: 'Delete', passkeyError: 'Passkey operation failed.', webauthnEnabled: 'Enable administrator passkeys', webauthnRpId: 'RP ID (primary domain)', webauthnOrigin: 'RP origin (HTTPS)', webauthnName: 'RP name', requirePasskey: 'Require passkeys except break-glass account', breakGlass: 'Break-glass administrator',
         generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', distribution: 'Distribution codename', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied', auditLog: 'Audit log', noAudit: 'No audit entries yet.',
       }
   const [token, setToken] = React.useState<string | null>(null)
@@ -749,6 +819,10 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
   const [newAdminUsername, setNewAdminUsername] = React.useState('')
   const [newAdminPassword, setNewAdminPassword] = React.useState('')
   const [newAdminRole, setNewAdminRole] = React.useState('admin')
+  const [passkeyEnabled, setPasskeyEnabled] = React.useState(false)
+  const [passkeys, setPasskeys] = React.useState<AdminPasskey[]>([])
+  const [passkeyName, setPasskeyName] = React.useState('')
+  const [passkeyBusy, setPasskeyBusy] = React.useState(false)
 
   const load = React.useCallback(async (_activeToken: string) => {
     const [configResponse, statsResponse, auditResponse] = await Promise.all([
@@ -759,7 +833,11 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     if (configResponse.status === 401 || statsResponse.status === 401 || auditResponse.status === 401) throw new Error('unauthorized')
     if (!configResponse.ok || !statsResponse.ok || !auditResponse.ok) throw new Error('load failed')
     const [config, nextStats, nextAuditLog] = await Promise.all([configResponse.json() as Promise<AdminConfig>, statsResponse.json() as Promise<AdminStats>, auditResponse.json() as Promise<AuditLogEntry[]>])
-    setDraft({ ...config, trusted_proxies: config.trusted_proxies ?? [] })
+    setDraft({
+      ...config,
+      trusted_proxies: config.trusted_proxies ?? [],
+      webauthn: config.webauthn ?? { enabled: false, rp_id: '', rp_origin: '', rp_name: 'MirrorProxy', require_passkey: false, break_glass_username: 'admin' },
+    })
     setStats(nextStats)
     setAuditLog(nextAuditLog)
   }, [])
@@ -771,6 +849,12 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     setAdmins(await response.json() as AdminAccount[])
   }, [])
 
+  const loadPasskeys = React.useCallback(async () => {
+    const response = await fetch('/admin/api/auth/passkeys')
+    if (!response.ok) throw new Error('passkey list unavailable')
+    setPasskeys(await response.json() as AdminPasskey[])
+  }, [])
+
   React.useEffect(() => {
     if (!token) return
     load(token).catch(() => {
@@ -778,7 +862,15 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
       setError(text.badLogin)
     })
     loadAdmins().catch(() => undefined)
-  }, [load, loadAdmins, text.badLogin, token])
+    loadPasskeys().catch(() => undefined)
+  }, [load, loadAdmins, loadPasskeys, text.badLogin, token])
+
+  React.useEffect(() => {
+    fetch('/admin/api/auth/passkey/options')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('passkey options unavailable')))
+      .then((value: { enabled: boolean }) => setPasskeyEnabled(value.enabled && 'credentials' in navigator))
+      .catch(() => undefined)
+  }, [])
 
   React.useEffect(() => {
     fetch('/admin/api/auth/session')
@@ -799,6 +891,30 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     setPassword('')
   }
 
+  const signInWithPasskey = async () => {
+    setPasskeyBusy(true); setError(null)
+    try {
+      const start = await fetch('/admin/api/auth/passkey/login/start', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username }),
+      })
+      if (!start.ok) throw new Error('passkey start failed')
+      const challenge = await start.json() as { challenge_id: string; options: { publicKey: Record<string, any> } }
+      const credential = await navigator.credentials.get(requestOptions(challenge.options)) as PublicKeyCredential | null
+      if (!credential) throw new Error('passkey cancelled')
+      const finish = await fetch('/admin/api/auth/passkey/login/finish', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ challenge_id: challenge.challenge_id, credential: authenticationCredentialJson(credential) }),
+      })
+      if (!finish.ok) throw new Error('passkey finish failed')
+      const value = await finish.json() as AdminIdentity
+      setIdentity(value); setToken('cookie')
+    } catch {
+      setError(text.passkeyError)
+    } finally {
+      setPasskeyBusy(false)
+    }
+  }
+
   const signOut = async () => {
     if (token) await fetch('/admin/api/auth/logout', { method: 'POST' }).catch(() => undefined)
     setIdentity(null); setToken(null); setDraft(null); setStats(null); setAuditLog([]); setAdmins([]); setRestartRequired([])
@@ -814,6 +930,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     if (!response.ok) { setError(text.saveError); return }
     const result = await response.json() as { config: AdminConfig; restart_required: string[] }
     setDraft(result.config); setRestartRequired(result.restart_required)
+    setPasskeyEnabled(result.config.webauthn.enabled && 'credentials' in navigator)
     load(token).catch(() => undefined)
   }
 
@@ -852,6 +969,34 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
     await loadAdmins()
   }
 
+  const registerPasskey = async (event: React.FormEvent) => {
+    event.preventDefault(); setPasskeyBusy(true); setError(null)
+    try {
+      const start = await fetch('/admin/api/auth/passkeys/register/start', { method: 'POST' })
+      if (!start.ok) throw new Error('passkey start failed')
+      const challenge = await start.json() as { challenge_id: string; options: { publicKey: Record<string, any> } }
+      const credential = await navigator.credentials.create(creationOptions(challenge.options)) as PublicKeyCredential | null
+      if (!credential) throw new Error('passkey cancelled')
+      const finish = await fetch('/admin/api/auth/passkeys/register/finish', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ challenge_id: challenge.challenge_id, name: passkeyName, credential: registrationCredentialJson(credential) }),
+      })
+      if (!finish.ok) throw new Error('passkey finish failed')
+      setPasskeyName(''); await loadPasskeys()
+    } catch {
+      setError(text.passkeyError)
+    } finally {
+      setPasskeyBusy(false)
+    }
+  }
+
+  const removePasskey = async (passkey: AdminPasskey) => {
+    if (!window.confirm(`${text.deletePasskey}: ${passkey.name}?`)) return
+    const response = await fetch(`/admin/api/auth/passkeys/${passkey.id}`, { method: 'DELETE' })
+    if (!response.ok) { setError(text.passkeyError); return }
+    await loadPasskeys()
+  }
+
   const update = <K extends keyof AdminConfig>(key: K, value: AdminConfig[K]) => setDraft((current) => current ? { ...current, [key]: value } : current)
   const updateQuota = (key: keyof AdminConfig['quota'], value: string | boolean | number) => setDraft((current) => current ? { ...current, quota: { ...current.quota, [key]: value } } : current)
   const updateRate = (key: keyof AdminConfig['rate_limit'], value: string | boolean | number) => setDraft((current) => current ? { ...current, rate_limit: { ...current.rate_limit, [key]: value } } : current)
@@ -877,7 +1022,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
   return (
     <section className="admin-console" aria-label={text.title}>
       <div className="console-head"><div><span className="console-kicker"><ShieldCheck size={15} /> ADMIN / SQLITE</span><h2>{text.title}</h2></div><button className="console-close" onClick={onClose}>{text.close} ×</button></div>
-      {!token ? <form className="login-card" onSubmit={signIn}><div><h3>{text.login}</h3><p>{text.passwordHint}</p></div><label>{text.username}<input autoFocus required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>{text.password}<input required autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error ? <p className="form-error">{error}</p> : null}<button className="primary-button" type="submit"><LogIn size={16} /> {text.signIn}</button></form> : null}
+      {!token ? <form className="login-card" onSubmit={signIn}><div><h3>{text.login}</h3><p>{text.passwordHint}</p></div><label>{text.username}<input autoFocus required autoComplete="username webauthn" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>{text.password}<input required={!passkeyEnabled} autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error ? <p className="form-error">{error}</p> : null}<div className="login-actions"><button className="primary-button" type="submit"><LogIn size={16} /> {text.signIn}</button>{passkeyEnabled ? <button disabled={passkeyBusy || !username.trim()} type="button" onClick={signInWithPasskey}><KeyRound size={16} /> {text.usePasskey}</button> : null}</div></form> : null}
       {token && draft && stats ? <div className="console-grid">
         <section className="console-overview"><div className="console-section-head"><div><h3>{text.overview}</h3><p>{stats.month} · {stats.quota.timezone}</p></div><div className="console-actions"><button onClick={() => load(token).catch(() => setError(text.saveError))}>{text.refresh}</button><button onClick={signOut}><LogOut size={15} /> {text.signOut}</button></div></div>
           {stats.quota.exceeded ? <div className="quota-alert"><ChartNoAxesCombined size={18} /> {text.quotaStopped}</div> : null}
@@ -886,10 +1031,11 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         </section>
         <section className="console-config"><div className="console-section-head"><div><h3>{text.configuration}</h3><p>{draft.listen_addr} · SQLite-backed runtime state</p></div><button className="primary-button" disabled={saving} onClick={save}><Save size={16} /> {saving ? text.saving : text.save}</button></div>
           {error ? <p className="form-error">{error}</p> : null}{restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
-          <div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label className="wide-field">{text.trustedProxies}<input aria-describedby="trusted-proxies-hint" value={draft.trusted_proxies.join(', ')} onChange={(event) => update('trusted_proxies', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small id="trusted-proxies-hint">{text.trustedProxiesHint}</small></label><label>{text.quotaGb}<input min="0" type="number" value={draft.quota.monthly_gb} onChange={(event) => updateQuota('monthly_gb', Number(event.target.value))} /></label><label>{text.retentionDays}<input min="1" type="number" value={draft.quota.request_event_retention_days} onChange={(event) => updateQuota('request_event_retention_days', Number(event.target.value))} /></label><label>{text.timezone}<input value={draft.quota.timezone} onChange={(event) => updateQuota('timezone', event.target.value)} /></label><label>{text.action}<select value={draft.quota.on_exceeded} onChange={(event) => updateQuota('on_exceeded', event.target.value)}><option value="stop_proxy">stop_proxy · 503</option><option value="throttle">throttle · 429</option></select></label><label className="toggle-field"><input type="checkbox" checked={draft.quota.enabled} onChange={(event) => updateQuota('enabled', event.target.checked)} />{text.quota}</label><label className="toggle-field"><input type="checkbox" checked={draft.forward_client_authorization} onChange={(event) => update('forward_client_authorization', event.target.checked)} />{text.forwardAuth}</label><label className="toggle-field"><input type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<input min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label><label>{text.cacheDirectory}<input value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><label>{text.cacheMaxEntry}<input min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label className="toggle-field"><input type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label></div>
+          <div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label className="wide-field">{text.trustedProxies}<input aria-describedby="trusted-proxies-hint" value={draft.trusted_proxies.join(', ')} onChange={(event) => update('trusted_proxies', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small id="trusted-proxies-hint">{text.trustedProxiesHint}</small></label><label>{text.quotaGb}<input min="0" type="number" value={draft.quota.monthly_gb} onChange={(event) => updateQuota('monthly_gb', Number(event.target.value))} /></label><label>{text.retentionDays}<input min="1" type="number" value={draft.quota.request_event_retention_days} onChange={(event) => updateQuota('request_event_retention_days', Number(event.target.value))} /></label><label>{text.timezone}<input value={draft.quota.timezone} onChange={(event) => updateQuota('timezone', event.target.value)} /></label><label>{text.action}<select value={draft.quota.on_exceeded} onChange={(event) => updateQuota('on_exceeded', event.target.value)}><option value="stop_proxy">stop_proxy · 503</option><option value="throttle">throttle · 429</option></select></label><label className="toggle-field"><input type="checkbox" checked={draft.quota.enabled} onChange={(event) => updateQuota('enabled', event.target.checked)} />{text.quota}</label><label className="toggle-field"><input type="checkbox" checked={draft.forward_client_authorization} onChange={(event) => update('forward_client_authorization', event.target.checked)} />{text.forwardAuth}</label><label className="toggle-field"><input type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<input min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label><label>{text.cacheDirectory}<input value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><label>{text.cacheMaxEntry}<input min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label className="toggle-field"><input type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label><label>{text.webauthnRpId}<input value={draft.webauthn.rp_id} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_id: event.target.value })} /></label><label>{text.webauthnOrigin}<input value={draft.webauthn.rp_origin} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_origin: event.target.value })} /></label><label>{text.webauthnName}<input value={draft.webauthn.rp_name} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_name: event.target.value })} /></label><label>{text.breakGlass}<input value={draft.webauthn.break_glass_username} onChange={(event) => update('webauthn', { ...draft.webauthn, break_glass_username: event.target.value })} /></label><label className="toggle-field"><input type="checkbox" checked={draft.webauthn.enabled} onChange={(event) => update('webauthn', { ...draft.webauthn, enabled: event.target.checked })} />{text.webauthnEnabled}</label><label className="toggle-field"><input type="checkbox" checked={draft.webauthn.require_passkey} onChange={(event) => update('webauthn', { ...draft.webauthn, require_passkey: event.target.checked })} />{text.requirePasskey}</label></div>
           <h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><input type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div>
           <h4>{text.upstreams}</h4><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : Object.entries(value).map(([target, url]) => <label key={`${key}.${target}`}><span>{key}.{target}</span><input value={url} onChange={(event) => updateAdditionalOsUpstream(target, event.target.value)} /></label>))}</div>
           {catalog ? <SourceCommandGenerator catalog={catalog} baseUrl={draft.public_base_url} text={text} /> : null}
+          {draft.webauthn.enabled && 'credentials' in navigator ? <section className="administrator-management"><h4>{text.passkeys}</h4><div className="admin-account-list">{passkeys.map((passkey) => <div className="admin-account-row" key={passkey.id}><span><strong>{passkey.name}</strong><small>{passkey.last_used_at ? new Date(passkey.last_used_at * 1000).toLocaleString() : new Date(passkey.created_at * 1000).toLocaleDateString()}</small></span><button onClick={() => removePasskey(passkey)}>{text.deletePasskey}</button></div>)}</div><form className="security-form" onSubmit={registerPasskey}><label>{text.passkeyName}<input required maxLength={80} value={passkeyName} onChange={(event) => setPasskeyName(event.target.value)} /></label><button className="primary-button" disabled={passkeyBusy} type="submit"><KeyRound size={16} /> {text.addPasskey}</button></form></section> : null}
           {identity?.role === 'super_admin' ? <section className="administrator-management"><h4>{text.administrators}</h4><div className="admin-account-list">{admins.map((account) => <div className="admin-account-row" key={account.username}><span><strong>{account.username}</strong><small>{account.role}</small></span><button disabled={account.username === identity.username} onClick={() => setAdministratorDisabled(account, !account.disabled)}>{account.disabled ? text.enable : text.disable}</button></div>)}</div><form className="security-form" onSubmit={createAdministrator}><label>{text.username}<input required value={newAdminUsername} onChange={(event) => setNewAdminUsername(event.target.value)} /></label><label>{text.password}<input required minLength={12} type="password" value={newAdminPassword} onChange={(event) => setNewAdminPassword(event.target.value)} /></label><label>{text.role}<select value={newAdminRole} onChange={(event) => setNewAdminRole(event.target.value)}><option value="admin">admin</option><option value="super_admin">super_admin</option></select></label><button className="primary-button" type="submit">{text.createAdministrator}</button></form></section> : null}
           <form className="security-form" onSubmit={changePassword}><div><h4><KeyRound size={14} /> {text.security}</h4><p>{text.passwordHint}</p></div><label>{text.currentPassword}<input required autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>{text.newPassword}<input required minLength={12} autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label><button className="danger-button" disabled={passwordBusy} type="submit"><KeyRound size={16} /> {text.changePassword}</button></form>
           <section className="audit-log"><h4>{'auditLog' in text ? text.auditLog : 'Audit log'}</h4>{auditLog.length ? auditLog.slice(0, 8).map((entry) => <div className="audit-row" key={`${entry.created_at}-${entry.username}-${entry.action}`}><span>{new Date(entry.created_at * 1000).toLocaleString()}</span><strong>{entry.action}</strong><small>{entry.username} / {entry.detail}</small></div>) : <p className="empty-stat">{'noAudit' in text ? text.noAudit : 'No audit entries yet.'}</p>}</section>

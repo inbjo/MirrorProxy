@@ -86,6 +86,17 @@ timezone = "local"
 on_exceeded = "stop_proxy"
 request_event_retention_days = 30
 
+# Optional administrator Passkey/WebAuthn configuration. RP ID cannot be
+# changed after passkeys are registered. RP origin must be the exact HTTPS
+# origin used for /admin; wildcard user subdomains are never accepted.
+[webauthn]
+enabled = false
+rp_id = "mirror.example.com"
+rp_origin = "https://mirror.example.com"
+rp_name = "MirrorProxy"
+require_passkey = false
+break_glass_username = "admin"
+
 # Optional credentials for private upstreams. Keep this file permission-restricted.
 # Values are never returned by the admin API or stored in SQLite.
 # [upstream_auth.npm]

@@ -235,6 +235,12 @@ p {
   color: var(--muted);
 }
 
+.login-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .admin-console::before {
   position: absolute;
   inset: 0 0 auto;

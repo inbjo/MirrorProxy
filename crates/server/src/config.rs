@@ -28,6 +28,8 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(default)]
     pub quota: QuotaConfig,
+    #[serde(default)]
+    pub webauthn: WebauthnConfig,
     /// The outbound proxy is owned by the service configuration and requires a
     /// restart because the shared HTTP client is constructed once at startup.
     /// It is deliberately omitted from runtime API and SQLite serialization.
@@ -191,6 +193,22 @@ pub struct QuotaConfig {
     pub request_event_retention_days: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WebauthnConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub rp_id: String,
+    #[serde(default)]
+    pub rp_origin: String,
+    #[serde(default = "default_webauthn_rp_name")]
+    pub rp_name: String,
+    #[serde(default)]
+    pub require_passkey: bool,
+    #[serde(default = "default_break_glass_username")]
+    pub break_glass_username: String,
+}
+
 #[derive(Clone, Deserialize, Default)]
 pub struct OutboundProxyConfig {
     #[serde(default)]
@@ -345,6 +363,25 @@ impl Config {
                 self.quota.request_event_retention_days = days;
             }
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_WEBAUTHN_ENABLED") {
+            self.webauthn.enabled = parse_env_bool("MIRRORPROXY_WEBAUTHN_ENABLED", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_WEBAUTHN_RP_ID") {
+            self.webauthn.rp_id = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_WEBAUTHN_RP_ORIGIN") {
+            self.webauthn.rp_origin = value.trim_end_matches('/').to_string();
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_WEBAUTHN_RP_NAME") {
+            self.webauthn.rp_name = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_WEBAUTHN_REQUIRE_PASSKEY") {
+            self.webauthn.require_passkey =
+                parse_env_bool("MIRRORPROXY_WEBAUTHN_REQUIRE_PASSKEY", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_WEBAUTHN_BREAK_GLASS_USERNAME") {
+            self.webauthn.break_glass_username = value;
+        }
         if let Ok(value) = std::env::var("MIRRORPROXY_OUTBOUND_PROXY_ENABLED") {
             self.outbound_proxy.enabled =
                 parse_env_bool("MIRRORPROXY_OUTBOUND_PROXY_ENABLED", &value)?;
@@ -407,6 +444,7 @@ impl Config {
             "stop_proxy" | "throttle" => {}
             other => anyhow::bail!("quota.on_exceeded must be stop_proxy or throttle, got {other}"),
         }
+        self.webauthn.validate()?;
         self.outbound_proxy.validate()?;
         for (name, auth) in &self.upstream_auth {
             if self.upstream_url(name).is_none() {
@@ -602,6 +640,7 @@ impl Default for Config {
             rate_limit: RateLimitConfig::default(),
             cache: CacheConfig::default(),
             quota: QuotaConfig::default(),
+            webauthn: WebauthnConfig::default(),
             outbound_proxy: OutboundProxyConfig::default(),
             forward_client_authorization: false,
             upstream_auth: BTreeMap::new(),
@@ -770,6 +809,19 @@ impl Default for QuotaConfig {
     }
 }
 
+impl Default for WebauthnConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            rp_id: String::new(),
+            rp_origin: String::new(),
+            rp_name: default_webauthn_rp_name(),
+            require_passkey: false,
+            break_glass_username: default_break_glass_username(),
+        }
+    }
+}
+
 impl OutboundProxyConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !self.enabled {
@@ -809,8 +861,65 @@ impl OutboundProxyConfig {
     }
 }
 
+impl WebauthnConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.enabled {
+            if self.require_passkey {
+                anyhow::bail!("webauthn.require_passkey requires webauthn.enabled");
+            }
+            return Ok(());
+        }
+        let rp_id = self.rp_id.trim();
+        if rp_id.is_empty()
+            || rp_id.starts_with('.')
+            || rp_id.ends_with('.')
+            || rp_id.contains("..")
+            || rp_id.contains('*')
+            || rp_id.parse::<IpAddr>().is_ok()
+            || !rp_id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || character == '.' || character == '-'
+            })
+        {
+            anyhow::bail!("webauthn.rp_id must be a concrete DNS domain");
+        }
+        if self.rp_name.trim().is_empty() {
+            anyhow::bail!("webauthn.rp_name cannot be empty");
+        }
+        if self.break_glass_username.trim().is_empty() {
+            anyhow::bail!("webauthn.break_glass_username cannot be empty");
+        }
+        let origin = Url::parse(&self.rp_origin)
+            .map_err(|error| anyhow::anyhow!("webauthn.rp_origin is invalid: {error}"))?;
+        if origin.scheme() != "https"
+            || origin.host_str().is_none()
+            || !origin.username().is_empty()
+            || origin.password().is_some()
+            || origin.path() != "/"
+            || origin.query().is_some()
+            || origin.fragment().is_some()
+        {
+            anyhow::bail!("webauthn.rp_origin must be an HTTPS origin without a path, query, credentials, or fragment");
+        }
+        let origin_host = origin.host_str().unwrap_or_default();
+        if origin_host != rp_id && !origin_host.ends_with(&format!(".{rp_id}")) {
+            anyhow::bail!(
+                "webauthn.rp_id must equal or be a registrable suffix of the RP origin host"
+            );
+        }
+        Ok(())
+    }
+}
+
 fn default_listen_addr() -> String {
     "127.0.0.1:3000".to_string()
+}
+
+fn default_webauthn_rp_name() -> String {
+    "MirrorProxy".to_string()
+}
+
+fn default_break_glass_username() -> String {
+    "admin".to_string()
 }
 
 fn default_database_path() -> String {
@@ -1555,6 +1664,54 @@ password = "proxy-password"
             ..Config::default()
         };
 
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validates_webauthn_rp_and_https_origin() {
+        let valid = Config {
+            webauthn: WebauthnConfig {
+                enabled: true,
+                rp_id: "example.com".to_string(),
+                rp_origin: "https://mirror.example.com".to_string(),
+                ..WebauthnConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(valid.validate().is_ok());
+
+        for (rp_id, origin) in [
+            ("*.example.com", "https://mirror.example.com"),
+            (".example.com", "https://mirror.example.com"),
+            ("example.com.", "https://mirror.example.com"),
+            ("example..com", "https://mirror.example.com"),
+            ("127.0.0.1", "https://127.0.0.1"),
+            ("example.com", "http://mirror.example.com"),
+            ("example.net", "https://mirror.example.com"),
+            ("example.com", "https://mirror.example.com/admin"),
+        ] {
+            let invalid = Config {
+                webauthn: WebauthnConfig {
+                    enabled: true,
+                    rp_id: rp_id.to_string(),
+                    rp_origin: origin.to_string(),
+                    ..WebauthnConfig::default()
+                },
+                ..Config::default()
+            };
+            assert!(invalid.validate().is_err(), "{rp_id} / {origin}");
+        }
+    }
+
+    #[test]
+    fn passkey_requirement_cannot_be_enabled_without_webauthn() {
+        let config = Config {
+            webauthn: WebauthnConfig {
+                require_passkey: true,
+                ..WebauthnConfig::default()
+            },
+            ..Config::default()
+        };
         assert!(config.validate().is_err());
     }
 }

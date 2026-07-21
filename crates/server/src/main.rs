@@ -21,7 +21,7 @@ use axum::{
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use chrono::{Datelike, Local, Utc};
@@ -46,6 +46,10 @@ use tower_http::cors::CorsLayer;
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use webauthn_rs::prelude::{
+    PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential,
+    Webauthn, WebauthnBuilder,
+};
 
 const QUOTA_RESERVATION_BYTES: u64 = 8 * 1024 * 1024;
 const ADMIN_SESSION_COOKIE: &str = "mirrorproxy_admin_session";
@@ -102,6 +106,7 @@ pub struct AppState {
     client: Client,
     rate_limiter: Arc<RateLimiter>,
     admin_login_limiter: Arc<AdminLoginRateLimiter>,
+    webauthn: Arc<RwLock<Option<Arc<Webauthn>>>>,
     observability: Arc<Observability>,
 }
 
@@ -874,6 +879,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         );
     }
     let observability = Arc::new(Observability::new()?);
+    let webauthn = build_webauthn(&config)?;
 
     if let Some(credentials) = initial_admin {
         if credentials.generated {
@@ -892,6 +898,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     let state = AppState {
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+        webauthn: Arc::new(RwLock::new(webauthn)),
         config: Arc::new(RwLock::new(config)),
         database: Arc::new(database),
         client,
@@ -916,6 +923,31 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/admin/api/auth/login", post(admin_cookie_login))
         .route("/admin/api/auth/logout", post(admin_cookie_logout))
         .route("/admin/api/auth/session", get(admin_session))
+        .route(
+            "/admin/api/auth/passkey/options",
+            get(admin_passkey_options),
+        )
+        .route(
+            "/admin/api/auth/passkey/login/start",
+            post(start_admin_passkey_login),
+        )
+        .route(
+            "/admin/api/auth/passkey/login/finish",
+            post(finish_admin_passkey_login),
+        )
+        .route("/admin/api/auth/passkeys", get(list_admin_passkeys))
+        .route(
+            "/admin/api/auth/passkeys/register/start",
+            post(start_admin_passkey_registration),
+        )
+        .route(
+            "/admin/api/auth/passkeys/register/finish",
+            post(finish_admin_passkey_registration),
+        )
+        .route(
+            "/admin/api/auth/passkeys/{id}",
+            delete(delete_admin_passkey),
+        )
         .route("/admin/api/password", post(change_admin_password))
         .route(
             "/admin/api/config",
@@ -1110,6 +1142,20 @@ fn build_upstream_client(config: &Config) -> anyhow::Result<Client> {
     builder
         .build()
         .context("failed to build upstream HTTP client")
+}
+
+fn build_webauthn(config: &Config) -> anyhow::Result<Option<Arc<Webauthn>>> {
+    if !config.webauthn.enabled {
+        return Ok(None);
+    }
+    let origin = Url::parse(&config.webauthn.rp_origin)
+        .context("failed to parse validated WebAuthn RP origin")?;
+    let webauthn = WebauthnBuilder::new(&config.webauthn.rp_id, &origin)
+        .context("invalid WebAuthn RP ID or origin")?
+        .rp_name(&config.webauthn.rp_name)
+        .build()
+        .context("failed to build WebAuthn relying party")?;
+    Ok(Some(Arc::new(webauthn)))
 }
 
 async fn strip_untrusted_forwarded_headers(
@@ -1808,6 +1854,25 @@ async fn admin_login_response(
         .await;
     match outcome {
         Ok(database::AdminLoginOutcome::Success(session)) if cookie_session => {
+            let passkey_required = {
+                let config = state.config();
+                config.webauthn.require_passkey
+                    && session.username != config.webauthn.break_glass_username
+            };
+            if passkey_required {
+                if let Err(error) = state.database.logout(&session.token).await {
+                    tracing::error!(%error, "failed to revoke password session blocked by passkey policy");
+                    return internal_error_response();
+                }
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "passkey authentication required",
+                        "passkey_required": true
+                    })),
+                )
+                    .into_response();
+            }
             state.admin_login_limiter.clear(&username_key);
             let cookie = admin_session_cookie(&session.token, SESSION_COOKIE_MAX_AGE_SECS);
             let mut response = Json(serde_json::json!({
@@ -1820,6 +1885,25 @@ async fn admin_login_response(
             response
         }
         Ok(database::AdminLoginOutcome::Success(session)) => {
+            let passkey_required = {
+                let config = state.config();
+                config.webauthn.require_passkey
+                    && session.username != config.webauthn.break_glass_username
+            };
+            if passkey_required {
+                if let Err(error) = state.database.logout(&session.token).await {
+                    tracing::error!(%error, "failed to revoke password session blocked by passkey policy");
+                    return internal_error_response();
+                }
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "passkey authentication required",
+                        "passkey_required": true
+                    })),
+                )
+                    .into_response();
+            }
             state.admin_login_limiter.clear(&username_key);
             Json(AdminLoginResponse {
                 token: session.token,
@@ -1873,6 +1957,415 @@ async fn admin_session(headers: HeaderMap, State(state): State<AppState>) -> Res
         Err(error) => {
             tracing::error!(%error, "administrator session query failed");
             internal_error_response()
+        }
+    }
+}
+
+async fn admin_passkey_options(State(state): State<AppState>) -> Response {
+    let config = state.config();
+    Json(serde_json::json!({
+        "enabled": config.webauthn.enabled,
+        "require_passkey": config.webauthn.require_passkey
+    }))
+    .into_response()
+}
+
+async fn list_admin_passkeys(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let identity = match authenticated_admin(&headers, &state).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator passkey authorization failed");
+            return internal_error_response();
+        }
+    };
+    match state.database.list_admin_passkeys(&identity.username).await {
+        Ok(passkeys) => Json(passkeys).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to list administrator passkeys");
+            internal_error_response()
+        }
+    }
+}
+
+async fn start_admin_passkey_registration(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    let (identity, token) = match require_recent_admin(&headers, &state).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let webauthn = match webauthn_instance(&state) {
+        Some(webauthn) => webauthn,
+        None => return passkey_not_configured_response(),
+    };
+    let user_handle = match state.database.admin_user_handle(&identity.username).await {
+        Ok(Some(handle)) => handle,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to load administrator WebAuthn user handle");
+            return internal_error_response();
+        }
+    };
+    let passkeys = match state.database.admin_passkeys(&identity.username).await {
+        Ok(passkeys) => passkeys,
+        Err(error) => {
+            tracing::error!(%error, "failed to load existing administrator passkeys");
+            return internal_error_response();
+        }
+    };
+    let excluded = (!passkeys.is_empty()).then(|| {
+        passkeys
+            .iter()
+            .map(|stored| stored.passkey.cred_id().clone())
+            .collect()
+    });
+    let (options, registration) = match webauthn.start_passkey_registration(
+        user_handle,
+        &identity.username,
+        &identity.username,
+        excluded,
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(%error, "failed to start administrator passkey registration");
+            return bad_request_response("unable to start passkey registration".to_string());
+        }
+    };
+    let state_json = match serde_json::to_string(&registration) {
+        Ok(json) => json,
+        Err(error) => {
+            tracing::error!(%error, "failed to serialize passkey registration state");
+            return internal_error_response();
+        }
+    };
+    match state
+        .database
+        .store_webauthn_challenge(
+            &identity.username,
+            "registration",
+            &state_json,
+            Some(&token),
+        )
+        .await
+    {
+        Ok(challenge_id) => Json(serde_json::json!({
+            "challenge_id": challenge_id,
+            "options": options
+        }))
+        .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to persist passkey registration state");
+            internal_error_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct FinishAdminPasskeyRegistrationRequest {
+    challenge_id: String,
+    name: String,
+    credential: RegisterPublicKeyCredential,
+}
+
+async fn finish_admin_passkey_registration(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<FinishAdminPasskeyRegistrationRequest>,
+) -> Response {
+    let (identity, token) = match require_recent_admin(&headers, &state).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let name = request.name.trim();
+    if name.is_empty() || name.chars().count() > 80 {
+        return bad_request_response("passkey name must contain 1 to 80 characters".to_string());
+    }
+    let webauthn = match webauthn_instance(&state) {
+        Some(webauthn) => webauthn,
+        None => return passkey_not_configured_response(),
+    };
+    let challenge = match state
+        .database
+        .take_webauthn_challenge(&request.challenge_id, "registration", Some(&token))
+        .await
+    {
+        Ok(Some(challenge)) => challenge,
+        Ok(None) => {
+            return bad_request_response("passkey challenge is invalid or expired".to_string())
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to consume passkey registration state");
+            return internal_error_response();
+        }
+    };
+    if challenge.0 != identity.username {
+        return unauthorized_response();
+    }
+    let registration: PasskeyRegistration = match serde_json::from_str(&challenge.1) {
+        Ok(registration) => registration,
+        Err(error) => {
+            tracing::error!(%error, "stored passkey registration state is invalid");
+            return internal_error_response();
+        }
+    };
+    let passkey = match webauthn.finish_passkey_registration(&request.credential, &registration) {
+        Ok(passkey) => passkey,
+        Err(error) => {
+            tracing::warn!(%error, "administrator passkey registration verification failed");
+            return bad_request_response("passkey registration verification failed".to_string());
+        }
+    };
+    match state
+        .database
+        .add_admin_passkey(&identity.username, name, &passkey)
+        .await
+    {
+        Ok(true) => StatusCode::CREATED.into_response(),
+        Ok(false) => conflict_response("this passkey is already registered"),
+        Err(error) => {
+            tracing::error!(%error, "failed to save administrator passkey");
+            internal_error_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct StartAdminPasskeyLoginRequest {
+    username: String,
+}
+
+async fn start_admin_passkey_login(
+    State(state): State<AppState>,
+    Json(request): Json<StartAdminPasskeyLoginRequest>,
+) -> Response {
+    let username = request.username.trim();
+    let webauthn = match webauthn_instance(&state) {
+        Some(webauthn) => webauthn,
+        None => return passkey_not_configured_response(),
+    };
+    match state.database.admin_user_handle(username).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to resolve administrator passkey identity");
+            return internal_error_response();
+        }
+    }
+    let passkeys = match state.database.admin_passkeys(username).await {
+        Ok(passkeys) if !passkeys.is_empty() => passkeys,
+        Ok(_) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to load administrator passkeys");
+            return internal_error_response();
+        }
+    };
+    let credentials = passkeys
+        .iter()
+        .map(|stored| stored.passkey.clone())
+        .collect::<Vec<_>>();
+    let (options, authentication) = match webauthn.start_passkey_authentication(&credentials) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(%error, "failed to start administrator passkey login");
+            return unauthorized_response();
+        }
+    };
+    let state_json = match serde_json::to_string(&authentication) {
+        Ok(json) => json,
+        Err(error) => {
+            tracing::error!(%error, "failed to serialize passkey authentication state");
+            return internal_error_response();
+        }
+    };
+    match state
+        .database
+        .store_webauthn_challenge(username, "authentication", &state_json, None)
+        .await
+    {
+        Ok(challenge_id) => Json(serde_json::json!({
+            "challenge_id": challenge_id,
+            "options": options
+        }))
+        .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to persist passkey authentication state");
+            internal_error_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct FinishAdminPasskeyLoginRequest {
+    challenge_id: String,
+    credential: PublicKeyCredential,
+}
+
+async fn finish_admin_passkey_login(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(request): Json<FinishAdminPasskeyLoginRequest>,
+) -> Response {
+    let webauthn = match webauthn_instance(&state) {
+        Some(webauthn) => webauthn,
+        None => return passkey_not_configured_response(),
+    };
+    let (username, state_json) = match state
+        .database
+        .take_webauthn_challenge(&request.challenge_id, "authentication", None)
+        .await
+    {
+        Ok(Some(challenge)) => challenge,
+        Ok(None) => {
+            return bad_request_response("passkey challenge is invalid or expired".to_string())
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to consume passkey authentication state");
+            return internal_error_response();
+        }
+    };
+    let authentication: PasskeyAuthentication = match serde_json::from_str(&state_json) {
+        Ok(authentication) => authentication,
+        Err(error) => {
+            tracing::error!(%error, "stored passkey authentication state is invalid");
+            return internal_error_response();
+        }
+    };
+    let result = match webauthn.finish_passkey_authentication(&request.credential, &authentication)
+    {
+        Ok(result) if result.user_verified() => result,
+        Ok(_) => return unauthorized_response(),
+        Err(error) => {
+            tracing::warn!(%error, "administrator passkey authentication failed");
+            return unauthorized_response();
+        }
+    };
+    match state
+        .database
+        .update_admin_passkey_after_authentication(&username, &result)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to update authenticated passkey");
+            return internal_error_response();
+        }
+    }
+    let session = match state
+        .database
+        .create_passkey_session(&username, &peer.ip().to_string())
+        .await
+    {
+        Ok(Some(session)) => session,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to create administrator passkey session");
+            return internal_error_response();
+        }
+    };
+    let mut response = Json(serde_json::json!({
+        "username": session.username,
+        "role": session.role,
+        "expires_at": session.expires_at
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        admin_session_cookie(&session.token, SESSION_COOKIE_MAX_AGE_SECS),
+    );
+    response
+}
+
+async fn delete_admin_passkey(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+) -> Response {
+    let (identity, _) = match require_recent_admin(&headers, &state).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let config = state.config();
+    if config.webauthn.require_passkey && identity.username != config.webauthn.break_glass_username
+    {
+        match state
+            .database
+            .admin_passkey_count(Some(&identity.username))
+            .await
+        {
+            Ok(count) if count > 2 => {}
+            Ok(_) => {
+                return conflict_response(
+                    "passkey policy requires this administrator to keep at least two passkeys",
+                )
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to count administrator passkeys");
+                return internal_error_response();
+            }
+        }
+    }
+    match state
+        .database
+        .delete_admin_passkey(&identity.username, id)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "passkey not found"
+            })),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to delete administrator passkey");
+            internal_error_response()
+        }
+    }
+}
+
+fn webauthn_instance(state: &AppState) -> Option<Arc<Webauthn>> {
+    state
+        .webauthn
+        .read()
+        .expect("WebAuthn lock poisoned")
+        .clone()
+}
+
+fn passkey_not_configured_response() -> Response {
+    conflict_response("administrator passkey authentication is not configured")
+}
+
+async fn require_recent_admin(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<(database::AdminIdentity, String), Response> {
+    let Some(token) = admin_token(headers).map(ToString::to_string) else {
+        return Err(unauthorized_response());
+    };
+    let identity = match state.database.authenticate_session(&token).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return Err(unauthorized_response()),
+        Err(error) => {
+            tracing::error!(%error, "administrator authorization query failed");
+            return Err(internal_error_response());
+        }
+    };
+    match state.database.is_recent_admin_session(&token).await {
+        Ok(true) => Ok((identity, token)),
+        Ok(false) => Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "recent administrator verification required"
+            })),
+        )
+            .into_response()),
+        Err(error) => {
+            tracing::error!(%error, "administrator recent verification query failed");
+            Err(internal_error_response())
         }
     }
 }
@@ -2066,6 +2559,61 @@ async fn update_admin_config(
         )
             .into_response();
     }
+    let next_webauthn = if next_config.webauthn != current.webauthn {
+        if identity.role != "super_admin" {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "super administrator access required to change the passkey policy"
+                })),
+            )
+                .into_response();
+        }
+        let Some(token) = admin_token(&headers) else {
+            return unauthorized_response();
+        };
+        match state.database.is_recent_admin_session(token).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "recent administrator verification required"
+                    })),
+                )
+                    .into_response()
+            }
+            Err(error) => {
+                tracing::error!(%error, "administrator recent verification query failed");
+                return internal_error_response();
+            }
+        }
+        if next_config.webauthn.require_passkey {
+            match state
+                .database
+                .admins_without_minimum_passkeys(2, &next_config.webauthn.break_glass_username)
+                .await
+            {
+                Ok(admins) if admins.is_empty() => {}
+                Ok(admins) => {
+                    return conflict_response(&format!(
+                        "cannot require passkeys until every non-break-glass administrator has two passkeys: {}",
+                        admins.join(", ")
+                    ));
+                }
+                Err(error) => {
+                    tracing::error!(%error, "failed to verify administrator passkey readiness");
+                    return internal_error_response();
+                }
+            }
+        }
+        match build_webauthn(&next_config) {
+            Ok(webauthn) => Some(webauthn),
+            Err(error) => return bad_request_response(error.to_string()),
+        }
+    } else {
+        None
+    };
     let restart_required = (next_config.timeout.request_secs != current.timeout.request_secs)
         .then_some("timeout.request_secs")
         .into_iter()
@@ -2083,6 +2631,9 @@ async fn update_admin_config(
         return internal_error_response();
     }
     *state.config.write().expect("runtime config lock poisoned") = next_config.clone();
+    if let Some(webauthn) = next_webauthn {
+        *state.webauthn.write().expect("WebAuthn lock poisoned") = webauthn;
+    }
     Json(AdminConfigUpdateResponse {
         config: next_config,
         restart_required,
@@ -2128,6 +2679,11 @@ async fn create_admin(
         Ok(identity) => identity,
         Err(response) => return response,
     };
+    if state.config().webauthn.require_passkey {
+        return conflict_response(
+            "cannot create an administrator while passkey-only login is required; temporarily disable the policy, create the account, register two passkeys, and re-enable it",
+        );
+    }
     let username = request.username.trim();
     if let Err(error) = validate_admin_username(username) {
         return bad_request_response(error.to_string());
@@ -2550,6 +3106,7 @@ mod tests {
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+            webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
         };
         (state, credentials.unwrap())
@@ -3379,6 +3936,7 @@ on_exceeded = "stop_proxy"
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+            webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
@@ -3439,6 +3997,7 @@ on_exceeded = "stop_proxy"
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+            webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
@@ -3475,6 +4034,7 @@ on_exceeded = "stop_proxy"
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+            webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
         };
 
@@ -3512,6 +4072,7 @@ on_exceeded = "stop_proxy"
             client: Client::new(),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+            webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
@@ -3626,6 +4187,149 @@ on_exceeded = "stop_proxy"
             .await;
             assert_eq!(response.status(), StatusCode::OK);
         }
+    }
+
+    #[tokio::test]
+    async fn passkey_only_policy_blocks_password_except_for_break_glass_admin() {
+        let (mut state, credentials) = admin_test_state().await;
+        let mut config = Config::default();
+        config.webauthn.enabled = true;
+        config.webauthn.require_passkey = true;
+        config.webauthn.break_glass_username = "recovery".to_string();
+        state.config = Arc::new(RwLock::new(config));
+
+        let blocked = admin_cookie_login(
+            State(state.clone()),
+            ConnectInfo("192.0.2.12:41000".parse().unwrap()),
+            Json(AdminLoginRequest {
+                username: "admin".to_string(),
+                password: credentials.password.clone(),
+            }),
+        )
+        .await;
+        assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+
+        state.config.write().unwrap().webauthn.break_glass_username = "admin".to_string();
+        let recovery = admin_cookie_login(
+            State(state),
+            ConnectInfo("192.0.2.12:41001".parse().unwrap()),
+            Json(AdminLoginRequest {
+                username: "admin".to_string(),
+                password: credentials.password,
+            }),
+        )
+        .await;
+        assert_eq!(recovery.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn passkey_only_policy_rejects_new_administrator_accounts() {
+        let (mut state, credentials) = admin_test_state().await;
+        let session = state
+            .database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut config = Config::default();
+        config.webauthn.enabled = true;
+        config.webauthn.require_passkey = true;
+        state.config = Arc::new(RwLock::new(config));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("{ADMIN_SESSION_COOKIE}={}", session.token)
+                .parse()
+                .unwrap(),
+        );
+
+        let response = create_admin(
+            headers,
+            State(state.clone()),
+            Json(CreateAdminRequest {
+                username: "operator".to_string(),
+                password: "operator-password-123".to_string(),
+                role: "admin".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(state.database.list_admins().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn passkey_only_policy_requires_two_credentials_for_each_non_break_glass_admin() {
+        let (state, credentials) = admin_test_state().await;
+        let session = state
+            .database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("{ADMIN_SESSION_COOKIE}={}", session.token)
+                .parse()
+                .unwrap(),
+        );
+        let mut config = state.config();
+        config.webauthn.enabled = true;
+        config.webauthn.require_passkey = true;
+        config.webauthn.rp_id = "mirror.example".to_string();
+        config.webauthn.rp_origin = "https://mirror.example".to_string();
+        config.webauthn.break_glass_username = "recovery".to_string();
+
+        let response = update_admin_config(headers, State(state), Json(config)).await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(value["error"].as_str().unwrap().contains("admin"));
+    }
+
+    #[tokio::test]
+    async fn passkey_registration_challenge_is_server_stored_session_bound_and_one_time() {
+        let (mut state, credentials) = admin_test_state().await;
+        let mut config = Config::default();
+        config.webauthn.enabled = true;
+        config.webauthn.rp_id = "mirror.example".to_string();
+        config.webauthn.rp_origin = "https://mirror.example".to_string();
+        let webauthn = build_webauthn(&config).unwrap();
+        state.config = Arc::new(RwLock::new(config));
+        state.webauthn = Arc::new(RwLock::new(webauthn));
+        let session = state
+            .database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("{ADMIN_SESSION_COOKIE}={}", session.token)
+                .parse()
+                .unwrap(),
+        );
+        let response = start_admin_passkey_registration(headers, State(state.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["options"]["publicKey"]["rp"]["id"], "mirror.example");
+        let challenge_id = value["challenge_id"].as_str().unwrap();
+        let stored = state
+            .database
+            .take_webauthn_challenge(challenge_id, "registration", Some(&session.token))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.0, "admin");
+        serde_json::from_str::<PasskeyRegistration>(&stored.1).unwrap();
+        assert!(state
+            .database
+            .take_webauthn_challenge(challenge_id, "registration", Some(&session.token))
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[test]
