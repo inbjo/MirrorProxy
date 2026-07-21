@@ -24,7 +24,7 @@ const adminConfig = {
   timeout: { request_secs: 30 },
   rate_limit: { enabled: true, requests_per_minute: 120 },
   cache: { enabled: false, directory: 'cache', max_entry_mb: 8, max_total_mb: 256 },
-  user_access: { base_domain: '', mode: 'public', routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
+  user_access: { base_domain: '', mode: 'public', infrastructure_ready: false, routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
   registration: { mode: 'invite_only', allowed_email_domains: [], email_token_ttl_minutes: 10 },
   webauthn: { enabled: false, rp_id: '', rp_origin: '', rp_name: 'MirrorProxy', require_passkey: false, break_glass_username: 'admin' },
 }
@@ -109,7 +109,8 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByRole('heading', { name: 'Runtime configuration' })).toBeVisible()
+  await page.getByRole('button', { name: 'Access & quotas' }).click()
+  await expect(page.getByRole('heading', { name: 'Service access' })).toBeVisible()
 
   await page.getByLabel('Public URL').fill('https://updated.example')
   await page.getByRole('button', { name: 'Save configuration' }).click()
@@ -137,6 +138,27 @@ test('refreshes statistics from the admin console', async ({ page }) => {
   await expect(page.locator('.console-metrics').getByText('2', { exact: true })).toBeVisible()
 })
 
+test('localizes the administrator tabs and primary settings in Chinese', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('mirrorproxy.locale', 'zh'))
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
+  await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
+  await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
+  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
+
+  await page.goto('/admin')
+  await page.getByLabel('管理员密码').fill('correct-password')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page.getByRole('button', { name: '访问与配额' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '用户与分组' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '管理员与安全' })).toBeVisible()
+  await page.getByRole('button', { name: '访问与配额' }).click()
+  await expect(page.getByRole('heading', { name: '服务准入' })).toBeVisible()
+  await expect(page.getByLabel('注册模式')).toHaveValue('invite_only')
+  await expect(page.getByText('Runtime configuration')).toHaveCount(0)
+})
+
 test('changes the administrator password and revokes the active session', async ({ page }) => {
   let passwordRequest: unknown
   let loggedOut = false
@@ -159,6 +181,7 @@ test('changes the administrator password and revokes the active session', async 
   page.once('dialog', dialog => dialog.accept())
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in' }).click()
+  await page.getByRole('button', { name: 'Administrators & security' }).click()
   await page.getByLabel('Current password').fill('correct-password')
   await page.getByLabel('New password (12 characters minimum)').fill('replacement-password')
   await page.getByRole('button', { name: 'Change password and revoke all sessions' }).click()
@@ -224,6 +247,7 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
   await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByRole('button', { name: 'Administrators & security' }).click()
   await page.getByLabel('Passkey name').fill('Test platform key')
   await page.getByRole('button', { name: 'Register passkey' }).click()
   await expect.poll(() => registeredCredential?.type).toBe('public-key')
@@ -311,11 +335,12 @@ test('configures SMTP, queues a test email, and resends an invitation', async ({
   await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByRole('button', { name: 'Email & invitations' }).click()
   await page.getByLabel('SMTP host').fill('smtp.internal.example')
-  await page.getByRole('button', { name: 'Save SMTP' }).click()
+  await page.getByRole('button', { name: 'Save mail settings' }).click()
   await expect.poll(() => smtpUpdate?.host).toBe('smtp.internal.example')
   await page.getByLabel('Test recipient').fill('ops@example.com')
-  await page.getByRole('button', { name: 'Queue test email' }).click()
+  await page.getByRole('button', { name: 'Send test email' }).click()
   await expect.poll(() => testRecipient).toEqual({ recipient: 'ops@example.com' })
   await page.getByRole('button', { name: 'Resend' }).click()
   await expect.poll(() => resent).toBe(true)
@@ -347,6 +372,7 @@ test('assigns a user to a billing group with a custom quota', async ({ page }) =
   await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByRole('button', { name: 'Users & groups' }).click()
   await page.getByLabel('person@example.com billing group').selectOption('3')
   await page.getByLabel('person@example.com quota mode').selectOption('custom')
   await page.getByLabel('person@example.com custom quota').fill('25')
@@ -385,9 +411,10 @@ test('configures an OpenID Connect provider without exposing its saved secret', 
   await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByRole('button', { name: 'Identity providers' }).click()
   await page.getByRole('button', { name: 'Edit' }).click()
-  await expect(page.getByLabel('Client secret')).toHaveValue('')
-  await page.getByLabel('Button label').fill('Company Google')
+  await expect(page.getByLabel('Client Secret')).toHaveValue('')
+  await page.getByLabel('Sign-in button label').fill('Company Google')
   await page.getByRole('button', { name: 'Update provider' }).click()
   await expect.poll(() => providerUpdate?.display_name).toBe('Company Google')
   await expect.poll(() => providerUpdate?.client_secret).toBeNull()
@@ -413,8 +440,10 @@ test('revokes administrator sessions and searches and soft-deletes users', async
   await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByRole('button', { name: 'Administrators & security' }).click()
   await page.locator('.admin-account-row', { hasText: 'passkey' }).getByRole('button', { name: 'Revoke' }).click()
   await expect.poll(() => revokedSession).toBe('0123456789abcdef01234567')
+  await page.getByRole('button', { name: 'Users & groups' }).click()
   await page.getByLabel('Search users').fill('search-me')
   await expect(page.getByText('search-me@example.com')).toBeVisible()
   await expect(page.getByText('other@example.com')).toHaveCount(0)

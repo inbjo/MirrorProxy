@@ -71,6 +71,8 @@ describe('App preferences', () => {
     render(<App />)
     fireEvent.change(await screen.findByLabelText('Administrator password'), { target: { value: 'password' } })
     fireEvent.click(screen.getAllByText('Sign in').at(-1)!)
+    fireEvent.click(await screen.findByRole('button', { name: 'Advanced' }))
+    fireEvent.click(await screen.findByText('Edit upstream endpoints'))
     const field = await screen.findByDisplayValue('https://http.kali.org/kali')
     expect(field.closest('label')?.textContent).toContain('additional_os.kali')
     fireEvent.change(field, { target: { value: 'https://mirror.example/kali' } })
