@@ -796,6 +796,29 @@ MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
 统一失败；用户子域名不能访问 `/admin`、`/login`、`/account` 等控制入口。只有可信
 反向代理提供的 `X-Forwarded-Host` 会参与归属判断。
 
+邮件邀请和无密码登录需要一个持久化的 32 字节主密钥，使用无填充 base64url 编码。
+只生成一次，作为部署密钥保存，并与 SQLite 一同备份：
+
+```bash
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+```
+
+```dotenv
+MIRRORPROXY_MASTER_KEY=替换为上面生成的值
+MIRRORPROXY_REGISTRATION_MODE=invite_only
+MIRRORPROXY_ALLOWED_EMAIL_DOMAINS=example.com,subsidiary.example.com
+MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES=10
+```
+
+在 `/admin` 配置 SMTP 和邀请。支持 STARTTLS、SMTPS、带认证或无认证 SMTP。SMTP
+密码和 Outbox 邮件正文使用 XChaCha20-Poly1305 加密，API 不返回密码。SQLite Outbox
+发送失败后执行有限次数的指数退避。验证码和 Magic Link 默认十分钟过期，数据库只保存
+哈希，验证码最多允许五次错误，并且只能成功使用一次；发送按邮箱、来源 IP 和实例限速。
+
+注册默认是 `invite_only`；`domain_allowlist` 允许指定企业域名的已验证邮箱，`open`
+允许任意已验证邮箱，`disabled` 只允许已有用户登录。普通用户在 `/login` 登录，在
+`/account` 查看或更换自己的 `accounting_only` 子域名。
+
 管理员 Passkey 为可选功能，协议由 `webauthn-rs` 实现。登记凭据前需要配置固定 RP ID
 和管理后台实际使用的完整 HTTPS Origin：
 

@@ -57,6 +57,11 @@ type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access'> & {
     routing_id_min_length: number
     routing_rotation_cooldown_hours: number
   }
+  registration: {
+    mode: 'invite_only' | 'domain_allowlist' | 'open' | 'disabled'
+    allowed_email_domains: string[]
+    email_token_ttl_minutes: number
+  }
   webauthn: {
     enabled: boolean
     rp_id: string
@@ -324,9 +329,52 @@ const messages = {
 } satisfies Record<Locale, Record<string, string>>
 
 export function App() {
-  return window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')
-    ? <AdminPage />
-    : <PublicApp />
+  if (window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')) return <AdminPage />
+  if (window.location.pathname === '/login' || window.location.pathname === '/account') return <UserPage />
+  return <PublicApp />
+}
+
+type UserProfile = { user: { id: number; email: string; display_name: string; routing_id: string; routing_rotated_at: number }; proxy_base_url: string | null }
+
+function UserPage() {
+  const [email, setEmail] = React.useState(() => new URLSearchParams(location.search).get('email') ?? '')
+  const [code, setCode] = React.useState('')
+  const [profile, setProfile] = React.useState<UserProfile | null>(null)
+  const [message, setMessage] = React.useState('')
+  const invitation = new URLSearchParams(location.search).get('invitation')
+  const magicToken = new URLSearchParams(location.search).get('token')
+
+  const loadProfile = React.useCallback(async () => {
+    const response = await fetch('/api/account/profile')
+    if (response.ok) setProfile(await response.json() as UserProfile)
+  }, [])
+
+  React.useEffect(() => { loadProfile().catch(() => undefined) }, [loadProfile])
+  React.useEffect(() => {
+    if (!magicToken || !email) return
+    fetch('/api/auth/email/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, token: magicToken }) })
+      .then((response) => response.ok ? loadProfile() : Promise.reject())
+      .catch(() => setMessage('This sign-in link is invalid or expired.'))
+  }, [email, loadProfile, magicToken])
+
+  const requestLogin = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const response = await fetch('/api/auth/email/request', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, invitation_token: invitation }) })
+    setMessage(response.ok ? 'If this address is eligible, a code and sign-in link have been sent.' : 'Email sign-in is unavailable.')
+  }
+  const verify = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const response = await fetch('/api/auth/email/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, code }) })
+    if (!response.ok) { setMessage('The verification code is invalid or expired.'); return }
+    await loadProfile()
+  }
+  const rotate = async () => {
+    const response = await fetch('/api/account/routing-id/rotate', { method: 'POST' })
+    if (!response.ok) { setMessage('The routing address cannot be changed yet.'); return }
+    await loadProfile()
+  }
+
+  return <main className="admin-page"><header className="topbar admin-page-header"><a className="brand-mark" href="/"><ServerCog size={18} /> MirrorProxy Account</a></header><section className="admin-console" aria-label="User account"><div className="console-head"><div><span className="console-kicker">ACCOUNT / EMAIL</span><h2>{profile ? 'Your MirrorProxy account' : 'Email sign in'}</h2></div></div>{profile ? <section className="login-card"><h3>{profile.user.display_name}</h3><p>{profile.user.email}</p><label>Accounting-only proxy address<input readOnly value={profile.proxy_base_url ?? profile.user.routing_id} /></label><p>Anyone who knows this address can use your traffic allowance. Rotate it if you suspect it leaked.</p><button className="danger-button" onClick={rotate}>Generate a new routing address</button>{message ? <p>{message}</p> : null}</section> : <div className="console-grid"><form className="login-card" onSubmit={requestLogin}><h3>Request a sign-in code</h3><label>Email<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="primary-button" type="submit">Send code and magic link</button></form><form className="login-card" onSubmit={verify}><h3>Enter verification code</h3><label>Six-digit code<input required inputMode="numeric" pattern="[0-9]{6}" value={code} onChange={(event) => setCode(event.target.value)} /></label><button className="primary-button" type="submit">Sign in</button>{message ? <p>{message}</p> : null}</form></div>}</section></main>
 }
 
 function PublicApp() {
@@ -787,7 +835,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         title: '运行控制台', login: '管理员登录', username: '管理员账号', password: '管理员密码', signIn: '登录', signOut: '退出登录',
         overview: '本月概览', sent: '已发送', remaining: '配额剩余', requests: '请求', errors: '错误',
         configuration: '运行时配置', publicUrl: '公开地址', trustedProxies: '可信反向代理', trustedProxiesHint: '逗号分隔的 IP 或 CIDR；只有这些来源的 X-Forwarded-* 头会被使用。', quota: '启用月度配额', quotaGb: '月度 GB', retentionDays: '明细保留天数', timezone: '时区', cache: '启用小对象磁盘缓存', cacheDirectory: '缓存目录', cacheMaxEntry: '单项上限（MB）',
-        action: '超限动作', forwardAuth: '转发客户端认证头', rate: '启用请求限流', rpm: '每分钟请求数', adapters: '启用代理', upstreams: '上游地址', baseDomain: '用户子域名主域', accessMode: '包代理访问模式', routingLength: '子域名最短长度', rotationCooldown: '子域名更换冷却（小时）',
+        action: '超限动作', forwardAuth: '转发客户端认证头', rate: '启用请求限流', rpm: '每分钟请求数', adapters: '启用代理', upstreams: '上游地址', baseDomain: '用户子域名主域', accessMode: '包代理访问模式', routingLength: '子域名最短长度', rotationCooldown: '子域名更换冷却（小时）', registrationMode: '注册模式', allowedDomains: '企业邮箱域名', emailTtl: '邮件登录有效期（分钟）',
         save: '保存配置', saving: '保存中…', refresh: '刷新统计', top: 'Top targets', daily: '当月日明细',
         close: '关闭控制台', badLogin: '登录失败，请检查管理员密码。', saveError: '配置保存失败。', restart: '以下字段将在重启后生效：',
         quotaStopped: '代理已因月流量上限停止', noData: '本月尚无代理流量。', passwordHint: '首次启动时密码只会出现在本机日志中。',
@@ -800,7 +848,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         title: 'Operations console', login: 'Administrator sign in', username: 'Administrator username', password: 'Administrator password', signIn: 'Sign in', signOut: 'Sign out',
         overview: 'Month at a glance', sent: 'Sent', remaining: 'Quota remaining', requests: 'Requests', errors: 'Errors',
         configuration: 'Runtime configuration', publicUrl: 'Public URL', trustedProxies: 'Trusted reverse proxies', trustedProxiesHint: 'Comma-separated IPs or CIDRs. Only these peers may supply X-Forwarded-* headers.', quota: 'Enable monthly quota', quotaGb: 'Monthly GB', retentionDays: 'Event retention (days)', timezone: 'Timezone', cache: 'Enable small-response disk cache', cacheDirectory: 'Cache directory', cacheMaxEntry: 'Per-entry limit (MB)',
-        action: 'Exceeded action', forwardAuth: 'Forward client authorization', rate: 'Enable request rate limit', rpm: 'Requests / minute', adapters: 'Enabled adapters', upstreams: 'Upstream endpoints', baseDomain: 'User subdomain base', accessMode: 'Package proxy access mode', routingLength: 'Minimum routing ID length', rotationCooldown: 'Rotation cooldown (hours)',
+        action: 'Exceeded action', forwardAuth: 'Forward client authorization', rate: 'Enable request rate limit', rpm: 'Requests / minute', adapters: 'Enabled adapters', upstreams: 'Upstream endpoints', baseDomain: 'User subdomain base', accessMode: 'Package proxy access mode', routingLength: 'Minimum routing ID length', rotationCooldown: 'Rotation cooldown (hours)', registrationMode: 'Registration mode', allowedDomains: 'Allowed email domains', emailTtl: 'Email login lifetime (minutes)',
         save: 'Save configuration', saving: 'Saving…', refresh: 'Refresh stats', top: 'Top targets', daily: 'Daily detail',
         close: 'Close console', badLogin: 'Sign in failed. Check the administrator password.', saveError: 'Configuration save failed.', restart: 'These fields apply after restart:',
         quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is printed only in the local startup log.',
@@ -844,6 +892,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
       ...config,
       trusted_proxies: config.trusted_proxies ?? [],
       user_access: config.user_access ?? { base_domain: '', mode: 'public', routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
+      registration: config.registration ?? { mode: 'invite_only', allowed_email_domains: [], email_token_ttl_minutes: 10 },
       webauthn: config.webauthn ?? { enabled: false, rp_id: '', rp_origin: '', rp_name: 'MirrorProxy', require_passkey: false, break_glass_username: 'admin' },
     })
     setStats(nextStats)
@@ -1010,6 +1059,7 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
   const updateRate = (key: keyof AdminConfig['rate_limit'], value: string | boolean | number) => setDraft((current) => current ? { ...current, rate_limit: { ...current.rate_limit, [key]: value } } : current)
   const updateCache = (key: keyof AdminConfig['cache'], value: string | boolean | number) => setDraft((current) => current ? { ...current, cache: { ...current.cache, [key]: value } } : current)
   const updateUserAccess = (key: keyof AdminConfig['user_access'], value: string | number) => setDraft((current) => current ? { ...current, user_access: { ...current.user_access, [key]: value } } : current)
+  const updateRegistration = (key: keyof AdminConfig['registration'], value: string | number | string[]) => setDraft((current) => current ? { ...current, registration: { ...current.registration, [key]: value } } : current)
   const toggleAdapter = (adapter: string) => setDraft((current) => {
     if (!current) return current
     const enabled = current.enabled_proxies.includes(adapter)
@@ -1040,16 +1090,104 @@ function AdminConsole({ locale, catalog, onClose }: { locale: Locale; catalog: S
         </section>
         <section className="console-config"><div className="console-section-head"><div><h3>{text.configuration}</h3><p>{draft.listen_addr} · SQLite-backed runtime state</p></div><button className="primary-button" disabled={saving} onClick={save}><Save size={16} /> {saving ? text.saving : text.save}</button></div>
           {error ? <p className="form-error">{error}</p> : null}{restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
+          <div className="config-fields"><label>{text.registrationMode}<select value={draft.registration.mode} onChange={(event) => updateRegistration('mode', event.target.value)}><option value="invite_only">invite_only</option><option value="domain_allowlist">domain_allowlist</option><option value="open">open</option><option value="disabled">disabled</option></select></label><label>{text.allowedDomains}<input value={draft.registration.allowed_email_domains.join(', ')} onChange={(event) => updateRegistration('allowed_email_domains', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /></label><label>{text.emailTtl}<input min="1" max="60" type="number" value={draft.registration.email_token_ttl_minutes} onChange={(event) => updateRegistration('email_token_ttl_minutes', Number(event.target.value))} /></label></div>
           <div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label className="wide-field">{text.trustedProxies}<input aria-describedby="trusted-proxies-hint" value={draft.trusted_proxies.join(', ')} onChange={(event) => update('trusted_proxies', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small id="trusted-proxies-hint">{text.trustedProxiesHint}</small></label><label>{text.baseDomain}<input value={draft.user_access.base_domain} onChange={(event) => updateUserAccess('base_domain', event.target.value)} /></label><label>{text.accessMode}<select value={draft.user_access.mode} onChange={(event) => updateUserAccess('mode', event.target.value)}><option value="public">public</option><option value="subdomain_required">subdomain_required</option></select></label><label>{text.routingLength}<input min="8" max="32" type="number" value={draft.user_access.routing_id_min_length} onChange={(event) => updateUserAccess('routing_id_min_length', Number(event.target.value))} /></label><label>{text.rotationCooldown}<input min="0" max="8760" type="number" value={draft.user_access.routing_rotation_cooldown_hours} onChange={(event) => updateUserAccess('routing_rotation_cooldown_hours', Number(event.target.value))} /></label><label>{text.quotaGb}<input min="0" type="number" value={draft.quota.monthly_gb} onChange={(event) => updateQuota('monthly_gb', Number(event.target.value))} /></label><label>{text.retentionDays}<input min="1" type="number" value={draft.quota.request_event_retention_days} onChange={(event) => updateQuota('request_event_retention_days', Number(event.target.value))} /></label><label>{text.timezone}<input value={draft.quota.timezone} onChange={(event) => updateQuota('timezone', event.target.value)} /></label><label>{text.action}<select value={draft.quota.on_exceeded} onChange={(event) => updateQuota('on_exceeded', event.target.value)}><option value="stop_proxy">stop_proxy · 503</option><option value="throttle">throttle · 429</option></select></label><label className="toggle-field"><input type="checkbox" checked={draft.quota.enabled} onChange={(event) => updateQuota('enabled', event.target.checked)} />{text.quota}</label><label className="toggle-field"><input type="checkbox" checked={draft.forward_client_authorization} onChange={(event) => update('forward_client_authorization', event.target.checked)} />{text.forwardAuth}</label><label className="toggle-field"><input type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<input min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label><label>{text.cacheDirectory}<input value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><label>{text.cacheMaxEntry}<input min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label className="toggle-field"><input type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label><label>{text.webauthnRpId}<input value={draft.webauthn.rp_id} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_id: event.target.value })} /></label><label>{text.webauthnOrigin}<input value={draft.webauthn.rp_origin} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_origin: event.target.value })} /></label><label>{text.webauthnName}<input value={draft.webauthn.rp_name} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_name: event.target.value })} /></label><label>{text.breakGlass}<input value={draft.webauthn.break_glass_username} onChange={(event) => update('webauthn', { ...draft.webauthn, break_glass_username: event.target.value })} /></label><label className="toggle-field"><input type="checkbox" checked={draft.webauthn.enabled} onChange={(event) => update('webauthn', { ...draft.webauthn, enabled: event.target.checked })} />{text.webauthnEnabled}</label><label className="toggle-field"><input type="checkbox" checked={draft.webauthn.require_passkey} onChange={(event) => update('webauthn', { ...draft.webauthn, require_passkey: event.target.checked })} />{text.requirePasskey}</label></div>
           <h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><input type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div>
           <h4>{text.upstreams}</h4><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : Object.entries(value).map(([target, url]) => <label key={`${key}.${target}`}><span>{key}.{target}</span><input value={url} onChange={(event) => updateAdditionalOsUpstream(target, event.target.value)} /></label>))}</div>
           {catalog ? <SourceCommandGenerator catalog={catalog} baseUrl={draft.public_base_url} text={text} /> : null}
           {draft.webauthn.enabled && 'credentials' in navigator ? <section className="administrator-management"><h4>{text.passkeys}</h4><div className="admin-account-list">{passkeys.map((passkey) => <div className="admin-account-row" key={passkey.id}><span><strong>{passkey.name}</strong><small>{passkey.last_used_at ? new Date(passkey.last_used_at * 1000).toLocaleString() : new Date(passkey.created_at * 1000).toLocaleDateString()}</small></span><button onClick={() => removePasskey(passkey)}>{text.deletePasskey}</button></div>)}</div><form className="security-form" onSubmit={registerPasskey}><label>{text.passkeyName}<input required maxLength={80} value={passkeyName} onChange={(event) => setPasskeyName(event.target.value)} /></label><button className="primary-button" disabled={passkeyBusy} type="submit"><KeyRound size={16} /> {text.addPasskey}</button></form></section> : null}
+          {identity?.role === 'super_admin' ? <AdminEmailSettings /> : null}
           {identity?.role === 'super_admin' ? <section className="administrator-management"><h4>{text.administrators}</h4><div className="admin-account-list">{admins.map((account) => <div className="admin-account-row" key={account.username}><span><strong>{account.username}</strong><small>{account.role}</small></span><button disabled={account.username === identity.username} onClick={() => setAdministratorDisabled(account, !account.disabled)}>{account.disabled ? text.enable : text.disable}</button></div>)}</div><form className="security-form" onSubmit={createAdministrator}><label>{text.username}<input required value={newAdminUsername} onChange={(event) => setNewAdminUsername(event.target.value)} /></label><label>{text.password}<input required minLength={12} type="password" value={newAdminPassword} onChange={(event) => setNewAdminPassword(event.target.value)} /></label><label>{text.role}<select value={newAdminRole} onChange={(event) => setNewAdminRole(event.target.value)}><option value="admin">admin</option><option value="super_admin">super_admin</option></select></label><button className="primary-button" type="submit">{text.createAdministrator}</button></form></section> : null}
           <form className="security-form" onSubmit={changePassword}><div><h4><KeyRound size={14} /> {text.security}</h4><p>{text.passwordHint}</p></div><label>{text.currentPassword}<input required autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>{text.newPassword}<input required minLength={12} autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label><button className="danger-button" disabled={passwordBusy} type="submit"><KeyRound size={16} /> {text.changePassword}</button></form>
           <section className="audit-log"><h4>{'auditLog' in text ? text.auditLog : 'Audit log'}</h4>{auditLog.length ? auditLog.slice(0, 8).map((entry) => <div className="audit-row" key={`${entry.created_at}-${entry.username}-${entry.action}`}><span>{new Date(entry.created_at * 1000).toLocaleString()}</span><strong>{entry.action}</strong><small>{entry.username} / {entry.detail}</small></div>) : <p className="empty-stat">{'noAudit' in text ? text.noAudit : 'No audit entries yet.'}</p>}</section>
         </section>
       </div> : null}
+    </section>
+  )
+}
+
+type SmtpView = { enabled: boolean; host: string; port: number; security: string; username: string | null; has_password: boolean; from_name: string; from_address: string; master_key_configured: boolean }
+type InvitationView = { id: number; email: string; display_name: string; status: string; expires_at: number }
+
+function AdminEmailSettings() {
+  const [smtp, setSmtp] = React.useState<SmtpView | null>(null)
+  const [password, setPassword] = React.useState('')
+  const [testRecipient, setTestRecipient] = React.useState('')
+  const [invitations, setInvitations] = React.useState<InvitationView[]>([])
+  const [inviteEmail, setInviteEmail] = React.useState('')
+  const [inviteName, setInviteName] = React.useState('')
+  const [notice, setNotice] = React.useState('')
+  const load = React.useCallback(async () => {
+    const [smtpResponse, invitationsResponse] = await Promise.all([fetch('/admin/api/smtp'), fetch('/admin/api/invitations')])
+    if (smtpResponse.ok) {
+      const value = await smtpResponse.json() as Partial<SmtpView>
+      if (typeof value.host === 'string' && typeof value.port === 'number') setSmtp(value as SmtpView)
+    }
+    if (invitationsResponse.ok) {
+      const value = await invitationsResponse.json() as unknown
+      if (Array.isArray(value)) setInvitations(value as InvitationView[])
+    }
+  }, [])
+  React.useEffect(() => { load().catch(() => undefined) }, [load])
+  const saveSmtp = async (event: React.FormEvent) => {
+    event.preventDefault(); if (!smtp) return
+    const response = await fetch('/admin/api/smtp', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...smtp, password: password || null }) })
+    setNotice(response.ok ? 'SMTP settings saved.' : 'Unable to save SMTP settings. A persistent master key is required for email delivery.')
+    if (response.ok) { setPassword(''); await load() }
+  }
+  const invite = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const response = await fetch('/admin/api/invitations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: inviteEmail, display_name: inviteName }) })
+    setNotice(response.ok ? 'Invitation queued for delivery.' : 'Unable to create invitation.')
+    if (response.ok) { setInviteEmail(''); setInviteName(''); await load() }
+  }
+  const revoke = async (id: number) => { await fetch(`/admin/api/invitations/${id}`, { method: 'DELETE' }); await load() }
+  const resend = async (id: number) => {
+    const response = await fetch(`/admin/api/invitations/${id}/resend`, { method: 'POST' })
+    setNotice(response.ok ? 'Invitation queued again.' : 'Unable to resend invitation.')
+    if (response.ok) await load()
+  }
+  const testSmtp = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const response = await fetch('/admin/api/smtp/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ recipient: testRecipient }),
+    })
+    setNotice(response.ok ? 'Test email queued for delivery.' : 'Unable to queue a test email.')
+  }
+  if (!smtp) return null
+  return (
+    <section className="administrator-management">
+      <h4>Email delivery and invitations</h4>
+      {!smtp.master_key_configured ? <p className="form-error">Set a persistent MIRRORPROXY_MASTER_KEY before saving credentials.</p> : null}
+      <form className="security-form" onSubmit={saveSmtp}>
+        <label>SMTP host<input value={smtp.host} onChange={(event) => setSmtp({ ...smtp, host: event.target.value })} /></label>
+        <label>Port<input type="number" min="1" max="65535" value={smtp.port} onChange={(event) => setSmtp({ ...smtp, port: Number(event.target.value) })} /></label>
+        <label>Security<select value={smtp.security} onChange={(event) => setSmtp({ ...smtp, security: event.target.value })}><option value="starttls">STARTTLS</option><option value="smtps">SMTPS</option><option value="none">None</option></select></label>
+        <label>Username<input value={smtp.username ?? ''} onChange={(event) => setSmtp({ ...smtp, username: event.target.value || null })} /></label>
+        <label>Password<input type="password" placeholder={smtp.has_password ? 'Saved; leave blank to keep' : ''} value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+        <label>From name<input value={smtp.from_name} onChange={(event) => setSmtp({ ...smtp, from_name: event.target.value })} /></label>
+        <label>From address<input type="email" value={smtp.from_address} onChange={(event) => setSmtp({ ...smtp, from_address: event.target.value })} /></label>
+        <label className="toggle-field"><input type="checkbox" checked={smtp.enabled} onChange={(event) => setSmtp({ ...smtp, enabled: event.target.checked })} />Enable email delivery</label>
+        <button className="primary-button" type="submit">Save SMTP</button>
+      </form>
+      <form className="security-form" onSubmit={testSmtp}>
+        <label>Test recipient<input required type="email" value={testRecipient} onChange={(event) => setTestRecipient(event.target.value)} /></label>
+        <button type="submit">Queue test email</button>
+      </form>
+      <form className="security-form" onSubmit={invite}>
+        <label>Invite email<input required type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
+        <label>Display name<input required value={inviteName} onChange={(event) => setInviteName(event.target.value)} /></label>
+        <button className="primary-button" type="submit">Send invitation</button>
+      </form>
+      {notice ? <p>{notice}</p> : null}
+      <div className="admin-account-list">{invitations.map((invitation) => (
+        <div className="admin-account-row" key={invitation.id}>
+          <span><strong>{invitation.email}</strong><small>{invitation.status} · {new Date(invitation.expires_at * 1000).toLocaleString()}</small></span>
+          {invitation.status === 'pending' ? <span><button onClick={() => resend(invitation.id)}>Resend</button><button onClick={() => revoke(invitation.id)}>Revoke</button></span> : null}
+        </div>
+      ))}</div>
     </section>
   )
 }

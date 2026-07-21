@@ -600,6 +600,16 @@ feat: add user identity and sqids subdomain routing
 
 ### 14.5 邮件邀请和无密码登录
 
+状态：已完成。已实现持久化 SMTP 管理、测试邮件、邀请创建/撤销/重发、邮箱验证码和
+Magic Link、`invite_only`/`domain_allowlist`/`open`/`disabled` 注册策略，以及独立的
+普通用户 Session。SMTP 密码和邮件 Outbox 正文由持久化 `MIRRORPROXY_MASTER_KEY`
+使用 XChaCha20-Poly1305 加密；验证码、Magic Link 和邀请凭证仅保存哈希，并具备一次性
+消费、过期、错误次数限制、分级发送限流和最多五次的退避重试。注册策略变更及 SMTP
+凭据修改要求近期超级管理员认证，敏感信息不会返回前端或写入审计。管理端支持 SMTP、
+测试邮件和邀请操作，用户端支持邮件登录、查看及轮换计费子域名。全工作区 213 项测试、
+Clippy、前端 10 项单元测试、生产构建和 Compose 校验均已通过；新增 2 项浏览器流程后
+Playwright 可发现全部 10 项用例，但当前受限环境禁止监听本地端口，未能在本轮重新执行。
+
 建议 Commit：
 
 ```text

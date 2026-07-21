@@ -25,6 +25,7 @@ const adminConfig = {
   rate_limit: { enabled: true, requests_per_minute: 120 },
   cache: { enabled: false, directory: 'cache', max_entry_mb: 8, max_total_mb: 256 },
   user_access: { base_domain: '', mode: 'public', routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
+  registration: { mode: 'invite_only', allowed_email_domains: [], email_token_ttl_minutes: 10 },
   webauthn: { enabled: false, rp_id: '', rp_origin: '', rp_name: 'MirrorProxy', require_passkey: false, break_glass_username: 'admin' },
 }
 
@@ -233,4 +234,81 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
   await passkeySignIn.click()
   await expect.poll(() => authenticatedCredential?.type).toBe('public-key')
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
+})
+
+test('signs in by email and rotates the accounting-only routing address', async ({ page }) => {
+  let signedIn = false
+  let requested: Record<string, unknown> | undefined
+  let verified: Record<string, unknown> | undefined
+  let routingId = 'first-routing-id'
+  await page.route('**/api/account/profile', route => route.fulfill(signedIn ? {
+    json: {
+      user: { id: 7, email: 'person+tag@example.com', display_name: 'Person', routing_id: routingId, routing_rotated_at: 1784592000 },
+      proxy_base_url: `https://${routingId}.mirror.example`,
+    },
+  } : { status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/api/auth/email/request', async route => {
+    requested = route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ status: 202 })
+  })
+  await page.route('**/api/auth/email/verify', async route => {
+    verified = route.request().postDataJSON() as Record<string, unknown>
+    signedIn = true
+    await route.fulfill({ json: { user_id: 7 } })
+  })
+  await page.route('**/api/account/routing-id/rotate', async route => {
+    routingId = 'rotated-routing-id'
+    await route.fulfill({ json: { routing_id: routingId } })
+  })
+
+  await page.goto('/login?email=person%2Btag%40example.com&invitation=invite-token')
+  await page.getByRole('button', { name: 'Send code and magic link' }).click()
+  await expect.poll(() => requested).toEqual({ email: 'person+tag@example.com', invitation_token: 'invite-token' })
+  await page.getByLabel('Six-digit code').fill('123456')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect.poll(() => verified).toEqual({ email: 'person+tag@example.com', code: '123456' })
+  await expect(page.getByDisplayValue('https://first-routing-id.mirror.example')).toBeVisible()
+  await page.getByRole('button', { name: 'Generate a new routing address' }).click()
+  await expect(page.getByDisplayValue('https://rotated-routing-id.mirror.example')).toBeVisible()
+})
+
+test('configures SMTP, queues a test email, and resends an invitation', async ({ page }) => {
+  let smtpUpdate: Record<string, unknown> | undefined
+  let testRecipient: Record<string, unknown> | undefined
+  let resent = false
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
+  await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
+  await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
+  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/smtp', async route => {
+    if (route.request().method() === 'PUT') {
+      smtpUpdate = route.request().postDataJSON() as Record<string, unknown>
+      await route.fulfill({ status: 204 })
+      return
+    }
+    await route.fulfill({ json: { enabled: true, host: 'smtp.example.com', port: 587, security: 'starttls', username: 'mailer', has_password: true, from_name: 'MirrorProxy', from_address: 'mirror@example.com', master_key_configured: true } })
+  })
+  await page.route('**/admin/api/smtp/test', async route => {
+    testRecipient = route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ status: 202 })
+  })
+  await page.route('**/admin/api/invitations/9/resend', async route => {
+    resent = true
+    await route.fulfill({ status: 202 })
+  })
+  await page.route('**/admin/api/invitations', route => route.fulfill({ json: [{ id: 9, email: 'new@example.com', display_name: 'New User', status: 'pending', expires_at: 1784851200 }] }))
+
+  await page.goto('/admin')
+  await page.getByLabel('Administrator password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByLabel('SMTP host').fill('smtp.internal.example')
+  await page.getByRole('button', { name: 'Save SMTP' }).click()
+  await expect.poll(() => smtpUpdate?.host).toBe('smtp.internal.example')
+  await page.getByLabel('Test recipient').fill('ops@example.com')
+  await page.getByRole('button', { name: 'Queue test email' }).click()
+  await expect.poll(() => testRecipient).toEqual({ recipient: 'ops@example.com' })
+  await page.getByRole('button', { name: 'Resend' }).click()
+  await expect.poll(() => resent).toBe(true)
 })

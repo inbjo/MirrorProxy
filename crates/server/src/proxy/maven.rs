@@ -159,6 +159,7 @@ mod tests {
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(crate::AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
+            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         }
     }

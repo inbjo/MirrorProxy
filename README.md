@@ -839,6 +839,34 @@ routing IDs and IDs belonging to disabled users fail uniformly. Control paths
 such as `/admin`, `/login`, and `/account` are unavailable on user subdomains.
 Only trusted reverse proxies may supply `X-Forwarded-Host`.
 
+Email invitations and passwordless sign-in require a persistent 32-byte master
+key encoded as unpadded base64url. Generate it once, store it with the deployment
+secrets, and back it up together with SQLite:
+
+```bash
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+```
+
+```dotenv
+MIRRORPROXY_MASTER_KEY=replace-with-the-generated-value
+MIRRORPROXY_REGISTRATION_MODE=invite_only
+MIRRORPROXY_ALLOWED_EMAIL_DOMAINS=example.com,subsidiary.example.com
+MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES=10
+```
+
+Configure SMTP and invitations from `/admin`. STARTTLS, SMTPS, authenticated,
+and unauthenticated SMTP are supported. SMTP passwords and queued message bodies
+are encrypted with XChaCha20-Poly1305; API responses never return the password.
+The SQLite outbox retries failed delivery with bounded exponential backoff.
+Verification codes and magic links expire after ten minutes by default, are
+stored only as hashes, allow at most five code failures, and can be consumed
+once. Sending is limited per address, source IP, and instance.
+
+Registration defaults to `invite_only`. `domain_allowlist` accepts verified
+addresses from configured domains, `open` accepts any verified address, and
+`disabled` only permits existing users to sign in. Ordinary users sign in at
+`/login` and manage or rotate their accounting-only address at `/account`.
+
 Administrator Passkeys are optional and use `webauthn-rs`. Configure the exact
 HTTPS admin origin and a stable RP ID before registering credentials:
 

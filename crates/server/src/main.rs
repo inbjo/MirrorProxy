@@ -1,7 +1,9 @@
 mod config;
 mod database;
+mod email;
 mod observability;
 mod proxy;
+mod secrets;
 mod static_assets;
 
 use std::{
@@ -41,6 +43,7 @@ use proxy::{
     pypi, rubygems, rustup, texlive, winget, ProxyError,
 };
 use reqwest::{Client, NoProxy, Proxy, Url};
+use secrets::SecretCipher;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tracing::Instrument;
@@ -115,6 +118,7 @@ pub struct AppState {
     rate_limiter: Arc<RateLimiter>,
     admin_login_limiter: Arc<AdminLoginRateLimiter>,
     webauthn: Arc<RwLock<Option<Arc<Webauthn>>>>,
+    master_key: Option<Arc<SecretCipher>>,
     observability: Arc<Observability>,
 }
 
@@ -898,6 +902,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     }
     let observability = Arc::new(Observability::new()?);
     let webauthn = build_webauthn(&config)?;
+    let master_key = SecretCipher::from_environment()?.map(Arc::new);
 
     if let Some(credentials) = initial_admin {
         if credentials.generated {
@@ -917,11 +922,16 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         webauthn: Arc::new(RwLock::new(webauthn)),
+        master_key: master_key.clone(),
         config: Arc::new(RwLock::new(config)),
         database: Arc::new(database),
         client,
         observability,
     };
+
+    if let Some(cipher) = master_key {
+        email::spawn_email_outbox_worker(state.database.clone(), cipher);
+    }
 
     Ok(Router::new()
         .route("/healthz", get(healthz))
@@ -988,6 +998,25 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             "/admin/api/users/{id}/routing-id/rotate",
             post(admin_rotate_user_routing_id),
         )
+        .route(
+            "/admin/api/smtp",
+            get(email::get_smtp_settings).put(email::update_smtp_settings),
+        )
+        .route("/admin/api/smtp/test", post(email::test_smtp_settings))
+        .route(
+            "/admin/api/invitations",
+            get(email::list_invitations).post(email::create_invitation),
+        )
+        .route(
+            "/admin/api/invitations/{id}",
+            delete(email::revoke_invitation),
+        )
+        .route(
+            "/admin/api/invitations/{id}/resend",
+            post(email::resend_invitation),
+        )
+        .route("/api/auth/email/request", post(email::request_email_login))
+        .route("/api/auth/email/verify", post(email::verify_email_login))
         .route("/api/auth/session", get(user_session))
         .route("/api/auth/logout", post(user_logout))
         .route("/api/account/profile", get(user_profile))
@@ -2702,12 +2731,14 @@ async fn update_admin_config(
         )
             .into_response();
     }
-    if next_config.user_access != current.user_access {
+    if next_config.user_access != current.user_access
+        || next_config.registration != current.registration
+    {
         if identity.role != "super_admin" {
             return (
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({
-                    "error": "super administrator access required to change user access routing"
+                    "error": "super administrator access required to change user access or registration policy"
                 })),
             )
                 .into_response();
@@ -3534,6 +3565,7 @@ mod tests {
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
+            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
         (state, credentials.unwrap())
@@ -3562,6 +3594,7 @@ mod tests {
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
+            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
         (state, user)
@@ -4392,6 +4425,7 @@ on_exceeded = "stop_proxy"
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
+            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
@@ -4453,6 +4487,7 @@ on_exceeded = "stop_proxy"
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
+            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
@@ -4490,6 +4525,7 @@ on_exceeded = "stop_proxy"
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
+            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
 
@@ -4528,6 +4564,7 @@ on_exceeded = "stop_proxy"
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
+            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
@@ -4759,6 +4796,158 @@ on_exceeded = "stop_proxy"
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let users: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(users.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn passwordless_email_login_creates_user_and_host_only_session() {
+        let (mut state, _) = admin_test_state().await;
+        let cipher = Arc::new(SecretCipher::from_key([9_u8; 32]));
+        state.master_key = Some(cipher.clone());
+        let config = Config {
+            public_base_url: "https://mirror.example.com".to_string(),
+            registration: config::RegistrationConfig {
+                mode: "open".to_string(),
+                ..config::RegistrationConfig::default()
+            },
+            ..Config::default()
+        };
+        state.config = Arc::new(RwLock::new(config));
+        state
+            .database
+            .save_smtp_settings(
+                "admin",
+                &database::SmtpSettings {
+                    enabled: true,
+                    host: "smtp.example.com".to_string(),
+                    port: 587,
+                    security: "starttls".to_string(),
+                    username: None,
+                    encrypted_password: None,
+                    from_name: "MirrorProxy".to_string(),
+                    from_address: "mirror@example.com".to_string(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        let response = email::request_email_login(
+            State(state.clone()),
+            ConnectInfo("192.0.2.30:42000".parse().unwrap()),
+            Json(email::RequestEmailLogin {
+                email: "person+tag@example.com".to_string(),
+                invitation_token: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let queued = state.database.pending_outbox(1).await.unwrap().remove(0);
+        assert!(!queued.encrypted_body.contains("person+tag@example.com"));
+        let body = String::from_utf8(
+            cipher
+                .decrypt("email-outbox", &queued.encrypted_body)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(body.contains("email=person%2Btag%40example.com"));
+        let code = body
+            .split("code is ")
+            .nth(1)
+            .unwrap()
+            .chars()
+            .take(6)
+            .collect::<String>();
+        let response = email::verify_email_login(
+            State(state.clone()),
+            Json(email::VerifyEmailLogin {
+                email: "person+tag@example.com".to_string(),
+                code: Some(code.clone()),
+                token: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(cookie.contains("SameSite=Lax"));
+        assert!(!cookie.contains("Domain="));
+        let repeated = email::verify_email_login(
+            State(state),
+            Json(email::VerifyEmailLogin {
+                email: "person+tag@example.com".to_string(),
+                code: Some(code),
+                token: None,
+            }),
+        )
+        .await;
+        assert_eq!(repeated.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn invitation_login_is_bound_to_the_invited_email() {
+        let (mut state, _) = admin_test_state().await;
+        let cipher = Arc::new(SecretCipher::from_key([10_u8; 32]));
+        state.master_key = Some(cipher);
+        let config = Config {
+            public_base_url: "https://mirror.example.com".to_string(),
+            registration: config::RegistrationConfig {
+                mode: "invite_only".to_string(),
+                ..config::RegistrationConfig::default()
+            },
+            ..Config::default()
+        };
+        state.config = Arc::new(RwLock::new(config));
+        state
+            .database
+            .save_smtp_settings(
+                "admin",
+                &database::SmtpSettings {
+                    enabled: true,
+                    host: "smtp.example.com".to_string(),
+                    port: 587,
+                    security: "starttls".to_string(),
+                    username: None,
+                    encrypted_password: None,
+                    from_name: "MirrorProxy".to_string(),
+                    from_address: "mirror@example.com".to_string(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        state
+            .database
+            .create_email_invitation(
+                "admin",
+                "invited@example.com",
+                "Invited User",
+                "invitation-token",
+                Utc::now().timestamp() + 600,
+            )
+            .await
+            .unwrap();
+
+        let response = email::request_email_login(
+            State(state.clone()),
+            ConnectInfo("192.0.2.31:42000".parse().unwrap()),
+            Json(email::RequestEmailLogin {
+                email: "other@example.com".to_string(),
+                invitation_token: Some("invitation-token".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert!(state.database.pending_outbox(10).await.unwrap().is_empty());
+
+        let response = email::request_email_login(
+            State(state.clone()),
+            ConnectInfo("192.0.2.32:42000".parse().unwrap()),
+            Json(email::RequestEmailLogin {
+                email: "invited@example.com".to_string(),
+                invitation_token: Some("invitation-token".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(state.database.pending_outbox(10).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

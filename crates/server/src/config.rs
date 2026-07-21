@@ -31,6 +31,8 @@ pub struct Config {
     #[serde(default)]
     pub user_access: UserAccessConfig,
     #[serde(default)]
+    pub registration: RegistrationConfig,
+    #[serde(default)]
     pub webauthn: WebauthnConfig,
     /// The outbound proxy is owned by the service configuration and requires a
     /// restart because the shared HTTP client is constructed once at startup.
@@ -205,6 +207,16 @@ pub struct UserAccessConfig {
     pub routing_id_min_length: u8,
     #[serde(default = "default_routing_rotation_cooldown_hours")]
     pub routing_rotation_cooldown_hours: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegistrationConfig {
+    #[serde(default = "default_registration_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub allowed_email_domains: Vec<String>,
+    #[serde(default = "default_email_token_ttl_minutes")]
+    pub email_token_ttl_minutes: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -412,6 +424,21 @@ impl Config {
                 anyhow::anyhow!("MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS must be an integer")
             })?;
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_REGISTRATION_MODE") {
+            self.registration.mode = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ALLOWED_EMAIL_DOMAINS") {
+            self.registration.allowed_email_domains = value
+                .split(',')
+                .map(|domain| domain.trim().to_ascii_lowercase())
+                .filter(|domain| !domain.is_empty())
+                .collect();
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES") {
+            self.registration.email_token_ttl_minutes = value.parse().map_err(|_| {
+                anyhow::anyhow!("MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES must be an integer")
+            })?;
+        }
         if let Ok(value) = std::env::var("MIRRORPROXY_OUTBOUND_PROXY_ENABLED") {
             self.outbound_proxy.enabled =
                 parse_env_bool("MIRRORPROXY_OUTBOUND_PROXY_ENABLED", &value)?;
@@ -475,6 +502,7 @@ impl Config {
             other => anyhow::bail!("quota.on_exceeded must be stop_proxy or throttle, got {other}"),
         }
         self.user_access.validate(&self.public_base_url)?;
+        self.registration.validate()?;
         self.webauthn.validate()?;
         self.outbound_proxy.validate()?;
         for (name, auth) in &self.upstream_auth {
@@ -672,6 +700,7 @@ impl Default for Config {
             cache: CacheConfig::default(),
             quota: QuotaConfig::default(),
             user_access: UserAccessConfig::default(),
+            registration: RegistrationConfig::default(),
             webauthn: WebauthnConfig::default(),
             outbound_proxy: OutboundProxyConfig::default(),
             forward_client_authorization: false,
@@ -865,6 +894,56 @@ impl Default for UserAccessConfig {
     }
 }
 
+impl Default for RegistrationConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_registration_mode(),
+            allowed_email_domains: Vec::new(),
+            email_token_ttl_minutes: default_email_token_ttl_minutes(),
+        }
+    }
+}
+
+impl RegistrationConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !matches!(
+            self.mode.as_str(),
+            "invite_only" | "domain_allowlist" | "open" | "disabled"
+        ) {
+            anyhow::bail!(
+                "registration.mode must be invite_only, domain_allowlist, open, or disabled"
+            );
+        }
+        if !(1..=60).contains(&self.email_token_ttl_minutes) {
+            anyhow::bail!("registration.email_token_ttl_minutes must be between 1 and 60");
+        }
+        if self.allowed_email_domains.iter().any(|domain| {
+            domain.is_empty()
+                || domain.starts_with('.')
+                || domain.ends_with('.')
+                || domain.contains("..")
+                || domain.contains('@')
+                || domain
+                    .split('.')
+                    .any(|label| label.is_empty() || label.starts_with('-') || label.ends_with('-'))
+                || !domain.chars().all(|character| {
+                    character.is_ascii_lowercase()
+                        || character.is_ascii_digit()
+                        || character == '.'
+                        || character == '-'
+                })
+        }) {
+            anyhow::bail!("registration.allowed_email_domains contains an invalid DNS domain");
+        }
+        if self.mode == "domain_allowlist" && self.allowed_email_domains.is_empty() {
+            anyhow::bail!(
+                "registration.allowed_email_domains is required for domain_allowlist mode"
+            );
+        }
+        Ok(())
+    }
+}
+
 impl UserAccessConfig {
     pub fn validate(&self, public_base_url: &str) -> anyhow::Result<()> {
         if self.mode != "public" && self.mode != "subdomain_required" {
@@ -1021,6 +1100,14 @@ fn default_routing_id_min_length() -> u8 {
 
 fn default_routing_rotation_cooldown_hours() -> u32 {
     24
+}
+
+fn default_registration_mode() -> String {
+    "invite_only".to_string()
+}
+
+fn default_email_token_ttl_minutes() -> u32 {
+    10
 }
 
 fn default_database_path() -> String {
@@ -1452,6 +1539,9 @@ password = "proxy-password"
             ("MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY", "localhost,127.0.0.1"),
             ("MIRRORPROXY_OUTBOUND_PROXY_USERNAME", "proxy-user"),
             ("MIRRORPROXY_OUTBOUND_PROXY_PASSWORD", "proxy-password"),
+            ("MIRRORPROXY_REGISTRATION_MODE", "domain_allowlist"),
+            ("MIRRORPROXY_ALLOWED_EMAIL_DOMAINS", "corp.example"),
+            ("MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES", "15"),
         ];
         for (name, value) in variables {
             std::env::set_var(name, value);
@@ -1474,6 +1564,9 @@ password = "proxy-password"
             config.outbound_proxy.password.as_deref(),
             Some("proxy-password")
         );
+        assert_eq!(config.registration.mode, "domain_allowlist");
+        assert_eq!(config.registration.allowed_email_domains, ["corp.example"]);
+        assert_eq!(config.registration.email_token_ttl_minutes, 15);
     }
 
     #[test]
@@ -1850,6 +1943,54 @@ password = "proxy-password"
                 ..Config::default()
             };
             assert!(invalid.validate().is_err(), "{base_domain} / {mode}");
+        }
+    }
+
+    #[test]
+    fn validates_email_registration_policy() {
+        let valid = Config {
+            registration: RegistrationConfig {
+                mode: "domain_allowlist".to_string(),
+                allowed_email_domains: vec!["corp.example".to_string()],
+                email_token_ttl_minutes: 15,
+            },
+            ..Config::default()
+        };
+        assert!(valid.validate().is_ok());
+
+        for registration in [
+            RegistrationConfig {
+                mode: "domain_allowlist".to_string(),
+                allowed_email_domains: Vec::new(),
+                email_token_ttl_minutes: 10,
+            },
+            RegistrationConfig {
+                mode: "open".to_string(),
+                allowed_email_domains: vec!["@corp.example".to_string()],
+                email_token_ttl_minutes: 10,
+            },
+            RegistrationConfig {
+                mode: "open".to_string(),
+                allowed_email_domains: vec!["-corp.example".to_string()],
+                email_token_ttl_minutes: 10,
+            },
+            RegistrationConfig {
+                mode: "unsupported".to_string(),
+                allowed_email_domains: Vec::new(),
+                email_token_ttl_minutes: 10,
+            },
+            RegistrationConfig {
+                mode: "invite_only".to_string(),
+                allowed_email_domains: Vec::new(),
+                email_token_ttl_minutes: 0,
+            },
+        ] {
+            assert!(Config {
+                registration,
+                ..Config::default()
+            }
+            .validate()
+            .is_err());
         }
     }
 }

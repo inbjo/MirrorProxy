@@ -27,6 +27,7 @@ const ADMIN_LOGIN_LOCK_SECS: i64 = 15 * 60;
 const WEBAUTHN_CHALLENGE_LIFETIME_SECS: i64 = 5 * 60;
 const RECENT_ADMIN_VERIFICATION_SECS: i64 = 10 * 60;
 const ROUTING_ID_INSERT_ATTEMPTS: usize = 16;
+const USER_SESSION_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Clone)]
 pub struct Database {
@@ -112,6 +113,45 @@ pub enum RoutingRotationOutcome {
     Rotated { routing_id: String },
     Cooldown { retry_after_secs: u64 },
     NotFound,
+}
+
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SmtpSettings {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub security: String,
+    pub username: Option<String>,
+    #[serde(skip_serializing)]
+    pub encrypted_password: Option<String>,
+    pub from_name: String,
+    pub from_address: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EmailInvitation {
+    pub id: i64,
+    pub email: String,
+    pub display_name: String,
+    pub status: String,
+    pub expires_at: i64,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct OutboxMessage {
+    pub id: i64,
+    pub recipient: String,
+    pub subject: String,
+    pub encrypted_body: String,
+    pub attempts: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct UserSession {
+    pub token: String,
+    pub expires_at: i64,
+    pub identity: UserIdentity,
 }
 
 pub struct ProxyTrafficRecord<'a> {
@@ -1147,6 +1187,351 @@ impl Database {
         .map_err(Into::into)
     }
 
+    pub async fn user_by_email(&self, email: &str) -> anyhow::Result<Option<UserAccount>> {
+        sqlx::query(
+            "SELECT u.id, u.email, u.display_name, u.disabled, u.created_at, u.updated_at, r.routing_id, r.created_at AS routing_rotated_at FROM users u JOIN user_routing_ids r ON r.user_id = u.id AND r.active = 1 WHERE u.email = ? AND u.deleted_at IS NULL",
+        )
+        .bind(normalize_email(email))
+        .fetch_optional(&self.pool)
+        .await?
+        .map(user_account_from_row)
+        .transpose()
+        .map_err(Into::into)
+    }
+
+    pub async fn create_user_session(
+        &self,
+        user_id: i64,
+        auth_method: &str,
+    ) -> anyhow::Result<Option<UserSession>> {
+        let row = sqlx::query(
+            "SELECT email, display_name FROM users WHERE id = ? AND disabled = 0 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let now = unix_timestamp();
+        let expires_at = now + USER_SESSION_LIFETIME_SECS;
+        let token = random_secret(48);
+        sqlx::query("INSERT INTO user_sessions (token_hash, user_id, auth_method, created_at, expires_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(hash_token(&token))
+            .bind(user_id)
+            .bind(auth_method)
+            .bind(now)
+            .bind(expires_at)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        Ok(Some(UserSession {
+            token,
+            expires_at,
+            identity: UserIdentity {
+                user_id,
+                email: row.try_get("email")?,
+                display_name: row.try_get("display_name")?,
+            },
+        }))
+    }
+
+    pub async fn smtp_settings(&self) -> anyhow::Result<Option<SmtpSettings>> {
+        sqlx::query("SELECT enabled, host, port, security, username, encrypted_password, from_name, from_address FROM smtp_settings WHERE singleton = 1")
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|row| {
+                Ok::<_, sqlx::Error>(SmtpSettings {
+                    enabled: row.try_get("enabled")?,
+                    host: row.try_get("host")?,
+                    port: row.try_get::<i64, _>("port")? as u16,
+                    security: row.try_get("security")?,
+                    username: row.try_get("username")?,
+                    encrypted_password: row.try_get("encrypted_password")?,
+                    from_name: row.try_get("from_name")?,
+                    from_address: row.try_get("from_address")?,
+                })
+            })
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub async fn save_smtp_settings(
+        &self,
+        actor: &str,
+        settings: &SmtpSettings,
+        preserve_password: bool,
+    ) -> anyhow::Result<()> {
+        let now = unix_timestamp();
+        let encrypted_password = if preserve_password {
+            self.smtp_settings()
+                .await?
+                .and_then(|current| current.encrypted_password)
+        } else {
+            settings.encrypted_password.clone()
+        };
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("INSERT INTO smtp_settings (singleton, enabled, host, port, security, username, encrypted_password, from_name, from_address, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET enabled=excluded.enabled, host=excluded.host, port=excluded.port, security=excluded.security, username=excluded.username, encrypted_password=excluded.encrypted_password, from_name=excluded.from_name, from_address=excluded.from_address, updated_at=excluded.updated_at")
+            .bind(settings.enabled)
+            .bind(&settings.host)
+            .bind(i64::from(settings.port))
+            .bind(&settings.security)
+            .bind(&settings.username)
+            .bind(encrypted_password)
+            .bind(&settings.from_name)
+            .bind(&settings.from_address)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'smtp_settings_updated', 'smtp_settings')")
+            .bind(now)
+            .bind(actor)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn create_email_invitation(
+        &self,
+        actor: &str,
+        email: &str,
+        display_name: &str,
+        token: &str,
+        expires_at: i64,
+    ) -> anyhow::Result<i64> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query("INSERT INTO email_invitations (email, display_name, token_hash, status, expires_at, created_at) VALUES (?, ?, ?, 'pending', ?, ?)")
+            .bind(normalize_email(email))
+            .bind(display_name)
+            .bind(hash_token(token))
+            .bind(expires_at)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await?;
+        let id = result.last_insert_rowid();
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'email_invitation_created', ?)")
+            .bind(now)
+            .bind(actor)
+            .bind(format!("invitation_id={id}"))
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(id)
+    }
+
+    pub async fn list_email_invitations(&self) -> anyhow::Result<Vec<EmailInvitation>> {
+        sqlx::query("SELECT id, email, display_name, status, expires_at, created_at FROM email_invitations ORDER BY id DESC")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| Ok(EmailInvitation {
+                id: row.try_get("id")?, email: row.try_get("email")?, display_name: row.try_get("display_name")?, status: row.try_get("status")?, expires_at: row.try_get("expires_at")?, created_at: row.try_get("created_at")?,
+            }))
+            .collect::<Result<Vec<_>, sqlx::Error>>()
+            .map_err(Into::into)
+    }
+
+    pub async fn email_invitation(&self, id: i64) -> anyhow::Result<Option<EmailInvitation>> {
+        sqlx::query("SELECT id, email, display_name, status, expires_at, created_at FROM email_invitations WHERE id = ?")
+            .bind(id).fetch_optional(&self.pool).await?
+            .map(|row| Ok::<_, sqlx::Error>(EmailInvitation { id: row.try_get("id")?, email: row.try_get("email")?, display_name: row.try_get("display_name")?, status: row.try_get("status")?, expires_at: row.try_get("expires_at")?, created_at: row.try_get("created_at")? }))
+            .transpose().map_err(Into::into)
+    }
+
+    pub async fn revoke_email_invitation(&self, actor: &str, id: i64) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let result = sqlx::query("UPDATE email_invitations SET status = 'revoked', revoked_at = ? WHERE id = ? AND status = 'pending'")
+            .bind(now).bind(id).execute(&self.pool).await?;
+        if result.rows_affected() == 1 {
+            self.write_security_audit(
+                actor,
+                "email_invitation_revoked",
+                &format!("invitation_id={id}"),
+            )
+            .await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn renew_email_invitation(
+        &self,
+        actor: &str,
+        id: i64,
+        token: &str,
+        expires_at: i64,
+    ) -> anyhow::Result<Option<EmailInvitation>> {
+        let result = sqlx::query("UPDATE email_invitations SET token_hash = ?, expires_at = ? WHERE id = ? AND status = 'pending'")
+            .bind(hash_token(token)).bind(expires_at).bind(id).execute(&self.pool).await?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.write_security_audit(
+            actor,
+            "email_invitation_resent",
+            &format!("invitation_id={id}"),
+        )
+        .await?;
+        self.email_invitation(id).await
+    }
+
+    pub async fn valid_invitation(&self, email: &str, token: &str) -> anyhow::Result<Option<i64>> {
+        sqlx::query("SELECT id FROM email_invitations WHERE email = ? AND token_hash = ? AND status = 'pending' AND expires_at > ?")
+            .bind(normalize_email(email)).bind(hash_token(token)).bind(unix_timestamp())
+            .fetch_optional(&self.pool).await?
+            .map(|row| row.try_get("id")).transpose().map_err(Into::into)
+    }
+
+    pub async fn store_email_login_token(
+        &self,
+        email: &str,
+        token: &str,
+        code: &str,
+        invitation_id: Option<i64>,
+        expires_at: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE email_login_tokens SET used_at = ? WHERE email = ? AND used_at IS NULL",
+        )
+        .bind(unix_timestamp())
+        .bind(normalize_email(email))
+        .execute(&self.pool)
+        .await?;
+        sqlx::query("INSERT INTO email_login_tokens (email, token_hash, code_hash, invitation_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(normalize_email(email)).bind(hash_token(token)).bind(hash_token(code)).bind(invitation_id).bind(expires_at).bind(unix_timestamp())
+            .execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn consume_email_login_token(
+        &self,
+        email: &str,
+        credential: &str,
+        is_code: bool,
+    ) -> anyhow::Result<Option<Option<i64>>> {
+        let email = normalize_email(email);
+        let column = if is_code { "code_hash" } else { "token_hash" };
+        let query = format!("SELECT id, invitation_id FROM email_login_tokens WHERE email = ? AND {column} = ? AND used_at IS NULL AND expires_at > ? AND attempts < 5 ORDER BY id DESC LIMIT 1");
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(&query)
+            .bind(&email)
+            .bind(hash_token(credential))
+            .bind(unix_timestamp())
+            .fetch_optional(&mut *transaction)
+            .await?;
+        let Some(row) = row else {
+            if is_code {
+                sqlx::query("UPDATE email_login_tokens SET attempts = attempts + 1 WHERE id = (SELECT id FROM email_login_tokens WHERE email = ? AND used_at IS NULL ORDER BY id DESC LIMIT 1)")
+                    .bind(&email).execute(&mut *transaction).await?;
+            }
+            transaction.commit().await?;
+            return Ok(None);
+        };
+        let id: i64 = row.try_get("id")?;
+        let invitation_id: Option<i64> = row.try_get("invitation_id")?;
+        let result = sqlx::query(
+            "UPDATE email_login_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL",
+        )
+        .bind(unix_timestamp())
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok((result.rows_affected() == 1).then_some(invitation_id))
+    }
+
+    pub async fn accept_email_invitation(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query("UPDATE email_invitations SET status = 'accepted', accepted_at = ? WHERE id = ? AND status = 'pending'")
+            .bind(unix_timestamp()).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn enqueue_email(
+        &self,
+        recipient: &str,
+        subject: &str,
+        encrypted_body: &str,
+    ) -> anyhow::Result<i64> {
+        let now = unix_timestamp();
+        let result = sqlx::query("INSERT INTO email_outbox (recipient, subject, encrypted_body, next_attempt_at, created_at) VALUES (?, ?, ?, ?, ?)")
+            .bind(normalize_email(recipient)).bind(subject).bind(encrypted_body).bind(now).bind(now).execute(&self.pool).await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn allow_email_send(&self, email: &str, source: &str) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let window_secs = 10 * 60;
+        let keys = [
+            (format!("email:{}", normalize_email(email)), 3_i64),
+            (format!("source:{source}"), 10_i64),
+            ("instance".to_string(), 50_i64),
+        ];
+        let mut transaction = self.pool.begin().await?;
+        for (key, limit) in &keys {
+            let row = sqlx::query(
+                "SELECT window_start, request_count FROM email_rate_limits WHERE limit_key = ?",
+            )
+            .bind(key)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            if let Some(row) = row {
+                let window_start: i64 = row.try_get("window_start")?;
+                let count: i64 = row.try_get("request_count")?;
+                if now < window_start + window_secs && count >= *limit {
+                    return Ok(false);
+                }
+            }
+        }
+        for (key, _) in keys {
+            sqlx::query("INSERT INTO email_rate_limits (limit_key, window_start, request_count) VALUES (?, ?, 1) ON CONFLICT(limit_key) DO UPDATE SET window_start = CASE WHEN email_rate_limits.window_start + ? <= ? THEN ? ELSE email_rate_limits.window_start END, request_count = CASE WHEN email_rate_limits.window_start + ? <= ? THEN 1 ELSE email_rate_limits.request_count + 1 END")
+                .bind(key)
+                .bind(now)
+                .bind(window_secs)
+                .bind(now)
+                .bind(now)
+                .bind(window_secs)
+                .bind(now)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn pending_outbox(&self, limit: u32) -> anyhow::Result<Vec<OutboxMessage>> {
+        sqlx::query("SELECT id, recipient, subject, encrypted_body, attempts FROM email_outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?")
+            .bind(unix_timestamp()).bind(i64::from(limit)).fetch_all(&self.pool).await?
+            .into_iter().map(|row| Ok(OutboxMessage { id: row.try_get("id")?, recipient: row.try_get("recipient")?, subject: row.try_get("subject")?, encrypted_body: row.try_get("encrypted_body")?, attempts: row.try_get::<i64, _>("attempts")? as u32 }))
+            .collect::<Result<Vec<_>, sqlx::Error>>().map_err(Into::into)
+    }
+
+    pub async fn mark_outbox_sent(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query("UPDATE email_outbox SET status = 'sent', sent_at = ? WHERE id = ?")
+            .bind(unix_timestamp())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_outbox_failed(
+        &self,
+        id: i64,
+        attempts: u32,
+        error: &str,
+    ) -> anyhow::Result<()> {
+        let terminal = attempts >= 5;
+        let delay = 30_i64.saturating_mul(1_i64 << attempts.min(6));
+        sqlx::query("UPDATE email_outbox SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?")
+            .bind(if terminal { "failed" } else { "pending" })
+            .bind(i64::from(attempts)).bind(unix_timestamp() + delay)
+            .bind(error.chars().take(200).collect::<String>()).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
     async fn write_security_audit(
         &self,
         username: &str,
@@ -1514,6 +1899,11 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'billing', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS group_members (group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, is_billing INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, PRIMARY KEY(group_id, user_id), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS user_routing_ids (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, public_number INTEGER NOT NULL UNIQUE, routing_id TEXT NOT NULL UNIQUE COLLATE NOCASE, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, revoked_at INTEGER, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS smtp_settings (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), enabled INTEGER NOT NULL DEFAULT 0, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 587, security TEXT NOT NULL DEFAULT 'starttls', username TEXT, encrypted_password TEXT, from_name TEXT NOT NULL DEFAULT 'MirrorProxy', from_address TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS email_invitations (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, display_name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'pending', expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, accepted_at INTEGER, revoked_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS email_login_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, code_hash TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, invitation_id INTEGER, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL, FOREIGN KEY(invitation_id) REFERENCES email_invitations(id) ON DELETE SET NULL)",
+    "CREATE TABLE IF NOT EXISTS email_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT NOT NULL, subject TEXT NOT NULL, encrypted_body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, last_error TEXT, created_at INTEGER NOT NULL, sent_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS email_rate_limits (limit_key TEXT PRIMARY KEY, window_start INTEGER NOT NULL, request_count INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS proxy_targets (code TEXT PRIMARY KEY, enabled INTEGER NOT NULL, upstream_url TEXT NOT NULL, route_prefix TEXT NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS traffic_daily (day TEXT NOT NULL, target_code TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, target_code))",
     "CREATE TABLE IF NOT EXISTS traffic_monthly (month TEXT PRIMARY KEY, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, quota_exceeded INTEGER NOT NULL DEFAULT 0)",
@@ -1525,6 +1915,9 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx ON user_sessions(expires_at)",
     "CREATE UNIQUE INDEX IF NOT EXISTS user_routing_ids_active_user_idx ON user_routing_ids(user_id) WHERE active = 1",
     "CREATE UNIQUE INDEX IF NOT EXISTS group_members_billing_user_idx ON group_members(user_id) WHERE is_billing = 1",
+    "CREATE INDEX IF NOT EXISTS email_invitations_email_idx ON email_invitations(email, status)",
+    "CREATE INDEX IF NOT EXISTS email_login_tokens_email_idx ON email_login_tokens(email, expires_at)",
+    "CREATE INDEX IF NOT EXISTS email_outbox_pending_idx ON email_outbox(status, next_attempt_at)",
     "CREATE INDEX IF NOT EXISTS request_events_created_at_idx ON request_events(created_at)",
 ];
 
@@ -1725,6 +2118,164 @@ mod tests {
             .is_none());
         let users = database.list_users().await.unwrap();
         assert_eq!(users, [first]);
+    }
+
+    #[tokio::test]
+    async fn email_credentials_and_invitations_are_hashed_and_one_time() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let invitation_id = database
+            .create_email_invitation(
+                "admin",
+                "person@example.com",
+                "Person",
+                "raw-invitation-token",
+                unix_timestamp() + 600,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            database
+                .valid_invitation("person@example.com", "raw-invitation-token")
+                .await
+                .unwrap(),
+            Some(invitation_id)
+        );
+        let stored: String = sqlx::query("SELECT token_hash FROM email_invitations WHERE id = ?")
+            .bind(invitation_id)
+            .fetch_one(&database.pool)
+            .await
+            .unwrap()
+            .try_get("token_hash")
+            .unwrap();
+        assert_ne!(stored, "raw-invitation-token");
+
+        database
+            .store_email_login_token(
+                "person@example.com",
+                "raw-magic-token",
+                "123456",
+                Some(invitation_id),
+                unix_timestamp() + 600,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            database
+                .consume_email_login_token("person@example.com", "raw-magic-token", false)
+                .await
+                .unwrap(),
+            Some(Some(invitation_id))
+        );
+        assert!(database
+            .consume_email_login_token("person@example.com", "raw-magic-token", false)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn email_codes_lock_after_five_failures_and_sends_are_rate_limited() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        database
+            .store_email_login_token(
+                "person@example.com",
+                "token",
+                "123456",
+                None,
+                unix_timestamp() + 600,
+            )
+            .await
+            .unwrap();
+        for _ in 0..5 {
+            assert!(database
+                .consume_email_login_token("person@example.com", "000000", true)
+                .await
+                .unwrap()
+                .is_none());
+        }
+        assert!(database
+            .consume_email_login_token("person@example.com", "123456", true)
+            .await
+            .unwrap()
+            .is_none());
+
+        for _ in 0..3 {
+            assert!(database
+                .allow_email_send("person@example.com", "192.0.2.1")
+                .await
+                .unwrap());
+        }
+        assert!(!database
+            .allow_email_send("person@example.com", "192.0.2.1")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn email_outbox_retries_are_bounded_and_errors_are_sanitized() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let id = database
+            .enqueue_email("PERSON@example.com", "Subject", "encrypted-value")
+            .await
+            .unwrap();
+        let queued = database.pending_outbox(10).await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].recipient, "person@example.com");
+        assert_eq!(queued[0].encrypted_body, "encrypted-value");
+
+        database
+            .mark_outbox_failed(id, 5, &"x".repeat(300))
+            .await
+            .unwrap();
+        assert!(database.pending_outbox(10).await.unwrap().is_empty());
+        let row = sqlx::query(
+            "SELECT status, attempts, length(last_error) AS error_length FROM email_outbox WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+        assert_eq!(row.try_get::<String, _>("status").unwrap(), "failed");
+        assert_eq!(row.try_get::<i64, _>("attempts").unwrap(), 5);
+        assert_eq!(row.try_get::<i64, _>("error_length").unwrap(), 200);
+    }
+
+    #[tokio::test]
+    async fn user_sessions_are_independent_and_revoked_when_user_is_disabled() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let user = database
+            .create_user("email", "person@example.com", "Person", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        let session = database
+            .create_user_session(user.id, "email")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            database
+                .authenticate_user_session(&session.token)
+                .await
+                .unwrap()
+                .unwrap()
+                .user_id,
+            user.id
+        );
+        assert!(database
+            .authenticate_session(&session.token)
+            .await
+            .unwrap()
+            .is_none());
+        database
+            .set_user_disabled("admin", user.id, true)
+            .await
+            .unwrap();
+        assert!(database
+            .authenticate_user_session(&session.token)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

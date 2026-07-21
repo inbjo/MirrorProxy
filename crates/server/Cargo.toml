@@ -9,13 +9,16 @@ repository.workspace = true
 anyhow = "1"
 argon2 = "0.5"
 axum = { version = "0.8", features = ["macros"] }
+base64 = "0.22"
 bytes = "1"
+chacha20poly1305 = { version = "0.11.0", features = ["rand_core"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
 http = "1"
 include_dir = "0.7"
+lettre = { version = "0.11.22", default-features = false, features = ["builder", "pool", "smtp-transport", "tokio1-rustls-tls"] }
 mime_guess = "2"
 mirrorproxy-catalog = { path = "../catalog" }
 opentelemetry = { version = "0.32", default-features = false, features = ["trace"] }
@@ -31,7 +34,7 @@ sha2 = "0.10"
 sqids = "0.4.2"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
 toml = "0.9"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 tracing = "0.1"
