@@ -1535,6 +1535,9 @@ mod tests {
             "npm", "bun", "pip", "pdm", "uv", "cargo", "go", "maven", "rubygems", "nuget", "cpan",
             "cran", "hackage", "clojars", "anaconda", "lua", "homebrew", "nix", "composer",
         ] {
+            if cfg!(windows) && matches!(target_code, "homebrew" | "nix") {
+                continue;
+            }
             let command = PlannedSourceCommand {
                 target_code,
                 provider_code: "mirrorproxy",
@@ -1554,6 +1557,13 @@ mod tests {
             assert_eq!(restored, applied.config_path);
             assert!(!restored.exists());
             assert!(!applied.rollback_path.exists());
+        }
+
+        #[cfg(windows)]
+        for target_code in ["homebrew", "nix"] {
+            let error = source_config_path(target_code, CliSourceScope::User, &directory)
+                .expect_err("unsupported Windows target unexpectedly had a config path");
+            assert!(error.to_string().contains("not supported on Windows"));
         }
 
         fs::write(directory.join(".npmrc"), "registry=https://user.example/\n").unwrap();

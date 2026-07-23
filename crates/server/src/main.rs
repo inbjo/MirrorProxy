@@ -43,7 +43,7 @@ use proxy::{
     hackage, homebrew, julia, luarocks, maven, nix, npm, nuget, nvm, oci, opam, os, pub_repository,
     pypi, rubygems, rustup, texlive, winget, ProxyError,
 };
-use reqwest::{Client, NoProxy, Proxy, Url};
+use reqwest::{Client, ClientBuilder, NoProxy, Proxy, Url};
 use secrets::SecretCipher;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
@@ -1235,6 +1235,12 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
 }
 
 fn build_upstream_client(config: &Config) -> anyhow::Result<Client> {
+    build_upstream_client_builder(config)?
+        .build()
+        .context("failed to build upstream HTTP client")
+}
+
+fn build_upstream_client_builder(config: &Config) -> anyhow::Result<ClientBuilder> {
     let request_timeout = Duration::from_secs(config.timeout.request_secs);
     let mut builder = Client::builder()
         .no_proxy()
@@ -1256,9 +1262,7 @@ fn build_upstream_client(config: &Config) -> anyhow::Result<Client> {
         }
         builder = builder.proxy(proxy);
     }
-    builder
-        .build()
-        .context("failed to build upstream HTTP client")
+    Ok(builder)
 }
 
 fn build_webauthn(config: &Config) -> anyhow::Result<Option<Arc<Webauthn>>> {
@@ -4329,9 +4333,15 @@ mod tests {
             },
             ..Config::default()
         };
-        let response = build_upstream_client(&config)
+        let response = build_upstream_client_builder(&config)
             .unwrap()
-            .get("http://localhost:18080/from-socks")
+            .resolve(
+                "socks-local.test",
+                SocketAddr::from(([127, 0, 0, 1], 18080)),
+            )
+            .build()
+            .unwrap()
+            .get("http://socks-local.test:18080/from-socks")
             .send()
             .await
             .unwrap();
