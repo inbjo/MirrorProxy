@@ -75,13 +75,8 @@ curl http://selfhost.com/healthz
 
 ## Docker Deployment
 
-The server image runs as a non-root user, listens on port `3000`, and stores its
-SQLite database and optional cache under `/data`. The default named volume
-requires no host UID/GID setup.
-
-The repository includes a ready-to-run [compose.yaml](compose.yaml). You can
-also save the following as `docker-compose.yaml` in an empty deployment
-directory:
+Use the included [compose.yaml](compose.yaml), or save the following as
+`compose.yaml`:
 
 ```yaml
 services:
@@ -91,6 +86,8 @@ services:
     restart: unless-stopped
     ports:
       - "${MIRRORPROXY_PORT:-3000}:3000"
+    environment:
+      MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
     volumes:
       - mirrorproxy-data:/data
 
@@ -98,14 +95,15 @@ volumes:
   mirrorproxy-data:
 ```
 
-Run `docker compose up -d`, read the generated administrator password from
-`docker compose logs mirrorproxy`, then configure the public URL, registration,
-quotas, cache, upstream proxy, and Passkeys in the admin console. Only the host
-port remains in the minimal example:
+Optional: create `.env` in the same directory to set the port and initial
+administrator password:
 
 ```dotenv
 MIRRORPROXY_PORT=53000
+MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
 ```
+
+Start the service:
 
 ```bash
 docker compose up -d
@@ -113,98 +111,9 @@ docker compose logs mirrorproxy
 curl http://127.0.0.1:3000/healthz
 ```
 
-When the SQLite database is initialized for the first time, an unset or empty
-`MIRRORPROXY_ADMIN_PASSWORD` makes MirrorProxy use the fixed initial administrator
-username `admin` and generate a random password, which is printed prominently in
-the startup log. Set the variable to a non-empty value to use that password
-instead; the username is still printed, while the manually configured password is not. The variable
-does not reset credentials in an existing database.
-Keep the named `mirrorproxy-data` volume when upgrading. To run without
-Compose:
-
-```bash
-docker run -d --name mirrorproxy --restart unless-stopped \
-  -p 3000:3000 \
-  -e MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com \
-  -e MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1 \
-  -e MIRRORPROXY_ADMIN_PASSWORD='replace-with-a-strong-password' \
-  -v mirrorproxy-data:/data \
-  kudang/mirrorproxy:latest
-```
-
-Tagged multi-architecture images are published with an SPDX SBOM, a
-BuildKit `mode=max` provenance attestation, and a keyless Sigstore signature
-issued to the GitHub Actions workflow. Verify a released image by immutable
-digest:
-
-```bash
-IMAGE=kudang/mirrorproxy:1.0.2
-DIGEST="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')"
-cosign verify \
-  --certificate-identity-regexp '^https://github\.com/inbjo/MirrorProxy/\.github/workflows/docker\.yml@refs/tags/v[0-9].*$' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  "kudang/mirrorproxy@${DIGEST}"
-```
-
-The named volume is recommended: Docker preserves the image's `/data`
-ownership, so no UID/GID handling is required. Only when you intentionally
-replace it with a host bind mount such as `/srv/mirrorproxy/data:/data` must the
-directory be writable by container UID/GID `10001:10001`:
-
-```bash
-sudo install -d -o 10001 -g 10001 -m 0750 /srv/mirrorproxy/data
-sudo install -d -o 10001 -g 10001 -m 0750 /srv/mirrorproxy/data/cache
-```
-
-On an SELinux-enforcing host, append `:Z` to the bind mount. Otherwise SQLite
-may fail at startup with `code: 14 unable to open database file`.
-
-Environment variables such as `MIRRORPROXY_ENABLED_PROXIES`, quota, cache, and
-rate-limit settings work in the container. For a complete TOML configuration,
-mount it read-only and set its path explicitly:
-
-```bash
-docker run -d --name mirrorproxy --restart unless-stopped \
-  -p 3000:3000 \
-  -e MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml \
-  -e MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000 \
-  -e MIRRORPROXY_DB=/data/mirrorproxy.sqlite3 \
-  -v mirrorproxy-data:/data \
-  -v "$PWD/config.toml:/etc/mirrorproxy/config.toml:ro" \
-  kudang/mirrorproxy:latest
-```
-
-Build the current source as a local `linux/amd64` image:
-
-```bash
-./scripts/docker-build.sh
-```
-
-If Docker Hub is slow or unavailable, route base-image pulls through a
-MirrorProxy instance:
-
-```bash
-MIRRORPROXY_DOCKER_BASE_REGISTRY=sina.dev/library ./scripts/docker-build.sh
-```
-
-For a local multi-platform build, register ARM64 emulation once (GitHub Actions
-does this automatically). The same image can be pulled through MirrorProxy when
-Docker Hub is unavailable:
-
-```bash
-docker run --privileged --rm sina.dev/tonistiigi/binfmt --install arm64
-```
-
-Then publish `linux/amd64` and `linux/arm64` manifests after `docker login`:
-
-```bash
-./scripts/docker-build.sh --push --image <dockerhub-user>/mirrorproxy
-```
-
-The `Docker` GitHub Actions workflow performs the same multi-platform publish.
-Set repository variable `DOCKERHUB_USERNAME` and repository secret
-`DOCKERHUB_TOKEN`; pushing a `v*` tag publishes the semantic-version and
-`latest` tags, while workflow dispatch supports an explicit version.
+The administrator username is `admin`. If no password is configured, read the
+generated password from the startup log. Configure everything else after
+signing in to `/admin`. Keep the `mirrorproxy-data` volume when upgrading.
 
 ## GitHub Proxy
 

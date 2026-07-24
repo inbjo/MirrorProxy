@@ -75,12 +75,7 @@ curl http://selfhost.com/healthz
 
 ## Docker 部署
 
-服务端镜像使用非 root 用户运行，监听 `3000` 端口，并把 SQLite 数据库和可选缓存
-统一保存到 `/data` 持久卷。默认使用 named volume，普通用户不需要了解或配置容器
-内部 UID/GID。
-
-仓库已经提供可直接运行的 [compose.yaml](compose.yaml)。也可以把下面内容保存为部署
-目录中的 `docker-compose.yaml`：
+使用仓库中的 [compose.yaml](compose.yaml)，或把下面内容保存为 `compose.yaml`：
 
 ```yaml
 services:
@@ -90,6 +85,8 @@ services:
     restart: unless-stopped
     ports:
       - "${MIRRORPROXY_PORT:-3000}:3000"
+    environment:
+      MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
     volumes:
       - mirrorproxy-data:/data
 
@@ -97,13 +94,14 @@ volumes:
   mirrorproxy-data:
 ```
 
-直接执行 `docker compose up -d` 即可。首次启动后从
-`docker compose logs mirrorproxy` 获取随机管理员密码，再到后台完成公开地址、注册、
-配额、缓存、上游代理和 Passkey 等配置。只有宿主机端口需要在简化示例中保留：
+可选：在同目录创建 `.env`，设置端口和初始管理员密码：
 
 ```dotenv
 MIRRORPROXY_PORT=53000
+MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
 ```
+
+启动服务：
 
 ```bash
 docker compose up -d
@@ -111,88 +109,8 @@ docker compose logs mirrorproxy
 curl http://127.0.0.1:3000/healthz
 ```
 
-首次初始化 SQLite 数据库时，管理员账号固定为 `admin`。如果没有设置
-`MIRRORPROXY_ADMIN_PASSWORD` 或变量值为空，MirrorProxy 会自动生成随机密码，并在启动
-日志中醒目输出账号和密码。如果变量为非空值，则直接使用手动配置的密码且不会把该密码写入日志。
-该变量不会重置已有数据库中的管理员凭据。升级时请保留命名卷 `mirrorproxy-data`。不使用 Compose
-也可以直接启动：
-
-```bash
-docker run -d --name mirrorproxy --restart unless-stopped \
-  -p 3000:3000 \
-  -e MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com \
-  -e MIRRORPROXY_ADMIN_PASSWORD='replace-with-a-strong-password' \
-  -v mirrorproxy-data:/data \
-  kudang/mirrorproxy:latest
-```
-
-带版本标签的多架构镜像会同时发布 SPDX SBOM、BuildKit `mode=max` provenance
-证明，以及由 GitHub Actions 工作流通过 OIDC 获取的无密钥 Sigstore 签名。可以按
-不可变 digest 验证正式镜像：
-
-```bash
-IMAGE=kudang/mirrorproxy:1.0.2
-DIGEST="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')"
-cosign verify \
-  --certificate-identity-regexp '^https://github\.com/inbjo/MirrorProxy/\.github/workflows/docker\.yml@refs/tags/v[0-9].*$' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  "kudang/mirrorproxy@${DIGEST}"
-```
-
-推荐使用 named volume；Docker 会自动保留镜像内 `/data` 的所有权，不需要处理
-UID/GID。只有主动改为 `/srv/mirrorproxy/data:/data` 这样的宿主机目录挂载时，才需要
-让目录可由容器内部 UID/GID `10001:10001` 写入：
-
-```bash
-sudo install -d -o 10001 -g 10001 -m 0750 /srv/mirrorproxy/data
-sudo install -d -o 10001 -g 10001 -m 0750 /srv/mirrorproxy/data/cache
-```
-
-启用 SELinux 的宿主机还需要给 bind mount 添加 `:Z`。否则 SQLite 启动时可能出现
-`code: 14 unable to open database file`。
-
-容器支持 `MIRRORPROXY_ENABLED_PROXIES`、配额、缓存和限流等环境变量。如需完整
-TOML 配置，可只读挂载配置文件并显式指定路径：
-
-```bash
-docker run -d --name mirrorproxy --restart unless-stopped \
-  -p 3000:3000 \
-  -e MIRRORPROXY_CONFIG=/etc/mirrorproxy/config.toml \
-  -e MIRRORPROXY_LISTEN_ADDR=0.0.0.0:3000 \
-  -e MIRRORPROXY_DB=/data/mirrorproxy.sqlite3 \
-  -v mirrorproxy-data:/data \
-  -v "$PWD/config.toml:/etc/mirrorproxy/config.toml:ro" \
-  kudang/mirrorproxy:latest
-```
-
-从当前源码构建本机 `linux/amd64` 镜像：
-
-```bash
-./scripts/docker-build.sh
-```
-
-如果 Docker Hub 访问缓慢或不可用，可以通过 MirrorProxy 拉取构建基础镜像：
-
-```bash
-MIRRORPROXY_DOCKER_BASE_REGISTRY=sina.dev/library ./scripts/docker-build.sh
-```
-
-本机首次执行多架构构建时，需要先注册 ARM64 模拟支持（GitHub Actions 会自动
-完成此步骤）。Docker Hub 不可用时可以通过 MirrorProxy 拉取该工具镜像：
-
-```bash
-docker run --privileged --rm sina.dev/tonistiigi/binfmt --install arm64
-```
-
-然后在执行 `docker login` 后发布 `linux/amd64` 和 `linux/arm64` 多架构 manifest：
-
-```bash
-./scripts/docker-build.sh --push --image <dockerhub-user>/mirrorproxy
-```
-
-GitHub Actions 的 `Docker` 工作流会执行相同的多架构发布。仓库需要设置变量
-`DOCKERHUB_USERNAME` 和机密 `DOCKERHUB_TOKEN`；推送 `v*` tag 会发布语义化版本与
-`latest` 标签，手动触发工作流时也可以指定版本。
+管理员账号为 `admin`。如果没有设置管理员密码，可从启动日志查看自动生成的密码。
+登录 `/admin` 后即可完成其他配置。升级时保留 `mirrorproxy-data` 数据卷。
 
 ## GitHub 代理
 

@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     ports:
       - "${MIRRORPROXY_PORT:-3000}:3000"
+    environment:
+      MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
     volumes:
       - mirrorproxy-data:/data
 
