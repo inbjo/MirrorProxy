@@ -13,6 +13,13 @@ MirrorProxy is a self-hosted mirror proxy platform written in Rust. The `mirrorp
 
 The project uses an adapter-based proxy core and already ships adapters for GitHub, Docker/OCI, Composer, npm, PyPI, Cargo, Go modules, major language repositories, developer-tool distribution services, and operating system mirrors. New ecosystems can reuse the same routing, streaming, security, accounting, quota, and cache infrastructure.
 
+## Quick Navigation
+
+- Deployment: [Quick Start](#quick-start) · [Docker](#docker-deployment) · [Binary](#binary-deployment) · [Reverse proxy and wildcard domains](#reverse-proxy-deployment)
+- Popular mirrors: [GitHub](#github-proxy) · [Docker / OCI](#docker--oci-proxy) · [npm](#npm--yarn--pnpm-proxy) · [Go](#go-module-proxy) · [Maven](#maven-central-proxy) · [PyPI](#pip--pypi-proxy) · [OS repositories](#os-static-repository-proxy)
+- Administration: [Service configuration](#configuration) · [Traffic and quotas](#traffic-accounting-and-monthly-quota) · [Observability](#observability) · [Security](#security-notes)
+- Client and development: [Install the client](#install-the-client) · [Local source CLI](#local-source-cli) · [Development and verification](#development)
+
 ## Features
 
 - Embedded public portal at `/` and an independent administration portal at `/admin`
@@ -114,6 +121,202 @@ curl http://127.0.0.1:3000/healthz
 The administrator username is `admin`. If no password is configured, read the
 generated password from the startup log. Configure everything else after
 signing in to `/admin`. Keep the `mirrorproxy-data` volume when upgrading.
+
+## Binary Deployment
+
+Download the `mirrorproxy-server-*.tar.gz` archive for your server architecture
+from [GitHub Releases](https://github.com/inbjo/MirrorProxy/releases/latest).
+Verify it against the adjacent `.sha256` file, then separately download
+[config.example.toml](config.example.toml) from the repository:
+
+```bash
+tar -xzf mirrorproxy-server-x86_64-unknown-linux-musl.tar.gz
+install -m 0755 mirrorproxy-server /usr/local/bin/mirrorproxy-server
+install -d /var/lib/mirrorproxy
+install -m 0644 config.example.toml /etc/mirrorproxy.toml
+cd /var/lib/mirrorproxy
+/usr/local/bin/mirrorproxy-server --config /etc/mirrorproxy.toml
+```
+
+The example configuration listens on `127.0.0.1:3000`; its relative database
+path is resolved from the current working directory. Adjust the database path
+and initial administrator password in the configuration or environment. For
+production, run the process under systemd or another supervisor and expose it
+through the TLS reverse proxy below.
+
+To build the Linux static binaries from source:
+
+```bash
+./build.sh
+```
+
+The script builds the web console and then the `mirrorproxy-server` and
+`mirrorproxy` binaries for `x86_64-unknown-linux-musl`. Install `musl-tools`
+first so `musl-gcc` is available.
+
+## Reverse Proxy Deployment
+
+MirrorProxy should usually run behind a TLS reverse proxy. Leave
+`public_base_url` empty to derive the external scheme and host per request, so
+changing domains only requires reloading the reverse proxy. Set a fixed
+`public_base_url` for a path-prefix deployment such as
+`https://example.com/mirrorproxy`.
+
+### Wildcard user domains
+
+To enable per-user domains, point both the base domain and wildcard record to
+the same server. For example:
+
+```text
+mirror.example.com       A/AAAA  <server address>
+*.mirror.example.com     A/AAAA  <server address>
+```
+
+The TLS certificate must cover both `mirror.example.com` and
+`*.mirror.example.com`. HTTP-01 cannot issue wildcard certificates; use a
+DNS-01 challenge for automatic issuance, or provide an existing wildcard
+certificate. The reverse proxy must accept both names and preserve the original
+Host requested by the client.
+
+After configuring the proxy, set these values in the admin console:
+
+1. Public URL: `https://mirror.example.com`
+2. User subdomain base: `mirror.example.com`
+3. Trusted reverse proxies: the IP or CIDR used by the proxy when connecting to MirrorProxy
+4. Verify DNS, TLS, and forwarding at `https://test.mirror.example.com/healthz`
+5. Acknowledge wildcard DNS, TLS, and original Host readiness, then enable required user subdomains if needed
+
+### Trusted forwarded headers
+
+Forwarded headers are accepted only from `trusted_proxies`, which defaults to
+`127.0.0.1` and `::1`. Add the proxy's actual peer IP or CIDR when it runs on
+another host or container network. Configure the proxy to **overwrite** `Host`,
+`X-Forwarded-Host`, and `X-Forwarded-Proto`; never pass client-supplied values
+through. Keep MirrorProxy's listener private to the proxy where possible.
+
+```toml
+# IPs and CIDRs are supported. This setting takes effect immediately in the admin console.
+trusted_proxies = ["127.0.0.1", "::1", "172.18.0.0/16"]
+```
+
+Equivalent environment setting:
+`MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1,172.18.0.0/16`.
+
+### Nginx
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name mirror.example.com *.mirror.example.com;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    client_max_body_size 0;
+    proxy_request_buffering off;
+    proxy_buffering off;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Caddy
+
+Standard Caddy can load a pre-provisioned wildcard certificate:
+
+```caddyfile
+mirror.example.com, *.mirror.example.com {
+    tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
+
+    reverse_proxy 127.0.0.1:3000 {
+        flush_interval -1
+    }
+}
+```
+
+For automatic wildcard certificate issuance, install the appropriate Caddy DNS
+provider module and use:
+
+```caddyfile
+mirror.example.com, *.mirror.example.com {
+    tls {
+        dns <provider_name> {env.DNS_API_TOKEN}
+    }
+    reverse_proxy 127.0.0.1:3000 {
+        flush_interval -1
+    }
+}
+```
+
+Caddy sets the standard forwarded headers automatically. If it runs in another
+container or network, add its peer IP or subnet to `trusted_proxies`.
+
+### Traefik (Docker labels)
+
+```yaml
+labels:
+  - traefik.enable=true
+  - "traefik.http.routers.mirrorproxy.rule=Host(`mirror.example.com`) || HostRegexp(`^.+\\.mirror\\.example\\.com$`)"
+  - traefik.http.routers.mirrorproxy.entrypoints=websecure
+  - traefik.http.routers.mirrorproxy.tls=true
+  - traefik.http.routers.mirrorproxy.tls.certresolver=letsencrypt
+  - traefik.http.routers.mirrorproxy.tls.domains[0].main=mirror.example.com
+  - traefik.http.routers.mirrorproxy.tls.domains[0].sans=*.mirror.example.com
+  - traefik.http.services.mirrorproxy.loadbalancer.server.port=3000
+```
+
+The `letsencrypt` resolver must use a DNS challenge in Traefik's static
+configuration; an HTTP challenge cannot issue wildcard certificates. Traefik
+sets `X-Forwarded-Host` and `X-Forwarded-Proto`; trust its Docker network address
+or subnet, not public client ranges.
+
+### Apache HTTP Server
+
+```apache
+<VirtualHost *:443>
+    ServerName mirror.example.com
+    ServerAlias *.mirror.example.com
+
+    SSLEngine on
+    SSLCertificateFile /etc/apache2/certs/fullchain.pem
+    SSLCertificateKeyFile /etc/apache2/certs/privkey.pem
+
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:3000/ nocanon
+    ProxyPassReverse / http://127.0.0.1:3000/
+    RequestHeader set X-Forwarded-Host "expr=%{HTTP_HOST}"
+    RequestHeader set X-Forwarded-Proto "https"
+</VirtualHost>
+```
+
+Enable the `ssl`, `proxy`, `proxy_http`, and `headers` modules.
+
+### HAProxy
+
+```haproxy
+frontend https_in
+    # The PEM must cover mirror.example.com and *.mirror.example.com
+    bind :443 ssl crt /etc/haproxy/certs/mirror.example.com.pem
+    http-request set-header Host %[req.hdr(Host)]
+    http-request set-header X-Forwarded-Host %[req.hdr(Host)]
+    http-request set-header X-Forwarded-Proto https
+    default_backend mirrorproxy
+
+backend mirrorproxy
+    server app 127.0.0.1:3000
+```
+
+For Docker/OCI blobs and large GitHub release files, disable request buffering
+so large responses stream instead of being fully buffered by the proxy.
 
 ## GitHub Proxy
 
@@ -744,42 +947,8 @@ Before switching to `subdomain_required`, verify wildcard DNS, wildcard TLS,
 original Host forwarding, and trusted proxy settings, then set
 `MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY=true`. Configuration validation
 rejects the required mode until this explicit deployment-readiness confirmation
-is present.
-
-For `mirror.example.com`, point both DNS records to the same public address:
-
-```text
-mirror.example.com       A/AAAA  <server address>
-*.mirror.example.com     A/AAAA  <server address>
-```
-
-The TLS certificate must cover both `mirror.example.com` and
-`*.mirror.example.com`. With that certificate already provisioned, the
-essential Nginx configuration is:
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name mirror.example.com *.mirror.example.com;
-
-    ssl_certificate     /etc/nginx/certs/fullchain.pem;
-    ssl_certificate_key /etc/nginx/certs/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-}
-```
-
-In the admin console, set the public URL to `https://mirror.example.com`, the
-user-subdomain base to `mirror.example.com`, and add the Nginx peer IP/CIDR as a
-trusted reverse proxy. Verify the main domain and a test wildcard subdomain
-before acknowledging infrastructure readiness or enforcing user subdomains.
-Public mode does not require wildcard DNS.
+is present. See [Reverse Proxy Deployment](#reverse-proxy-deployment) for DNS,
+TLS, and common proxy examples. Public mode does not require wildcard DNS.
 
 ```dotenv
 MIRRORPROXY_REGISTRATION_MODE=invite_only
@@ -1019,122 +1188,6 @@ Void, and Gentoo. Select a subset with `MIRRORPROXY_OS_SMOKE_TARGETS`. To verify
 an unpublished client fix, point `MIRRORPROXY_OS_SMOKE_CLIENT_BINARY` at a local
 static client. The script still runs the public one-line installer first, then
 uses the candidate binary for the source-change regression.
-
-## Static Linux Build
-
-On Linux:
-
-```bash
-./build.sh
-```
-
-The script builds the web console first, then builds `mirrorproxy-server` and `mirrorproxy` release binaries for `x86_64-unknown-linux-musl`.
-Install `musl-tools` first so `musl-gcc` is available.
-
-## Reverse Proxy Deployment
-
-MirrorProxy should usually run behind a TLS reverse proxy. Leave `public_base_url` empty to derive the external scheme and host per request, so changing `a.example.com` to `b.example.com` only requires reloading the reverse proxy. Use a fixed `public_base_url` for path-prefix deployments such as `https://example.com/mirrorproxy`.
-
-Forwarded headers are accepted only from `trusted_proxies`, which defaults to `127.0.0.1` and `::1`. Add the proxy's actual peer IP or CIDR when it runs in another host/container. Configure the proxy to **overwrite** `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto`; never pass client-supplied values through. Keep MirrorProxy's listener private to the proxy where possible.
-
-```toml
-# IPs and CIDRs are supported. This setting takes effect immediately in the admin console.
-trusted_proxies = ["127.0.0.1", "::1", "172.18.0.0/16"]
-```
-
-Equivalent environment setting: `MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1,172.18.0.0/16`.
-
-Nginx example:
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name mirror.example.com;
-
-    client_max_body_size 0;
-    proxy_request_buffering off;
-    proxy_buffering off;
-
-    location / {
-        proxy_pass http://selfhost.com;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-Caddy example:
-
-```caddyfile
-mirror.example.com {
-    reverse_proxy 127.0.0.1:3000 {
-        flush_interval -1
-    }
-}
-```
-
-Caddy overwrites the standard forwarded headers automatically. For a separate container/network, add Caddy's peer address or subnet to `trusted_proxies`.
-
-Traefik (Docker labels) example:
-
-```yaml
-labels:
-  - traefik.enable=true
-  - traefik.http.routers.mirrorproxy.rule=Host(`mirror.example.com`)
-  - traefik.http.routers.mirrorproxy.entrypoints=websecure
-  - traefik.http.routers.mirrorproxy.tls=true
-  - traefik.http.services.mirrorproxy.loadbalancer.server.port=3000
-```
-
-Traefik supplies `X-Forwarded-Host` and `X-Forwarded-Proto`; set `trusted_proxies` to its Docker-network address/range, not the public client range.
-
-Apache HTTP Server example:
-
-```apache
-ProxyPreserveHost On
-ProxyPass / http://127.0.0.1:3000/
-ProxyPassReverse / http://127.0.0.1:3000/
-RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
-RequestHeader set X-Forwarded-Proto "https"
-```
-
-HAProxy example:
-
-```haproxy
-frontend https_in
-    bind :443 ssl crt /etc/haproxy/certs/mirror.example.com.pem
-    http-request set-header X-Forwarded-Host %[req.hdr(Host)]
-    http-request set-header X-Forwarded-Proto https
-    default_backend mirrorproxy
-
-backend mirrorproxy
-    server app 127.0.0.1:3000
-```
-
-Envoy example:
-
-```yaml
-static_resources:
-  clusters:
-    - name: mirrorproxy
-      connect_timeout: 1s
-      type: STATIC
-      load_assignment:
-        cluster_name: mirrorproxy
-        endpoints:
-          - lb_endpoints:
-              - endpoint:
-                  address:
-                    socket_address: { address: 127.0.0.1, port_value: 3000 }
-```
-
-Use Envoy's HTTP connection manager with `use_remote_address: true` and ensure its generated `x-forwarded-proto` / authority headers reach MirrorProxy; add Envoy's peer IP to `trusted_proxies`.
-
-For Docker/OCI and large release files, keep request buffering disabled in the reverse proxy so large blobs stream instead of being fully buffered.
 
 ## Security Notes
 

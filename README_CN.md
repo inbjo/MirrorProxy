@@ -13,6 +13,13 @@ MirrorProxy 是一个基于 Rust 的自部署镜像代理平台。服务端 `mir
 
 项目采用 adapter 架构，当前已经实现 GitHub、Docker/OCI、Composer、npm、PyPI、Cargo、Go modules、主流语言仓库、开发工具分发服务和操作系统镜像源；新增生态可继续复用同一套路由、流式传输、安全过滤、流量统计、配额和缓存基础设施。
 
+## 快速导航
+
+- 部署：[快速开始](#快速开始) · [Docker 部署](#docker-部署) · [二进制部署](#二进制部署) · [反向代理与通配符域名](#反向代理部署)
+- 常用镜像：[GitHub](#github-代理) · [Docker / OCI](#docker--oci-代理) · [npm](#npm--yarn--pnpm-代理) · [Go](#go-模块代理) · [Maven](#maven-central-代理) · [PyPI](#pip--pypi-代理) · [操作系统软件源](#os-静态目录代理)
+- 管理：[服务配置](#配置) · [流量与配额](#流量统计与月度配额) · [可观测性](#可观测性) · [安全说明](#安全说明)
+- 客户端与开发：[一键安装客户端](#一键安装客户端) · [本机改源 CLI](#本机改源-cli) · [开发与验证](#开发)
+
 ## 功能
 
 - `/` 提供公开页面，`/admin` 提供独立且需要鉴权的管理后台
@@ -111,6 +118,191 @@ curl http://127.0.0.1:3000/healthz
 
 管理员账号为 `admin`。如果没有设置管理员密码，可从启动日志查看自动生成的密码。
 登录 `/admin` 后即可完成其他配置。升级时保留 `mirrorproxy-data` 数据卷。
+
+## 二进制部署
+
+从 [GitHub Releases](https://github.com/inbjo/MirrorProxy/releases/latest) 下载与服务器架构匹配的
+`mirrorproxy-server-*.tar.gz`，校验同名 `.sha256` 文件后解压；再单独下载仓库中的
+[config.example.toml](config.example.toml)：
+
+```bash
+tar -xzf mirrorproxy-server-x86_64-unknown-linux-musl.tar.gz
+install -m 0755 mirrorproxy-server /usr/local/bin/mirrorproxy-server
+install -d /var/lib/mirrorproxy
+install -m 0644 config.example.toml /etc/mirrorproxy.toml
+cd /var/lib/mirrorproxy
+/usr/local/bin/mirrorproxy-server --config /etc/mirrorproxy.toml
+```
+
+默认配置监听 `127.0.0.1:3000`，相对数据库路径会落在当前工作目录；数据库路径及初始管理员
+密码可在配置文件或环境变量中调整。
+生产环境建议交给 systemd 等进程管理器运行，并由下方反向代理提供公网 HTTPS。
+
+从源码构建 Linux 静态二进制：
+
+```bash
+./build.sh
+```
+
+脚本会先构建 Web 控制台，再构建 `x86_64-unknown-linux-musl` 的
+`mirrorproxy-server` 和 `mirrorproxy`；需要先安装提供 `musl-gcc` 的 `musl-tools`。
+
+## 反向代理部署
+
+MirrorProxy 通常应部署在 TLS 反向代理之后。将 `public_base_url` 留空时，服务会按请求
+推导外部协议和域名；更换域名时只需重载反向代理。若以
+`https://example.com/mirrorproxy` 这类路径前缀部署，请配置固定的 `public_base_url`。
+
+### 通配符用户域名
+
+如果要启用用户专属域名，以 `mirror.example.com` 为例，先将主域名和通配符域名解析到
+同一服务器：
+
+```text
+mirror.example.com       A/AAAA  <服务器地址>
+*.mirror.example.com     A/AAAA  <服务器地址>
+```
+
+TLS 证书必须同时覆盖 `mirror.example.com` 和 `*.mirror.example.com`。HTTP-01
+不能签发通配符证书；自动签发时需要使用 DNS-01 Challenge，或者手动提供已有通配符证书。
+反向代理必须同时接收主域名与通配符域名，并保留客户端访问的原始 Host。
+
+完成反向代理后，在后台依次设置：
+
+1. 公开地址：`https://mirror.example.com`
+2. 用户子域名主域：`mirror.example.com`
+3. 可信反向代理：反向代理连接 MirrorProxy 时使用的 IP 或 CIDR
+4. 用 `https://test.mirror.example.com/healthz` 验证 DNS、TLS 和转发
+5. 勾选“通配符 DNS、TLS 与原始 Host 转发已就绪”，再按需启用“强制用户子域名”
+
+### 可信转发头
+
+只有来自 `trusted_proxies` 的连接才会使用 `X-Forwarded-Host` 和
+`X-Forwarded-Proto`；默认仅信任 `127.0.0.1` 与 `::1`。反向代理运行在其他主机或
+容器网络时，需加入其实际对端 IP 或 CIDR。反代必须**覆盖** `Host`、
+`X-Forwarded-Host`、`X-Forwarded-Proto`，不可透传客户端给出的值；并应尽量将
+MirrorProxy 监听端口限制为仅反代可访问。
+
+```toml
+# 支持 IP 和 CIDR；可在管理页面即时修改。
+trusted_proxies = ["127.0.0.1", "::1", "172.18.0.0/16"]
+```
+
+等价环境变量：`MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1,172.18.0.0/16`。
+
+### Nginx
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name mirror.example.com *.mirror.example.com;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    client_max_body_size 0;
+    proxy_request_buffering off;
+    proxy_buffering off;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Caddy
+
+标准 Caddy 可直接加载已有通配符证书：
+
+```caddyfile
+mirror.example.com, *.mirror.example.com {
+    tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
+
+    reverse_proxy 127.0.0.1:3000 {
+        flush_interval -1
+    }
+}
+```
+
+若希望 Caddy 自动签发通配符证书，需要安装对应 DNS Provider 模块，并改用：
+
+```caddyfile
+mirror.example.com, *.mirror.example.com {
+    tls {
+        dns <provider_name> {env.DNS_API_TOKEN}
+    }
+    reverse_proxy 127.0.0.1:3000 {
+        flush_interval -1
+    }
+}
+```
+
+Caddy 会自动设置标准转发头；若它位于独立容器或网络，请将其对端 IP/网段加入
+`trusted_proxies`。
+
+### Traefik（Docker labels）
+
+```yaml
+labels:
+  - traefik.enable=true
+  - "traefik.http.routers.mirrorproxy.rule=Host(`mirror.example.com`) || HostRegexp(`^.+\\.mirror\\.example\\.com$`)"
+  - traefik.http.routers.mirrorproxy.entrypoints=websecure
+  - traefik.http.routers.mirrorproxy.tls=true
+  - traefik.http.routers.mirrorproxy.tls.certresolver=letsencrypt
+  - traefik.http.routers.mirrorproxy.tls.domains[0].main=mirror.example.com
+  - traefik.http.routers.mirrorproxy.tls.domains[0].sans=*.mirror.example.com
+  - traefik.http.services.mirrorproxy.loadbalancer.server.port=3000
+```
+
+`letsencrypt` Resolver 必须在 Traefik 静态配置中启用 DNS Challenge；HTTP Challenge
+不能签发通配符证书。Traefik 会写入 `X-Forwarded-Host` 与 `X-Forwarded-Proto`；
+应信任其 Docker 网络地址或网段，而不是公网客户端网段。
+
+### Apache HTTP Server
+
+```apache
+<VirtualHost *:443>
+    ServerName mirror.example.com
+    ServerAlias *.mirror.example.com
+
+    SSLEngine on
+    SSLCertificateFile /etc/apache2/certs/fullchain.pem
+    SSLCertificateKeyFile /etc/apache2/certs/privkey.pem
+
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:3000/ nocanon
+    ProxyPassReverse / http://127.0.0.1:3000/
+    RequestHeader set X-Forwarded-Host "expr=%{HTTP_HOST}"
+    RequestHeader set X-Forwarded-Proto "https"
+</VirtualHost>
+```
+
+需要启用 `ssl`、`proxy`、`proxy_http` 和 `headers` 模块。
+
+### HAProxy
+
+```haproxy
+frontend https_in
+    # PEM 文件必须同时覆盖 mirror.example.com 和 *.mirror.example.com
+    bind :443 ssl crt /etc/haproxy/certs/mirror.example.com.pem
+    http-request set-header Host %[req.hdr(Host)]
+    http-request set-header X-Forwarded-Host %[req.hdr(Host)]
+    http-request set-header X-Forwarded-Proto https
+    default_backend mirrorproxy
+
+backend mirrorproxy
+    server app 127.0.0.1:3000
+```
+
+Docker/OCI blob 和 GitHub release 大文件建议关闭请求缓冲，确保大文件流式转发，而不是
+先完整缓存在反向代理中。
 
 ## GitHub 代理
 
@@ -711,41 +903,8 @@ MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
 切换到 `subdomain_required` 前，需确认通配符 DNS、通配符 TLS 证书、
 原始 Host 转发与可信代理均已配置，然后设置
 `MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY=true`。如未显式确认部署就绪，
-配置校验会拒绝启用强制子域名模式。
-
-以 `mirror.example.com` 为例，DNS 至少需要两条记录指向同一个公网地址：
-
-```text
-mirror.example.com       A/AAAA  <服务器地址>
-*.mirror.example.com     A/AAAA  <服务器地址>
-```
-
-TLS 证书必须同时覆盖 `mirror.example.com` 和 `*.mirror.example.com`。下面是已准备好
-通配符证书时的 Nginx 核心配置；关键点是 `server_name` 包含泛域名，并把原始 `$host`
-传给 MirrorProxy：
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name mirror.example.com *.mirror.example.com;
-
-    ssl_certificate     /etc/nginx/certs/fullchain.pem;
-    ssl_certificate_key /etc/nginx/certs/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-}
-```
-
-最后在后台填写公开地址 `https://mirror.example.com`、用户子域名主域
-`mirror.example.com`，把 Nginx 的来源 IP/CIDR 加入“可信反向代理”；测试主域名和任意
-测试子域名都能访问后，再勾选基础设施就绪并按需切换为“强制用户子域名”。如果只使用
-公开模式，不需要配置泛域名。
+配置校验会拒绝启用强制子域名模式。完整 DNS、TLS 及常用软件配置见
+[反向代理部署](#反向代理部署)；如果只使用公开模式，不需要配置泛域名。
 
 ```dotenv
 MIRRORPROXY_REGISTRATION_MODE=invite_only
@@ -962,105 +1121,6 @@ OS 测试不只刷新索引，还至少下载一个真实包，例如 Debian/Ubu
 用 `MIRRORPROXY_OS_SMOKE_TARGETS` 选择子集；验证尚未发布的客户端修复时，通过
 `MIRRORPROXY_OS_SMOKE_CLIENT_BINARY` 指定本地静态客户端。脚本仍会先执行公网一键
 安装，以同时验证安装链路，然后用候选二进制执行改源回归。
-
-## Linux 静态构建
-
-在 Linux 上运行：
-
-```bash
-./build.sh
-```
-
-脚本会先构建 Web 控制台，再构建 `x86_64-unknown-linux-musl` 的 `mirrorproxy-server` 和 `mirrorproxy` release 二进制。
-需先安装 `musl-tools`，以提供 `musl-gcc`。
-
-## 反向代理部署
-
-MirrorProxy 通常应部署在 TLS 反向代理之后。将 `public_base_url` 留空时，服务会按请求推导外部协议和域名；因此从 `a.example.com` 切换到 `b.example.com` 时，只需重载反向代理。若以 `https://example.com/mirrorproxy` 这类路径前缀部署，请配置固定的 `public_base_url`。
-
-只有来自 `trusted_proxies` 的连接才会使用 `X-Forwarded-Host` 和 `X-Forwarded-Proto`；默认仅信任 `127.0.0.1` 与 `::1`。反向代理运行在其他主机或容器网络时，需加入其实际对端 IP 或 CIDR。反代必须**覆盖** `Host`、`X-Forwarded-Host`、`X-Forwarded-Proto`，不可透传客户端给出的值；并应尽量将 MirrorProxy 监听端口限制为仅反代可访问。
-
-```toml
-# 支持 IP 和 CIDR；可在管理页面即时修改。
-trusted_proxies = ["127.0.0.1", "::1", "172.18.0.0/16"]
-```
-
-等价的环境变量：`MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1,172.18.0.0/16`。
-
-Nginx 示例：
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name mirror.example.com;
-
-    client_max_body_size 0;
-    proxy_request_buffering off;
-    proxy_buffering off;
-
-    location / {
-        proxy_pass http://selfhost.com;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-Caddy 示例：
-
-```caddyfile
-mirror.example.com {
-    reverse_proxy 127.0.0.1:3000 {
-        flush_interval -1
-    }
-}
-```
-
-Caddy 会自动覆盖标准转发头；若 Caddy 位于独立容器或网络，请将其对端 IP/网段加入 `trusted_proxies`。
-
-Traefik（Docker labels）示例：
-
-```yaml
-labels:
-  - traefik.enable=true
-  - traefik.http.routers.mirrorproxy.rule=Host(`mirror.example.com`)
-  - traefik.http.routers.mirrorproxy.entrypoints=websecure
-  - traefik.http.routers.mirrorproxy.tls=true
-  - traefik.http.services.mirrorproxy.loadbalancer.server.port=3000
-```
-
-Traefik 会写入 `X-Forwarded-Host` 与 `X-Forwarded-Proto`；应信任其 Docker 网络地址或网段，而不是公网客户端网段。
-
-Apache HTTP Server 示例：
-
-```apache
-ProxyPreserveHost On
-ProxyPass / http://127.0.0.1:3000/
-ProxyPassReverse / http://127.0.0.1:3000/
-RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
-RequestHeader set X-Forwarded-Proto "https"
-```
-
-HAProxy 示例：
-
-```haproxy
-frontend https_in
-    bind :443 ssl crt /etc/haproxy/certs/mirror.example.com.pem
-    http-request set-header X-Forwarded-Host %[req.hdr(Host)]
-    http-request set-header X-Forwarded-Proto https
-    default_backend mirrorproxy
-
-backend mirrorproxy
-    server app 127.0.0.1:3000
-```
-
-Envoy 示例：将 Envoy 的 HTTP connection manager 配置为 `use_remote_address: true`，并确保它生成的 `x-forwarded-proto` 和 authority 头传递至 MirrorProxy；再将 Envoy 的对端 IP 加入 `trusted_proxies`。
-
-Docker/OCI blob 和 GitHub release 大文件建议关闭反向代理请求缓冲，确保大文件流式转发，而不是先完整缓存在反向代理中。
 
 ## 安全说明
 
