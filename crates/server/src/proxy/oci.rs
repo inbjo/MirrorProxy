@@ -102,8 +102,9 @@ async fn send_with_public_auth(
     incoming_headers: &HeaderMap,
     config: &crate::config::Config,
 ) -> Result<reqwest::Response, ProxyError> {
+    let client = state.client();
     let request = super::upstream_request(
-        &state.client,
+        &client,
         method.clone(),
         url.clone(),
         incoming_headers,
@@ -124,8 +125,8 @@ async fn send_with_public_auth(
         return Ok(response);
     };
 
-    let token = fetch_bearer_token(&state.client, &challenge).await?;
-    let retry = super::upstream_request(&state.client, method, url, incoming_headers, config);
+    let token = fetch_bearer_token(&client, &challenge).await?;
+    let retry = super::upstream_request(&client, method, url, incoming_headers, config);
 
     Ok(retry.bearer_auth(token).send().await?)
 }

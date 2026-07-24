@@ -26,6 +26,20 @@ use crate::{
     valid_user_email, AppState,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EmailLocale {
+    En,
+    Zh,
+}
+
+fn email_locale(headers: &HeaderMap) -> EmailLocale {
+    headers
+        .get("x-mirrorproxy-locale")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.eq_ignore_ascii_case("zh") || value.starts_with("zh-"))
+        .map_or(EmailLocale::En, |_| EmailLocale::Zh)
+}
+
 #[derive(Serialize)]
 struct PublicSmtpSettings {
     enabled: bool,
@@ -132,14 +146,8 @@ pub(crate) async fn test_smtp_settings(
     if !valid_user_email(request.recipient.trim()) {
         return bad_request_response("a valid recipient email is required".to_string());
     }
-    match enqueue_plain_email(
-        &state,
-        request.recipient.trim(),
-        "MirrorProxy SMTP test",
-        "MirrorProxy email delivery is configured correctly.",
-    )
-    .await
-    {
+    let (subject, body) = smtp_test_email(email_locale(&headers));
+    match enqueue_plain_email(&state, request.recipient.trim(), subject, body).await {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(response) => response,
     }
@@ -211,16 +219,8 @@ pub(crate) async fn create_invitation(
             return internal_error_response();
         }
     };
-    let (body, html_body) = invitation_email(&link, expires_at);
-    match enqueue_email(
-        &state,
-        &email,
-        "MirrorProxy invitation",
-        &body,
-        Some(&html_body),
-    )
-    .await
-    {
+    let (subject, body, html_body) = invitation_email(email_locale(&headers), &link, expires_at);
+    match enqueue_email(&state, &email, subject, &body, Some(&html_body)).await {
         Ok(()) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
         Err(response) => response,
     }
@@ -293,16 +293,9 @@ pub(crate) async fn resend_invitation(
             return internal_error_response();
         }
     };
-    let (body, html_body) = invitation_email(&link, invitation.expires_at);
-    match enqueue_email(
-        &state,
-        &invitation.email,
-        "MirrorProxy invitation",
-        &body,
-        Some(&html_body),
-    )
-    .await
-    {
+    let (subject, body, html_body) =
+        invitation_email(email_locale(&headers), &link, invitation.expires_at);
+    match enqueue_email(&state, &invitation.email, subject, &body, Some(&html_body)).await {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(response) => response,
     }
@@ -388,22 +381,8 @@ pub(crate) async fn request_email_login(
             return internal_error_response();
         }
     };
-    let body = format!(
-        "Your MirrorProxy verification code is {code}.\n\nOr use this one-time link:\n{link}"
-    );
-    let html_body = format!(
-        "<p>Your MirrorProxy verification code is <strong>{code}</strong>.</p><p><a href=\"{}\">Sign in to MirrorProxy</a></p>",
-        html_escape(&link)
-    );
-    match enqueue_email(
-        &state,
-        &email,
-        "MirrorProxy sign in",
-        &body,
-        Some(&html_body),
-    )
-    .await
-    {
+    let (subject, body, html_body) = login_email(email_locale(&headers), &code, &link);
+    match enqueue_email(&state, &email, subject, &body, Some(&html_body)).await {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(response) => response,
     }
@@ -674,18 +653,72 @@ fn email_domain_allowed(email: &str, domains: &[String]) -> bool {
         .is_some_and(|(_, domain)| domains.iter().any(|allowed| allowed == domain))
 }
 
-fn invitation_email(link: &str, expires_at: i64) -> (String, String) {
+fn smtp_test_email(locale: EmailLocale) -> (&'static str, &'static str) {
+    match locale {
+        EmailLocale::En => (
+            "MirrorProxy SMTP test",
+            "MirrorProxy email delivery is configured correctly.",
+        ),
+        EmailLocale::Zh => (
+            "MirrorProxy 发件测试",
+            "MirrorProxy 邮件发送配置正确，测试邮件已成功送达。",
+        ),
+    }
+}
+
+fn login_email(locale: EmailLocale, code: &str, link: &str) -> (&'static str, String, String) {
+    let escaped_link = html_escape(link);
+    match locale {
+        EmailLocale::En => (
+            "MirrorProxy sign in",
+            format!(
+                "Your MirrorProxy verification code is {code}.\n\nOr use this one-time link:\n{link}"
+            ),
+            format!(
+                "<div style=\"font-family:Arial,sans-serif;line-height:1.6;color:#172033\"><h2>Sign in to MirrorProxy</h2><p>Your verification code is <strong>{code}</strong>.</p><p><a href=\"{escaped_link}\" style=\"display:inline-block;padding:11px 18px;border-radius:6px;background:#146b7c;color:#fff;text-decoration:none;font-weight:700\">Sign in</a></p><p style=\"color:#667085\">This code and one-time link expire shortly and can only be used once.</p></div>"
+            ),
+        ),
+        EmailLocale::Zh => (
+            "登录 MirrorProxy",
+            format!(
+                "你的 MirrorProxy 登录验证码是 {code}。\n\n也可以点击以下一次性链接直接登录：\n{link}"
+            ),
+            format!(
+                "<div style=\"font-family:'Microsoft YaHei','PingFang SC',Arial,sans-serif;line-height:1.7;color:#172033\"><h2>登录 MirrorProxy</h2><p>你的登录验证码是 <strong>{code}</strong>。</p><p><a href=\"{escaped_link}\" style=\"display:inline-block;padding:11px 18px;border-radius:6px;background:#146b7c;color:#fff;text-decoration:none;font-weight:700\">立即登录</a></p><p style=\"color:#667085\">验证码和一次性链接将在短时间后失效，且只能使用一次。</p></div>"
+            ),
+        ),
+    }
+}
+
+fn invitation_email(
+    locale: EmailLocale,
+    link: &str,
+    expires_at: i64,
+) -> (&'static str, String, String) {
     let expiry = chrono::DateTime::from_timestamp(expires_at, 0)
         .map(|value| value.format("%Y-%m-%d %H:%M UTC").to_string())
         .unwrap_or_else(|| "the stated expiration time".to_string());
-    let plain = format!(
-        "You were invited to MirrorProxy. This invitation expires at {expiry}.\n\nOpen the link to create your account and sign in:\n{link}"
-    );
-    let html = format!(
-        "<div style=\"font-family:Arial,sans-serif;line-height:1.6;color:#172033\"><h2>MirrorProxy invitation</h2><p>You were invited to MirrorProxy.</p><p><a href=\"{}\" style=\"display:inline-block;padding:11px 18px;border-radius:6px;background:#146b7c;color:#fff;text-decoration:none;font-weight:700\">Accept invitation</a></p><p style=\"color:#667085\">This one-time invitation expires at <strong>{expiry}</strong>.</p></div>",
-        html_escape(link)
-    );
-    (plain, html)
+    let escaped_link = html_escape(link);
+    match locale {
+        EmailLocale::En => (
+            "MirrorProxy invitation",
+            format!(
+                "You were invited to MirrorProxy. This invitation expires at {expiry}.\n\nOpen the link to create your account and sign in:\n{link}"
+            ),
+            format!(
+                "<div style=\"font-family:Arial,sans-serif;line-height:1.6;color:#172033\"><h2>MirrorProxy invitation</h2><p>You were invited to MirrorProxy.</p><p><a href=\"{escaped_link}\" style=\"display:inline-block;padding:11px 18px;border-radius:6px;background:#146b7c;color:#fff;text-decoration:none;font-weight:700\">Accept invitation</a></p><p style=\"color:#667085\">This one-time invitation expires at <strong>{expiry}</strong>.</p></div>"
+            ),
+        ),
+        EmailLocale::Zh => (
+            "MirrorProxy 用户邀请",
+            format!(
+                "管理员邀请你加入 MirrorProxy。本次邀请有效期至 {expiry}。\n\n点击以下一次性链接即可创建账户并登录：\n{link}"
+            ),
+            format!(
+                "<div style=\"font-family:'Microsoft YaHei','PingFang SC',Arial,sans-serif;line-height:1.7;color:#172033\"><h2>MirrorProxy 用户邀请</h2><p>管理员邀请你加入 MirrorProxy。</p><p><a href=\"{escaped_link}\" style=\"display:inline-block;padding:11px 18px;border-radius:6px;background:#146b7c;color:#fff;text-decoration:none;font-weight:700\">接受邀请并登录</a></p><p style=\"color:#667085\">这是一次性邀请链接，有效期至 <strong>{expiry}</strong>。</p></div>"
+            ),
+        ),
+    }
 }
 
 fn html_escape(value: &str) -> String {
@@ -740,7 +773,8 @@ mod tests {
 
     #[test]
     fn invitation_email_contains_clickable_link_and_expiration() {
-        let (plain, html) = invitation_email(
+        let (_, plain, html) = invitation_email(
+            EmailLocale::En,
             "https://mirror.example/login?email=person%40example.com&token=abc",
             1_784_851_200,
         );
@@ -750,6 +784,27 @@ mod tests {
             "<a href=\"https://mirror.example/login?email=person%40example.com&amp;token=abc\""
         ));
         assert!(html.contains("This one-time invitation expires at"));
+    }
+
+    #[test]
+    fn email_templates_follow_the_requested_locale() {
+        let (subject, body, html) = login_email(
+            EmailLocale::Zh,
+            "123456",
+            "https://mirror.example/login?token=abc",
+        );
+        assert_eq!(subject, "登录 MirrorProxy");
+        assert!(body.contains("登录验证码是 123456"));
+        assert!(html.contains("立即登录"));
+
+        let (subject, plain, html) = invitation_email(
+            EmailLocale::Zh,
+            "https://mirror.example/login?token=invite",
+            1_784_851_200,
+        );
+        assert_eq!(subject, "MirrorProxy 用户邀请");
+        assert!(plain.contains("管理员邀请你加入 MirrorProxy"));
+        assert!(html.contains("接受邀请并登录"));
     }
 
     #[test]

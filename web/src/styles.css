@@ -1,4 +1,7 @@
 @import "tailwindcss";
+@plugin "tailwind-scrollbar" {
+  nocompatible: true;
+}
 
 :root {
   font-family: "Aptos", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
@@ -41,6 +44,24 @@
 
 * {
   box-sizing: border-box;
+}
+
+html,
+.config-modal,
+.converter-output code,
+.generator-command code,
+.command code,
+.admin-tabs {
+  @apply scrollbar-thin scrollbar-track-transparent scrollbar-thumb-slate-400;
+}
+
+:root[data-theme="dark"],
+:root[data-theme="dark"] .config-modal,
+:root[data-theme="dark"] .converter-output code,
+:root[data-theme="dark"] .generator-command code,
+:root[data-theme="dark"] .command code,
+:root[data-theme="dark"] .admin-tabs {
+  @apply scrollbar-thumb-slate-600;
 }
 
 body {
@@ -89,16 +110,36 @@ button {
 .install-platform-title { display: flex; gap: 10px; align-items: start; color: var(--accent-strong); }
 .install-platform-title h3 { color: var(--text); font-size: 16px; }
 .install-platform-title p { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.install-command { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 14px; }
-.install-command code { overflow: auto; padding: 11px 12px; border-radius: 7px; color: var(--code); background: var(--code-bg); font: 11px/1.5 "Cascadia Mono", ui-monospace, monospace; white-space: nowrap; }
-.install-command button { display: inline-flex; gap: 6px; align-items: center; justify-content: center; min-width: 112px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 7px; color: var(--accent-strong); background: var(--panel-strong); cursor: pointer; font-size: 11px; font-weight: 800; }
+.install-command { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; margin-top: 14px; }
+.install-command code { display: flex; align-items: center; height: 48px; overflow-x: auto; overflow-y: hidden; padding: 0 12px; border-radius: 7px; color: var(--code); background: var(--code-bg); font: 11px/1.5 "Cascadia Mono", ui-monospace, monospace; white-space: nowrap; }
+.install-command button { display: inline-flex; gap: 6px; align-items: center; justify-content: center; min-width: 112px; height: 48px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 7px; color: var(--accent-strong); background: var(--panel-strong); cursor: pointer; font-size: 11px; font-weight: 800; }
 .policy-note { display: flex; gap: 9px; margin-top: 13px; padding: 10px; border-left: 3px solid #d97706; border-radius: 5px; color: #b45309; background: color-mix(in srgb, #f59e0b 10%, var(--panel-strong)); }
 .policy-note svg { flex: 0 0 auto; margin-top: 1px; }
 .policy-note strong { display: block; color: var(--text); font-size: 11px; }
 .policy-note p { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .source-workbench { padding: 26px; }.source-workbench-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; }.source-workbench-head h2 { margin: 7px 0 5px; font-size: 27px; }.source-workbench-head p { color: var(--muted); font-size: 13px; }.source-workbench-head > code { padding: 8px 10px; border-radius: 7px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 11%, transparent); font-size: 12px; }
 .source-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 22px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel-strong) 85%, var(--accent) 5%); }.source-filters { display: flex; flex-wrap: wrap; gap: 7px; }.source-filter { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: var(--panel); font-size: 12px; font-weight: 700; cursor: pointer; transition: border-color .18s ease, color .18s ease, background .18s ease; }.source-filter input { width: 14px; height: 14px; accent-color: var(--accent); }.source-filter.active { border-color: color-mix(in srgb, var(--accent) 70%, var(--line)); color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 11%, var(--panel)); }.source-search { display: flex; align-items: center; gap: 8px; min-width: min(100%, 280px); padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: var(--panel); }.source-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }.source-search input { width: 100%; min-width: 0; height: 34px; border: 0; outline: 0; color: var(--text); background: transparent; font: inherit; font-size: 12px; }.source-no-results { margin: 24px 0 0; padding: 26px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); text-align: center; }.source-card-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }.source-tile { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; min-height: 86px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--panel-strong); cursor: pointer; text-align: left; transition: border-color .18s ease, background .18s ease, transform .18s ease; }.source-tile > svg { color: var(--accent-strong); }.source-tile:hover, .source-tile.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--panel-strong)); transform: translateY(-2px); }.source-tile span { display: grid; min-width: 0; gap: 4px; }.source-tile strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }.source-tile small { color: var(--muted); font-size: 11px; }.source-tile em { padding: 5px 6px; border-radius: 6px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 11%, transparent); font-size: 10px; font-style: normal; white-space: nowrap; }
-.config-modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(8, 19, 30, .48); backdrop-filter: blur(7px); }.config-modal { position: relative; width: min(720px, 100%); max-height: min(800px, calc(100vh - 48px)); overflow: auto; padding: 30px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 15px; background: var(--panel); box-shadow: 0 28px 90px rgba(0, 0, 0, .35); }.config-modal h2 { margin: 8px 0 7px; font-size: 30px; }.config-modal > p { max-width: 570px; color: var(--muted); font-size: 14px; line-height: 1.6; }.config-modal-close { position: absolute; top: 18px; right: 18px; display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--panel-strong); cursor: pointer; }.config-option { display: grid; gap: 7px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }.config-option > span { color: var(--accent-strong); font-weight: 800; }.config-option p { color: var(--muted); font-size: 12px; line-height: 1.5; }.config-option pre { max-width: 100%; margin: 0; overflow: auto; }.config-option code { white-space: pre; }.config-option button { min-height: 34px; justify-self: start; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 14%, var(--panel-strong)); }
+.config-modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(8, 19, 30, .48); backdrop-filter: blur(7px); }.config-modal { position: relative; width: min(720px, 100%); max-height: min(800px, calc(100vh - 48px)); overflow: auto; padding: 30px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 15px; background: var(--panel); box-shadow: 0 28px 90px rgba(0, 0, 0, .35); }.config-modal h2 { margin: 8px 0 7px; font-size: 30px; }.config-modal > p { max-width: 570px; color: var(--muted); font-size: 14px; line-height: 1.6; }.config-modal-close { position: absolute; top: 18px; right: 18px; display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--panel-strong); cursor: pointer; }.config-option { display: grid; gap: 7px; min-width: 0; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }.config-option > span { color: var(--accent-strong); font-weight: 800; }.config-option p { color: var(--muted); font-size: 12px; line-height: 1.5; }.config-option pre { max-width: 100%; margin: 0; overflow: hidden; }.config-option code { max-width: 100%; white-space: pre; }.config-option button { min-height: 34px; justify-self: start; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 14%, var(--panel-strong)); }
+.modal-command-scrollbar {
+  @apply scrollbar scrollbar-h-1.5 scrollbar-track-transparent scrollbar-thumb-slate-400 scrollbar-thumb-rounded-full scrollbar-track-rounded-full;
+  scrollbar-color: #94a3b8 transparent;
+  scrollbar-width: thin;
+}
+.modal-command-scrollbar::-webkit-scrollbar { height: 6px; }
+.modal-command-scrollbar::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+.modal-command-scrollbar::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: transparent;
+}
+.modal-command-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #94a3b8;
+}
+:root[data-theme="dark"] .modal-command-scrollbar {
+  @apply scrollbar-thumb-slate-600;
+  scrollbar-color: #475569 transparent;
+}
+:root[data-theme="dark"] .modal-command-scrollbar::-webkit-scrollbar-thumb { background: #475569; }
 
 .topbar {
   display: grid;
@@ -170,7 +211,9 @@ p {
 }
 
 .site-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 28px; padding: 20px 4px 0; border-top: 1px solid var(--line); color: var(--muted); font: 12px "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; }
-
+.site-footer-project { display: inline-flex; align-items: center; gap: 9px; }
+.site-footer-project code { padding-left: 9px; border-left: 1px solid var(--line); color: var(--muted); }
+.mirrorproxy-mark { flex: 0 0 auto; }
 .admin-console {
   position: relative;
   margin: 4px 0 24px;
@@ -243,6 +286,11 @@ p {
 .admin-page .admin-console {
   max-width: 1180px;
   margin: 0 auto;
+}
+
+.admin-page > .site-footer {
+  max-width: 1180px;
+  margin: 28px auto 0;
 }
 
 .console-workspace {
@@ -392,8 +440,10 @@ p {
   font: inherit;
 }
 
-.compact-form .toggle-field { display: flex; gap: 9px; align-items: center; min-height: 39px; }
-.compact-form .toggle-field input { width: auto; min-height: auto; accent-color: var(--accent-strong); }
+.compact-form input,
+.compact-form select { height: 42px; min-height: 42px; }
+.compact-form .toggle-field { display: flex; gap: 9px; align-items: center; height: 42px; min-height: 42px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; box-sizing: border-box; color: var(--text); background: var(--panel); font-family: inherit; font-size: 13px; }
+.compact-form .toggle-field input { width: 14px; height: 14px; min-height: 0; accent-color: var(--accent-strong); }
 .compact-form button { align-self: end; justify-self: start; }
 .inline-form { grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto; align-items: end; }
 .mail-test-form { grid-template-columns: minmax(260px, 1fr) auto; margin-top: 20px; padding-top: 18px; border-top: 1px dashed var(--line); }
@@ -459,7 +509,17 @@ p {
 .admin-user-actions { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 10px; border-top: 1px dashed var(--line); }
 .admin-user-actions button { display: inline-flex; align-items: center; justify-content: center; width: auto; min-height: 36px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: 7px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 6%, var(--panel-strong)); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .admin-user-actions button:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel-strong)); }
-.admin-user-actions .primary-button { border-color: transparent; color: #063541; background: var(--accent); }
+.admin-user-actions .primary-button {
+  border-color: var(--accent-strong);
+  color: var(--primary-text);
+  background: var(--accent-strong);
+  box-shadow: 0 5px 13px color-mix(in srgb, var(--accent-strong) 18%, transparent);
+}
+.admin-user-actions .primary-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--primary-text);
+  background: color-mix(in srgb, var(--accent-strong) 88%, var(--accent));
+}
 .admin-user-actions .danger-button { border-color: #c05043; color: #fff7f5; background: #bd4e40; }
 
 .admin-identity-detail {
@@ -565,6 +625,49 @@ p {
 }
 .account-entry { font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; }
 .account-back:hover, .account-entry:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, var(--panel-strong)); }
+.public-account-control {
+  display: inline-flex;
+  min-height: 42px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-strong));
+}
+.public-account-control .account-profile-entry {
+  min-height: 40px;
+  padding: 3px 11px 3px 5px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.public-account-control .account-profile-entry:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.public-account-avatar {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  background: var(--panel-strong);
+}
+.public-account-name {
+  max-width: 150px;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.public-account-logout {
+  display: grid;
+  width: 42px;
+  min-height: 40px;
+  place-items: center;
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  color: var(--accent-strong);
+  background: transparent;
+  cursor: pointer;
+}
+.public-account-logout:hover { color: var(--primary-text); background: var(--accent-strong); }
+.public-account-logout:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 
 .account-shell {
   overflow: hidden;
@@ -648,7 +751,7 @@ p {
 .account-profile-card { display: grid; align-content: start; gap: 13px; }
 .account-profile-card > div:nth-child(2) h2 { font-size: 20px; }
 .account-profile-card > div:nth-child(2) p, .account-help { color: var(--muted); font-size: 12px; line-height: 1.5; }
-.account-avatar { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 12px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.account-avatar { display: block; width: 48px; height: 48px; object-fit: cover; border-radius: 12px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 11%, transparent); }
 .account-profile-card > label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; }
 .account-profile-card input { width: 100%; min-width: 0; height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--code-bg); font: 12px "Cascadia Mono", ui-monospace, monospace; }
 .account-profile-card > button { justify-self: start; }
@@ -782,6 +885,20 @@ p {
   color: var(--muted);
   font-size: 12px;
 }
+.provider-registration-policy {
+  display: flex;
+  gap: 11px;
+  align-items: start;
+  padding: 12px 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: 8px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-strong));
+}
+.provider-registration-policy svg { flex: 0 0 auto; margin-top: 1px; }
+.provider-registration-policy span { display: grid; gap: 4px; }
+.provider-registration-policy strong { color: var(--text); font-size: 13px; }
+.provider-registration-policy small { color: var(--muted); font-size: 11px; line-height: 1.55; }
 
 @media (max-width: 860px) {
   .provider-form { grid-template-columns: 1fr; }
@@ -996,6 +1113,7 @@ p {
 .security-credentials-grid input { width: 100%; min-height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: none; color: var(--text); background: var(--panel); font: 13px "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; }
 .security-credentials-grid input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 .security-credentials-grid button { justify-self: start; }
+.security-credentials-card { margin-bottom: 16px; }
 
 .runtime-config-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
 .runtime-config-group { display: grid; align-content: start; gap: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--panel) 46%, var(--panel-strong)); }
@@ -1457,6 +1575,8 @@ p {
   .account-form, .account-code-form { grid-template-columns: 1fr; }
   .account-code-form p { grid-column: auto; }
   .account-entry { min-width: 42px; font-size: 0; }
+  .public-account-control .account-profile-entry { min-width: auto; }
+  .public-account-name { display: none; }
   .admin-trigger { min-width: 42px; font-size: 0; }
   .admin-trigger svg { margin: 0; }
   .console-head, .console-section-head { align-items: stretch; flex-direction: column; }
@@ -1483,7 +1603,7 @@ p {
   .converter-input button { min-height: 42px; }
   .install-panel { padding: 20px 16px; }
   .install-command { grid-template-columns: 1fr; }
-  .install-command button { min-height: 40px; }
+  .install-command button { height: 48px; min-height: 48px; }
   .site-footer { align-items: start; flex-direction: column; }
   .source-card-grid { grid-template-columns: 1fr; }
   .config-modal-backdrop { padding: 10px; }

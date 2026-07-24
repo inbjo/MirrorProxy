@@ -34,10 +34,10 @@ pub struct Config {
     pub registration: RegistrationConfig,
     #[serde(default)]
     pub webauthn: WebauthnConfig,
-    /// The outbound proxy is owned by the service configuration and requires a
-    /// restart because the shared HTTP client is constructed once at startup.
-    /// It is deliberately omitted from runtime API and SQLite serialization.
-    #[serde(default, skip_serializing)]
+    /// Optional global proxy used for all mirror-upstream HTTP requests.
+    /// It is persisted with the remaining runtime configuration; API handlers
+    /// redact its password before returning configuration to the browser.
+    #[serde(default)]
     pub outbound_proxy: OutboundProxyConfig,
     #[serde(default)]
     pub forward_client_authorization: bool,
@@ -239,7 +239,7 @@ pub struct WebauthnConfig {
     pub break_glass_username: String,
 }
 
-#[derive(Clone, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct OutboundProxyConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -1617,7 +1617,7 @@ mod tests {
     }
 
     #[test]
-    fn global_outbound_proxy_is_service_owned_and_redacted() {
+    fn global_outbound_proxy_is_persisted_but_debug_output_is_redacted() {
         let config = Config {
             outbound_proxy: OutboundProxyConfig {
                 enabled: true,
@@ -1630,8 +1630,8 @@ mod tests {
         };
 
         let rendered = serde_json::to_string(&config).unwrap();
-        assert!(!rendered.contains("outbound_proxy"));
-        assert!(!rendered.contains("proxy-secret"));
+        assert!(rendered.contains("outbound_proxy"));
+        assert!(rendered.contains("proxy-secret"));
         assert!(!format!("{config:?}").contains("proxy-secret"));
     }
 

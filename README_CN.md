@@ -75,8 +75,9 @@ curl http://selfhost.com/healthz
 
 ## Docker 部署
 
-服务端镜像使用非 root 的 UID/GID `10001` 运行，监听 `3000` 端口，并把 SQLite
-数据库和可选缓存统一保存到 `/data` 持久卷。
+服务端镜像使用非 root 用户运行，监听 `3000` 端口，并把 SQLite 数据库和可选缓存
+统一保存到 `/data` 持久卷。默认使用 named volume，普通用户不需要了解或配置容器
+内部 UID/GID。
 
 仓库已经提供可直接运行的 [compose.yaml](compose.yaml)。也可以把下面内容保存为部署
 目录中的 `docker-compose.yaml`：
@@ -89,54 +90,23 @@ services:
     restart: unless-stopped
     ports:
       - "${MIRRORPROXY_PORT:-3000}:3000"
-    environment:
-      MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-}
-      MIRRORPROXY_TRUSTED_PROXIES: ${MIRRORPROXY_TRUSTED_PROXIES:-127.0.0.1,::1}
-      MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
-      MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING: ${MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING:-false}
-      MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
-      MIRRORPROXY_OUTBOUND_PROXY_ENABLED: ${MIRRORPROXY_OUTBOUND_PROXY_ENABLED:-false}
-      MIRRORPROXY_OUTBOUND_PROXY_URL: ${MIRRORPROXY_OUTBOUND_PROXY_URL:-}
-      MIRRORPROXY_OUTBOUND_PROXY_USERNAME: ${MIRRORPROXY_OUTBOUND_PROXY_USERNAME:-}
-      MIRRORPROXY_OUTBOUND_PROXY_PASSWORD: ${MIRRORPROXY_OUTBOUND_PROXY_PASSWORD:-}
-      MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY: ${MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY:-127.0.0.1,localhost}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
-      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
-      RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
     volumes:
       - mirrorproxy-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/healthz"]
-      interval: 30s
-      timeout: 5s
-      start_period: 10s
-      retries: 3
 
 volumes:
   mirrorproxy-data:
 ```
 
-启动前可选择在 `.env` 中设置固定的外部访问地址、宿主机端口和初始管理员密码。未设置或设置为空时，MirrorProxy 会根据浏览器访问地址自动推导（反向代理场景也支持 `X-Forwarded-Host` 和 `X-Forwarded-Proto`）：
+直接执行 `docker compose up -d` 即可。首次启动后从
+`docker compose logs mirrorproxy` 获取随机管理员密码，再到后台完成公开地址、注册、
+配额、缓存、上游代理和 Passkey 等配置。只有宿主机端口需要在简化示例中保留：
 
 ```dotenv
 MIRRORPROXY_PORT=53000
-MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
-# 可选：取消下一行注释可手动设置初始管理员密码
-# MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
-# 可选：逗号分隔的 Maven 后备仓库；空值关闭回退
-# 可选：让所有镜像上游请求通过一个 HTTP 或 SOCKS5 代理
-# MIRRORPROXY_OUTBOUND_PROXY_ENABLED=true
-# MIRRORPROXY_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:1080
-# MIRRORPROXY_OUTBOUND_PROXY_USERNAME=proxy-user
-# MIRRORPROXY_OUTBOUND_PROXY_PASSWORD=replace-with-secret
-# MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY=127.0.0.1,localhost
-# 可选：启用 OTLP/gRPC trace 导出，并采样 10% 的根 trace
-# OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 ```
 
 ```bash
-MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com docker compose up -d
+docker compose up -d
 docker compose logs mirrorproxy
 curl http://127.0.0.1:3000/healthz
 ```
@@ -169,8 +139,9 @@ cosign verify \
   "kudang/mirrorproxy@${DIGEST}"
 ```
 
-推荐使用 named volume。如果改为 `/srv/mirrorproxy/data:/data` 这样的宿主机目录挂载，
-必须保证容器 UID/GID `10001:10001` 可以写入：
+推荐使用 named volume；Docker 会自动保留镜像内 `/data` 的所有权，不需要处理
+UID/GID。只有主动改为 `/srv/mirrorproxy/data:/data` 这样的宿主机目录挂载时，才需要
+让目录可由容器内部 UID/GID `10001:10001` 写入：
 
 ```bash
 sudo install -d -o 10001 -g 10001 -m 0750 /srv/mirrorproxy/data
@@ -739,15 +710,43 @@ MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
 MIRRORPROXY_CACHE_ENABLED=true
 MIRRORPROXY_CACHE_DIRECTORY=/var/cache/mirrorproxy
 MIRRORPROXY_CACHE_MAX_ENTRY_MB=8
+MIRRORPROXY_CACHE_MAX_TOTAL_MB=256
+MIRRORPROXY_QUOTA_ENABLED=true
+MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING=false
+MIRRORPROXY_QUOTA_MONTHLY_GB=500
+MIRRORPROXY_QUOTA_TIMEZONE=local
+MIRRORPROXY_QUOTA_ON_EXCEEDED=stop_proxy
+MIRRORPROXY_REQUEST_EVENT_RETENTION_DAYS=30
+MIRRORPROXY_FORWARD_CLIENT_AUTHORIZATION=false
 MIRRORPROXY_OUTBOUND_PROXY_ENABLED=true
 MIRRORPROXY_OUTBOUND_PROXY_URL=socks5h://127.0.0.1:1080
+MIRRORPROXY_OUTBOUND_PROXY_USERNAME=proxy-user
+MIRRORPROXY_OUTBOUND_PROXY_PASSWORD=proxy-password
 MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY=127.0.0.1,localhost
+MIRRORPROXY_BASE_DOMAIN=mirror.example.com
+MIRRORPROXY_ACCESS_MODE=public
+MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY=false
+MIRRORPROXY_ROUTING_ID_MIN_LENGTH=12
+MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
+MIRRORPROXY_REGISTRATION_MODE=invite_only
+MIRRORPROXY_ALLOWED_EMAIL_DOMAINS=example.com
+MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES=10
+MIRRORPROXY_DEFAULT_USER_MONTHLY_GB=100
+MIRRORPROXY_WEBAUTHN_ENABLED=false
+MIRRORPROXY_WEBAUTHN_RP_ID=mirror.example.com
+MIRRORPROXY_WEBAUTHN_RP_ORIGIN=https://mirror.example.com
+MIRRORPROXY_WEBAUTHN_RP_NAME=MirrorProxy
+MIRRORPROXY_WEBAUTHN_REQUIRE_PASSKEY=false
+MIRRORPROXY_WEBAUTHN_BREAK_GLASS_USERNAME=admin
 ```
 
 全局上游代理默认关闭。`http://` 和 `https://` 表示 HTTP 代理（HTTPS 上游使用
 CONNECT）；`socks5://` 在本机解析上游 DNS，`socks5h://` 则交给代理解析。它覆盖所有
 镜像 adapter、重定向、OCI Token/blob 和 Maven fallback，但不影响 OTLP 导出。
-代理凭据属于服务端敏感配置，不写入 SQLite，也不会通过配置 API 返回；修改后需要重启服务。
+这些配置可以在“管理后台 → 高级设置 → 镜像上游代理”中修改并立即生效。代理密码以明文
+保存在本地 SQLite 配置中，但配置 API 只返回“已设置”状态，不会把密码发回浏览器。用于
+自动化部署时仍可使用上述环境变量；只要设置了任一
+`MIRRORPROXY_OUTBOUND_PROXY_*` 变量，它会在进程启动时覆盖数据库中的后台配置。
 
 MirrorProxy 会在启动时校验非空的 `public_base_url`、所有上游 URL、启用的代理名称、全局上游代理和超时配置。配置非法会快速失败，并提示具体字段。
 
@@ -795,6 +794,40 @@ MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
 原始 Host 转发与可信代理均已配置，然后设置
 `MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY=true`。如未显式确认部署就绪，
 配置校验会拒绝启用强制子域名模式。
+
+以 `mirror.example.com` 为例，DNS 至少需要两条记录指向同一个公网地址：
+
+```text
+mirror.example.com       A/AAAA  <服务器地址>
+*.mirror.example.com     A/AAAA  <服务器地址>
+```
+
+TLS 证书必须同时覆盖 `mirror.example.com` 和 `*.mirror.example.com`。下面是已准备好
+通配符证书时的 Nginx 核心配置；关键点是 `server_name` 包含泛域名，并把原始 `$host`
+传给 MirrorProxy：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name mirror.example.com *.mirror.example.com;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+最后在后台填写公开地址 `https://mirror.example.com`、用户子域名主域
+`mirror.example.com`，把 Nginx 的来源 IP/CIDR 加入“可信反向代理”；测试主域名和任意
+测试子域名都能访问后，再勾选基础设施就绪并按需切换为“强制用户子域名”。如果只使用
+公开模式，不需要配置泛域名。
 
 ```dotenv
 MIRRORPROXY_REGISTRATION_MODE=invite_only

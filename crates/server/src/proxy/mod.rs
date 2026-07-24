@@ -133,6 +133,7 @@ async fn forward_request(
     let reqwest_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
         .map_err(|_| ProxyError::MethodNotAllowed)?;
     let config = state.config();
+    let client = state.client();
     let candidates = if body.is_some() {
         vec![url]
     } else {
@@ -145,7 +146,7 @@ async fn forward_request(
             }
         }
         let mut request = upstream_request(
-            &state.client,
+            &client,
             reqwest_method.clone(),
             candidate.clone(),
             incoming_headers,
@@ -185,10 +186,11 @@ pub async fn get_with_fallback(
     url: Url,
 ) -> Result<reqwest::Response, ProxyError> {
     let config = state.config();
+    let client = state.client();
     let candidates = config.upstream_candidates_for(&url);
     for (index, candidate) in candidates.iter().enumerate() {
         let response = upstream_request(
-            &state.client,
+            &client,
             reqwest::Method::GET,
             candidate.clone(),
             &HeaderMap::new(),

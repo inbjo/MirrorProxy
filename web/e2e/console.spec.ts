@@ -22,6 +22,7 @@ const adminConfig = {
   listen_addr: '127.0.0.1:3000',
   upstreams: { npm: 'https://registry.npmjs.org' },
   timeout: { request_secs: 30 },
+  outbound_proxy: { enabled: false, url: '', no_proxy: ['127.0.0.1', 'localhost'], username: null, password: null, has_password: false },
   rate_limit: { enabled: true, requests_per_minute: 120 },
   cache: { enabled: false, directory: 'cache', max_entry_mb: 8, max_total_mb: 256 },
   user_access: { base_domain: '', mode: 'public', infrastructure_ready: false, routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
@@ -39,28 +40,65 @@ test.beforeEach(async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.route('**/api/public-config', route => route.fulfill({ json: publicConfig }))
   await page.route('**/api/sources', route => route.fulfill({ json: sources }))
+  await page.route('**/version', route => route.fulfill({ json: { version: '1.0.2' } }))
 })
 
 test('keeps the administrator portal on an independent entry', async ({ page }) => {
   await page.goto('/')
 
   await expect(page.locator('.brand-mark')).toContainText('MirrorProxy')
+  await expect(page.locator('.brand-mark .mirrorproxy-mark')).toBeVisible()
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg')
+  expect((await page.request.get('/favicon.svg')).ok()).toBe(true)
   await expect(page.getByText('https://mirror.example', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Admin console' })).toHaveCount(0)
   await page.goto('/admin')
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
   await expect(page.getByLabel('Administrator username')).toBeVisible()
   await expect(page.getByLabel('Administrator password')).toBeVisible()
+  await expect(page.locator('.admin-page > .site-footer')).toBeVisible()
+  await expect(page.locator('.admin-page > .site-footer .site-footer-project code')).toHaveText('v1.0.2')
 })
 
-test('offers accelerated stable client installers and GitHub project link', async ({ page }) => {
+test('offers accelerated stable client installers and a project footer', async ({ page }) => {
   await page.goto('/')
 
   const installer = page.locator('#install')
   await expect(installer.getByRole('heading', { name: 'Install the CLI' })).toBeVisible()
   await expect(installer).toContainText('https://mirror.example/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh')
   await expect(installer).toContainText('Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force')
-  await expect(page.locator('.site-footer a')).toHaveAttribute('href', 'https://github.com/inbjo/MirrorProxy')
+  const commandRows = installer.locator('.install-command')
+  await expect(commandRows).toHaveCount(3)
+  const dimensions = await commandRows.evaluateAll((rows) => rows.map((row) => {
+    const code = row.querySelector('code')!
+    const button = row.querySelector('button')!
+    return {
+      buttonHeight: button.getBoundingClientRect().height,
+      codeHeight: code.getBoundingClientRect().height,
+      scrollbarWidth: getComputedStyle(code).scrollbarWidth,
+    }
+  }))
+  expect(dimensions.every(({ buttonHeight, codeHeight }) => buttonHeight === 48 && codeHeight === 48)).toBe(true)
+  expect(dimensions.every(({ scrollbarWidth }) => scrollbarWidth === 'thin')).toBe(true)
+  expect(await page.locator('html').evaluate((element) => getComputedStyle(element).scrollbarWidth)).toBe('thin')
+  await page.setViewportSize({ width: 500, height: 900 })
+  await page.locator('.source-tile').first().click()
+  const configModal = page.locator('.config-modal')
+  await expect(configModal).toBeVisible()
+  expect(await configModal.evaluate((element) => getComputedStyle(element).scrollbarWidth)).toBe('thin')
+  const optionScrollbars = await configModal.locator('.config-option code').evaluateAll((elements) => elements.map((element) => ({
+    scrollbarWidth: getComputedStyle(element).scrollbarWidth,
+    scrollbarHeight: getComputedStyle(element, '::-webkit-scrollbar').height,
+    overflowX: getComputedStyle(element).overflowX,
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  })))
+  expect(optionScrollbars).toHaveLength(3)
+  expect(optionScrollbars.every(({ scrollbarWidth, scrollbarHeight, overflowX }) => scrollbarWidth === 'thin' && scrollbarHeight === '6px' && overflowX === 'auto')).toBe(true)
+  expect(optionScrollbars.some(({ scrollWidth, clientWidth }) => scrollWidth > clientWidth)).toBe(true)
+  await expect(page.locator('.site-footer')).not.toContainText('Powered By')
+  await expect(page.locator('.site-footer-project a')).toHaveAttribute('href', 'https://github.com/inbjo/MirrorProxy')
+  await expect(page.locator('.site-footer-project code')).toHaveText('v1.0.2')
 })
 
 test('persists language and theme preferences across a browser reload', async ({ page }) => {
@@ -100,7 +138,7 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await page.route('**/admin/api/config', async route => {
     if (route.request().method() === 'PUT') {
       savedConfig = route.request().postDataJSON() as typeof adminConfig
-      await route.fulfill({ json: { config: savedConfig, restart_required: ['listen_addr'] } })
+      await route.fulfill({ json: { config: { ...savedConfig, outbound_proxy: { ...savedConfig.outbound_proxy, password: null, has_password: Boolean(savedConfig.outbound_proxy.password) } }, restart_required: ['listen_addr'] } })
       return
     }
     await route.fulfill({ json: savedConfig ?? adminConfig })
@@ -116,6 +154,23 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await page.getByRole('button', { name: 'Save configuration' }).click()
   await expect.poll(() => savedConfig?.public_base_url).toBe('https://updated.example')
   await expect(page.getByText('These fields apply after restart: listen_addr')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Advanced settings' }).click()
+  await page.getByLabel('Enable mirror upstream proxy').check()
+  await page.getByLabel('Proxy URL').fill('socks5h://proxy.example:1080')
+  await page.getByLabel('Username (optional)').fill('proxy-user')
+  await page.getByLabel('Password (optional)').fill('proxy-password')
+  await page.getByLabel('Bypass proxy for').fill('localhost, 127.0.0.1')
+  await page.getByRole('button', { name: 'Save configuration' }).click()
+  await expect.poll(() => savedConfig?.outbound_proxy).toEqual({
+    enabled: true,
+    url: 'socks5h://proxy.example:1080',
+    no_proxy: ['localhost', '127.0.0.1'],
+    username: 'proxy-user',
+    password: 'proxy-password',
+    has_password: false,
+  })
+  await expect(page.getByLabel('Password (optional)')).toHaveAttribute('placeholder', 'Saved; leave blank to keep')
 })
 
 test('refreshes statistics from the admin console', async ({ page }) => {
@@ -278,6 +333,7 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
 
 test('signs in by email and rotates the accounting-only routing address', async ({ page }) => {
   let signedIn = false
+  let linked = true
   let verified: Record<string, unknown> | undefined
   let routingId = 'first-routing-id'
   await page.route('**/api/account/profile', route => route.fulfill(signedIn ? {
@@ -290,7 +346,11 @@ test('signs in by email and rotates the accounting-only routing address', async 
     month: '2026-07', today_response_bytes: 1024, request_count: 3, response_bytes: 4096, error_count: 0,
     quota: { limit_bytes: 1073741824, used_bytes: 4096, remaining_bytes: 1073737728 }, group: null, daily: [], targets: [],
   } } : { status: 401, json: { error: 'unauthorized' } }))
-  await page.route('**/api/account/providers', route => route.fulfill(signedIn ? { json: [] } : { status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/api/account/providers', route => route.fulfill(signedIn ? { json: linked ? [{ id: 3, provider_slug: 'github', provider_name: 'GitHub', provider_subject: '123', email: 'person+tag@example.com', email_verified: true, created_at: 1784591000 }] : [] } : { status: 401, json: { error: 'unauthorized' } }))
+  await page.route('**/api/account/providers/3', async route => {
+    linked = false
+    await route.fulfill({ status: 204 })
+  })
   await page.route('**/api/auth/providers', route => route.fulfill({ json: [] }))
   await page.route('**/api/auth/email/verify', async route => {
     verified = route.request().postDataJSON() as Record<string, unknown>
@@ -306,8 +366,15 @@ test('signs in by email and rotates the accounting-only routing address', async 
   await expect.poll(() => verified).toEqual({ email: 'person+tag@example.com', token: 'invite-token' })
   await expect(page).toHaveURL(/\/account$/)
   await expect(page.locator('input[readonly]')).toHaveValue('https://first-routing-id.mirror.example')
+  await expect(page.locator('.account-avatar')).toHaveAttribute('src', /^data:image\/svg\+xml/)
   await expect(page.getByRole('heading', { name: 'Traffic usage' })).toBeVisible()
   await expect(page.getByText('1.0 KB', { exact: true })).toBeVisible()
+  const disconnect = page.getByRole('button', { name: 'Disconnect' })
+  await expect(disconnect).toHaveClass(/revoke-button/)
+  page.once('dialog', dialog => dialog.accept())
+  await disconnect.click()
+  await expect(page.getByText('GitHub was disconnected.')).toBeVisible()
+  page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: 'Generate a new routing address' }).click()
   await expect(page.locator('input[readonly]')).toHaveValue('https://rotated-routing-id.mirror.example')
 })
@@ -316,6 +383,9 @@ test('configures SMTP, queues a test email, and resends an invitation', async ({
   let smtpUpdate: Record<string, unknown> | undefined
   let testRecipient: Record<string, unknown> | undefined
   let invitationRequest: Record<string, unknown> | undefined
+  let testLocale: string | undefined
+  let invitationLocale: string | undefined
+  let resendLocale: string | undefined
   let resent = false
   await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
@@ -333,15 +403,18 @@ test('configures SMTP, queues a test email, and resends an invitation', async ({
   })
   await page.route('**/admin/api/smtp/test', async route => {
     testRecipient = route.request().postDataJSON() as Record<string, unknown>
+    testLocale = route.request().headers()['x-mirrorproxy-locale']
     await route.fulfill({ status: 202 })
   })
   await page.route('**/admin/api/invitations/9/resend', async route => {
     resent = true
+    resendLocale = route.request().headers()['x-mirrorproxy-locale']
     await route.fulfill({ status: 202 })
   })
   await page.route('**/admin/api/invitations', async route => {
     if (route.request().method() === 'POST') {
       invitationRequest = route.request().postDataJSON() as Record<string, unknown>
+      invitationLocale = route.request().headers()['x-mirrorproxy-locale']
       await route.fulfill({ status: 202 })
       return
     }
@@ -358,12 +431,16 @@ test('configures SMTP, queues a test email, and resends an invitation', async ({
   await page.getByLabel('Test recipient').fill('ops@example.com')
   await page.getByRole('button', { name: 'Send test email' }).click()
   await expect.poll(() => testRecipient).toEqual({ recipient: 'ops@example.com' })
+  await expect.poll(() => testLocale).toBe('en')
+  await page.getByTitle('Language').click()
   await expect(page.getByLabel('Display name')).toHaveCount(0)
-  await page.getByLabel('Email', { exact: true }).fill('invited.user@example.com')
-  await page.getByRole('button', { name: 'Send invitation' }).click()
+  await page.getByLabel('邀请邮箱').fill('invited.user@example.com')
+  await page.getByRole('button', { name: '发送邀请' }).click()
   await expect.poll(() => invitationRequest).toEqual({ email: 'invited.user@example.com', display_name: 'invited.user' })
-  await page.getByRole('button', { name: 'Resend' }).click()
+  await expect.poll(() => invitationLocale).toBe('zh')
+  await page.getByRole('button', { name: '重新发送' }).click()
   await expect.poll(() => resent).toBe(true)
+  await expect.poll(() => resendLocale).toBe('zh')
 })
 
 test('assigns a user to a billing group with a custom quota', async ({ page }) => {
@@ -415,7 +492,7 @@ test('offers OAuth login and preserves the invitation in the authorization URL',
 test('configures an OpenID Connect provider without exposing its saved secret', async ({ page }) => {
   let providerUpdate: Record<string, unknown> | undefined
   const templates = [{ preset: 'google', display_name: 'Google', kind: 'oidc', issuer_url: 'https://accounts.google.com', authorization_url: null, token_url: null, userinfo_url: null, emails_url: null, scopes: ['openid', 'email', 'profile'] }]
-  const providers = [{ id: 4, slug: 'google', display_name: 'Google', kind: 'oidc', preset: 'google', enabled: true, client_id: 'client-id', has_client_secret: true, issuer_url: 'https://accounts.google.com', authorization_url: null, token_url: null, userinfo_url: null, emails_url: null, scopes: ['openid', 'email', 'profile'], subject_field: 'id', email_field: 'email', email_verified_field: null, display_name_field: 'name', allow_registration: true, auto_link_by_email: false }]
+  const providers = [{ id: 4, slug: 'google', display_name: 'Google', kind: 'oidc', preset: 'google', enabled: true, client_id: 'client-id', has_client_secret: true, issuer_url: 'https://accounts.google.com', authorization_url: null, token_url: null, userinfo_url: null, emails_url: null, scopes: ['openid', 'email', 'profile'], subject_field: 'id', email_field: 'email', email_verified_field: null, display_name_field: 'name' }]
   await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
@@ -426,18 +503,26 @@ test('configures an OpenID Connect provider without exposing its saved secret', 
     providerUpdate = route.request().postDataJSON() as Record<string, unknown>
     await route.fulfill({ json: { id: 4 } })
   })
+  await page.route('**/admin/api/auth-providers/4/test', route => route.fulfill({ json: { ok: true } }))
   await page.route('**/admin/api/auth-providers', route => route.fulfill({ json: { providers, templates } }))
 
   await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await page.getByRole('button', { name: 'Identity providers' }).click()
+  await expect(page.getByText('New-user access follows the global registration policy')).toBeVisible()
+  await expect(page.getByText('Allow eligible new users')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Test', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('Provider connection succeeded')
+  await expect(page.getByRole('status')).toContainText('Google is reachable and ready for sign-in.')
   await page.getByRole('button', { name: 'Edit' }).click()
   await expect(page.getByLabel('Client Secret')).toHaveValue('')
   await page.getByLabel('Sign-in button label').fill('Company Google')
   await page.getByRole('button', { name: 'Update provider' }).click()
   await expect.poll(() => providerUpdate?.display_name).toBe('Company Google')
   await expect.poll(() => providerUpdate?.client_secret).toBeNull()
+  expect(providerUpdate).not.toHaveProperty('allow_registration')
+  expect(providerUpdate).not.toHaveProperty('auto_link_by_email')
 })
 
 test('revokes administrator sessions and searches and soft-deletes users', async ({ page }) => {
@@ -461,6 +546,7 @@ test('revokes administrator sessions and searches and soft-deletes users', async
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await page.getByRole('button', { name: 'Administrators & security' }).click()
+  page.once('dialog', dialog => dialog.accept())
   await page.locator('.admin-account-row', { hasText: 'passkey' }).getByRole('button', { name: 'Revoke' }).click()
   await expect.poll(() => revokedSession).toBe('0123456789abcdef01234567')
   await page.getByRole('button', { name: 'Users & groups' }).click()

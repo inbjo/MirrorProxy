@@ -64,7 +64,7 @@ async fn proxy_composer_path(
             .cloned()
             .unwrap_or_default();
         let response = state
-            .client
+            .client()
             .get(url)
             .headers(to_reqwest_headers(&headers))
             .send()

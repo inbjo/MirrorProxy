@@ -60,8 +60,9 @@ pypi_files = "https://files.pythonhosted.org"
 request_secs = 60
 
 # Optional single proxy for every mirror-upstream HTTP request. socks5 resolves
-# DNS locally; socks5h delegates DNS resolution to the proxy. Changes require a
-# service restart. Credentials are never stored in SQLite or exposed by APIs.
+# DNS locally; socks5h delegates DNS resolution to the proxy. The same settings
+# are available under Admin > Advanced settings and apply immediately. The
+# password is stored in the local SQLite database but is never returned by APIs.
 [outbound_proxy]
 enabled = false
 url = ""

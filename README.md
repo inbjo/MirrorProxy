@@ -75,8 +75,9 @@ curl http://selfhost.com/healthz
 
 ## Docker Deployment
 
-The server image runs as non-root UID/GID `10001`, listens on port `3000`, and
-stores its SQLite database and optional cache under the `/data` volume.
+The server image runs as a non-root user, listens on port `3000`, and stores its
+SQLite database and optional cache under `/data`. The default named volume
+requires no host UID/GID setup.
 
 The repository includes a ready-to-run [compose.yaml](compose.yaml). You can
 also save the following as `docker-compose.yaml` in an empty deployment
@@ -90,60 +91,24 @@ services:
     restart: unless-stopped
     ports:
       - "${MIRRORPROXY_PORT:-3000}:3000"
-    environment:
-      MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-}
-      MIRRORPROXY_TRUSTED_PROXIES: ${MIRRORPROXY_TRUSTED_PROXIES:-127.0.0.1,::1}
-      MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
-      MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING: ${MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING:-false}
-      MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
-      MIRRORPROXY_OUTBOUND_PROXY_ENABLED: ${MIRRORPROXY_OUTBOUND_PROXY_ENABLED:-false}
-      MIRRORPROXY_OUTBOUND_PROXY_URL: ${MIRRORPROXY_OUTBOUND_PROXY_URL:-}
-      MIRRORPROXY_OUTBOUND_PROXY_USERNAME: ${MIRRORPROXY_OUTBOUND_PROXY_USERNAME:-}
-      MIRRORPROXY_OUTBOUND_PROXY_PASSWORD: ${MIRRORPROXY_OUTBOUND_PROXY_PASSWORD:-}
-      MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY: ${MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY:-127.0.0.1,localhost}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
-      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
-      RUST_LOG: ${RUST_LOG:-mirrorproxy_server=info,tower_http=info}
     volumes:
       - mirrorproxy-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/healthz"]
-      interval: 30s
-      timeout: 5s
-      start_period: 10s
-      retries: 3
 
 volumes:
   mirrorproxy-data:
 ```
 
-Optionally set a fixed external URL, host port, initial administrator password,
-and trusted reverse-proxy peers in a `.env` file before startup. When the
-public URL is unset or empty, MirrorProxy derives it from the browser request
-address. Forwarded headers are accepted only from `MIRRORPROXY_TRUSTED_PROXIES`:
+Run `docker compose up -d`, read the generated administrator password from
+`docker compose logs mirrorproxy`, then configure the public URL, registration,
+quotas, cache, upstream proxy, and Passkeys in the admin console. Only the host
+port remains in the minimal example:
 
 ```dotenv
 MIRRORPROXY_PORT=53000
-MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com
-# Keep the defaults for a host-local Nginx/Caddy; use the reverse proxy's
-# Docker-network peer IP or CIDR when it runs in another container.
-MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1
-# Optional: uncomment to set the initial admin password yourself.
-# MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
-# Optional: comma-separated Maven fallback repositories; empty disables fallback.
-# Optional: route every mirror-upstream request through one HTTP or SOCKS5 proxy.
-# MIRRORPROXY_OUTBOUND_PROXY_ENABLED=true
-# MIRRORPROXY_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:1080
-# MIRRORPROXY_OUTBOUND_PROXY_USERNAME=proxy-user
-# MIRRORPROXY_OUTBOUND_PROXY_PASSWORD=replace-with-secret
-# MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY=127.0.0.1,localhost
-# Optional: enable OTLP/gRPC trace export and sample 10% of root traces.
-# OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 ```
 
 ```bash
-MIRRORPROXY_PUBLIC_BASE_URL=https://mirror.example.com docker compose up -d
+docker compose up -d
 docker compose logs mirrorproxy
 curl http://127.0.0.1:3000/healthz
 ```
@@ -181,9 +146,10 @@ cosign verify \
   "kudang/mirrorproxy@${DIGEST}"
 ```
 
-The named volume is recommended. If you replace it with a host bind mount such
-as `/srv/mirrorproxy/data:/data`, that directory must be writable by container
-UID/GID `10001:10001`:
+The named volume is recommended: Docker preserves the image's `/data`
+ownership, so no UID/GID handling is required. Only when you intentionally
+replace it with a host bind mount such as `/srv/mirrorproxy/data:/data` must the
+directory be writable by container UID/GID `10001:10001`:
 
 ```bash
 sudo install -d -o 10001 -g 10001 -m 0750 /srv/mirrorproxy/data
@@ -772,17 +738,45 @@ MIRRORPROXY_RATE_LIMIT_REQUESTS_PER_MINUTE=600
 MIRRORPROXY_CACHE_ENABLED=true
 MIRRORPROXY_CACHE_DIRECTORY=/var/cache/mirrorproxy
 MIRRORPROXY_CACHE_MAX_ENTRY_MB=8
+MIRRORPROXY_CACHE_MAX_TOTAL_MB=256
+MIRRORPROXY_QUOTA_ENABLED=true
+MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING=false
+MIRRORPROXY_QUOTA_MONTHLY_GB=500
+MIRRORPROXY_QUOTA_TIMEZONE=local
+MIRRORPROXY_QUOTA_ON_EXCEEDED=stop_proxy
+MIRRORPROXY_REQUEST_EVENT_RETENTION_DAYS=30
+MIRRORPROXY_FORWARD_CLIENT_AUTHORIZATION=false
 MIRRORPROXY_OUTBOUND_PROXY_ENABLED=true
 MIRRORPROXY_OUTBOUND_PROXY_URL=socks5h://127.0.0.1:1080
+MIRRORPROXY_OUTBOUND_PROXY_USERNAME=proxy-user
+MIRRORPROXY_OUTBOUND_PROXY_PASSWORD=proxy-password
 MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY=127.0.0.1,localhost
+MIRRORPROXY_BASE_DOMAIN=mirror.example.com
+MIRRORPROXY_ACCESS_MODE=public
+MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY=false
+MIRRORPROXY_ROUTING_ID_MIN_LENGTH=12
+MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
+MIRRORPROXY_REGISTRATION_MODE=invite_only
+MIRRORPROXY_ALLOWED_EMAIL_DOMAINS=example.com
+MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES=10
+MIRRORPROXY_DEFAULT_USER_MONTHLY_GB=100
+MIRRORPROXY_WEBAUTHN_ENABLED=false
+MIRRORPROXY_WEBAUTHN_RP_ID=mirror.example.com
+MIRRORPROXY_WEBAUTHN_RP_ORIGIN=https://mirror.example.com
+MIRRORPROXY_WEBAUTHN_RP_NAME=MirrorProxy
+MIRRORPROXY_WEBAUTHN_REQUIRE_PASSKEY=false
+MIRRORPROXY_WEBAUTHN_BREAK_GLASS_USERNAME=admin
 ```
 
 The outbound proxy is disabled by default. `http://` and `https://` configure an
 HTTP proxy (HTTPS upstreams use CONNECT); `socks5://` resolves upstream DNS
 locally and `socks5h://` resolves it through the proxy. It applies to all mirror
 adapters, redirects, OCI token/blob requests, and Maven fallbacks, but not OTLP
-export. Proxy credentials are service-owned secrets: they are not stored in
-SQLite or exposed by the config APIs. Changes require a service restart.
+export. These settings are available under **Admin → Advanced settings → Mirror
+upstream proxy** and apply immediately. The password is stored as plaintext in
+the local SQLite configuration but is never returned by the API. For managed
+deployments, setting any `MIRRORPROXY_OUTBOUND_PROXY_*` environment variable
+overrides the persisted admin setting at process startup.
 
 MirrorProxy validates a non-empty `public_base_url`, all upstream URLs, enabled proxy names, outbound proxy settings, and timeout values during startup. Invalid configuration fails fast with a field-specific error.
 
@@ -842,6 +836,41 @@ original Host forwarding, and trusted proxy settings, then set
 `MIRRORPROXY_SUBDOMAIN_INFRASTRUCTURE_READY=true`. Configuration validation
 rejects the required mode until this explicit deployment-readiness confirmation
 is present.
+
+For `mirror.example.com`, point both DNS records to the same public address:
+
+```text
+mirror.example.com       A/AAAA  <server address>
+*.mirror.example.com     A/AAAA  <server address>
+```
+
+The TLS certificate must cover both `mirror.example.com` and
+`*.mirror.example.com`. With that certificate already provisioned, the
+essential Nginx configuration is:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name mirror.example.com *.mirror.example.com;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+In the admin console, set the public URL to `https://mirror.example.com`, the
+user-subdomain base to `mirror.example.com`, and add the Nginx peer IP/CIDR as a
+trusted reverse proxy. Verify the main domain and a test wildcard subdomain
+before acknowledging infrastructure readiness or enforcing user subdomains.
+Public mode does not require wildcard DNS.
 
 ```dotenv
 MIRRORPROXY_REGISTRATION_MODE=invite_only

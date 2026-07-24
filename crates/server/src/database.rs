@@ -3538,6 +3538,13 @@ mod tests {
         assert_eq!(seeded.public_base_url, "https://mirror.example");
 
         config.quota.monthly_gb = 42;
+        config.outbound_proxy = crate::config::OutboundProxyConfig {
+            enabled: true,
+            url: "socks5h://proxy.example:1080".to_string(),
+            no_proxy: vec!["localhost".to_string()],
+            username: Some("proxy-user".to_string()),
+            password: Some("proxy-password".to_string()),
+        };
         database
             .save_runtime_config("admin", &config, "update runtime configuration")
             .await
@@ -3547,6 +3554,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(loaded.quota.monthly_gb, 42);
+        assert_eq!(
+            loaded.outbound_proxy.password.as_deref(),
+            Some("proxy-password")
+        );
     }
 
     #[tokio::test]

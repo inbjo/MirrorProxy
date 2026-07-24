@@ -31,6 +31,7 @@ describe('App preferences', () => {
     const json = (value: unknown) => Promise.resolve(new Response(JSON.stringify(value), { status: 200 }))
     vi.stubGlobal('fetch', vi.fn((input: string) => {
       if (input === '/api/public-config') return json({ public_base_url: 'https://mirror.example', enabled_proxies: [], quota: { enabled: false, monthly_gb: 0, timezone: 'UTC', on_exceeded: 'stop_proxy' } })
+      if (input === '/version') return json({ version: '1.0.2' })
       return Promise.reject(new Error('offline'))
     }))
 
@@ -40,15 +41,20 @@ describe('App preferences', () => {
     const commands = Array.from(container.querySelectorAll('.install-command code')).map((element) => element.textContent)
     expect(commands).toContain('Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force')
     expect(commands.some((value) => value?.includes('https://mirror.example/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh'))).toBe(true)
-    expect(container.querySelector<HTMLAnchorElement>('.site-footer a')?.href).toBe('https://github.com/inbjo/MirrorProxy')
+    expect(container.querySelector('.site-footer')?.textContent).toContain('localhost')
+    expect(container.querySelector('.site-footer')?.textContent).not.toContain('Powered By')
+    expect(container.querySelector<HTMLAnchorElement>('.site-footer-project a')?.href).toBe('https://github.com/inbjo/MirrorProxy')
+    expect(container.querySelector('.site-footer-project code')?.textContent).toBe('v1.0.2')
     expect(container.querySelector<HTMLAnchorElement>('.account-entry')?.getAttribute('href')).toBe('/login')
   })
 
   it('uses the signed-in user dedicated domain for homepage mirror addresses', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const json = (value: unknown) => Promise.resolve(new Response(JSON.stringify(value), { status: 200 }))
-    vi.stubGlobal('fetch', vi.fn((input: string) => {
+    vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => {
       if (input === '/api/public-config') return json({ public_base_url: 'https://mirror.example', enabled_proxies: [], quota: { enabled: false, monthly_gb: 0, timezone: 'UTC', on_exceeded: 'stop_proxy' } })
       if (input === '/api/account/profile') return json({ user: { id: 7, email: 'user@example.com', display_name: 'User', routing_id: 'personal-route', routing_rotated_at: 0 }, proxy_base_url: 'https://personal-route.proxy.example' })
+      if (input === '/api/auth/logout' && init?.method === 'POST') return json({})
       return Promise.reject(new Error('offline'))
     }))
 
@@ -56,14 +62,23 @@ describe('App preferences', () => {
 
     await waitFor(() => expect(container.querySelector('.install-panel')?.textContent).toContain('https://personal-route.proxy.example/https://raw.githubusercontent.com'))
     expect(container.textContent).not.toContain('https://mirror.example/https://raw.githubusercontent.com')
+    expect(screen.getByText('User')).toBeTruthy()
+    expect(container.querySelector<HTMLAnchorElement>('.account-profile-entry')?.getAttribute('href')).toBe('/account')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(container.querySelector('.account-entry')?.textContent).toContain('Sign in / Register'))
   })
 
   it('renders the configured registration policy and hides unconfigured providers', async () => {
     window.history.replaceState({}, '', '/login')
+    let requestedLocale: string | null = null
     const json = (value: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(value), { status }))
-    vi.stubGlobal('fetch', vi.fn((input: string) => {
+    vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => {
       if (input === '/api/public-config') return json({ public_base_url: 'http://localhost:3000', enabled_proxies: [], quota: { enabled: false, bidirectional_accounting: false, monthly_gb: 0, timezone: 'local', on_exceeded: 'stop_proxy' }, registration: { mode: 'domain_allowlist', allowed_email_domains: ['example.com', 'corp.example'], email_login_enabled: true } })
       if (input === '/api/auth/providers') return json([])
+      if (input === '/api/auth/email/request') {
+        requestedLocale = new Headers(init?.headers).get('x-mirrorproxy-locale')
+        return json({})
+      }
       if (input.startsWith('/api/account/')) return json({ error: 'unauthorized' }, 401)
       return json({ error: 'not found' }, 404)
     }))
@@ -77,6 +92,9 @@ describe('App preferences', () => {
     fireEvent.click(container.querySelector<HTMLButtonElement>('button[title="Language"]')!)
     expect(await screen.findByText('仅允许指定邮箱域名注册')).toBeTruthy()
     expect(screen.getByLabelText('邮箱地址')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('邮箱地址'), { target: { value: 'person@example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送 Magic Link' }))
+    await waitFor(() => expect(requestedLocale).toBe('zh'))
   })
 
   it('accepts an invitation link directly without requesting another email', async () => {

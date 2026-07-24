@@ -112,7 +112,7 @@ enum ConfigCommand {
 pub struct AppState {
     config: Arc<RwLock<Config>>,
     database: Arc<Database>,
-    client: Client,
+    client: Arc<RwLock<Client>>,
     rate_limiter: Arc<RateLimiter>,
     admin_login_limiter: Arc<AdminLoginRateLimiter>,
     webauthn: Arc<RwLock<Option<Arc<Webauthn>>>>,
@@ -132,6 +132,13 @@ impl AppState {
         self.config
             .read()
             .expect("runtime config lock poisoned")
+            .clone()
+    }
+
+    pub fn client(&self) -> Client {
+        self.client
+            .read()
+            .expect("upstream client lock poisoned")
             .clone()
     }
 
@@ -861,10 +868,22 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     let mut config = database
         .load_or_seed_runtime_config(service_config.clone())
         .await?;
-    // Secrets are not persisted to SQLite, so retain the service-owned values
-    // after loading the mutable runtime configuration snapshot.
+    // Private upstream credentials remain service-owned. Environment variables
+    // for the global outbound proxy deliberately override the persisted admin
+    // setting at process startup for managed/container deployments.
     config.upstream_auth = service_config.upstream_auth;
-    config.outbound_proxy = service_config.outbound_proxy;
+    if [
+        "MIRRORPROXY_OUTBOUND_PROXY_ENABLED",
+        "MIRRORPROXY_OUTBOUND_PROXY_URL",
+        "MIRRORPROXY_OUTBOUND_PROXY_USERNAME",
+        "MIRRORPROXY_OUTBOUND_PROXY_PASSWORD",
+        "MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY",
+    ]
+    .iter()
+    .any(|key| std::env::var_os(key).is_some())
+    {
+        config.outbound_proxy = service_config.outbound_proxy;
+    }
     let client = build_upstream_client(&config)?;
     if config.outbound_proxy.enabled {
         let endpoint = Url::parse(&config.outbound_proxy.url)
@@ -897,7 +916,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         webauthn: Arc::new(RwLock::new(webauthn)),
         config: Arc::new(RwLock::new(config)),
         database: Arc::new(database),
-        client,
+        client: Arc::new(RwLock::new(client)),
         observability,
     };
 
@@ -2787,7 +2806,7 @@ async fn change_admin_password(
 
 async fn admin_config(headers: HeaderMap, State(state): State<AppState>) -> Response {
     match is_admin_authorized(&headers, &state).await {
-        Ok(true) => Json(state.config()).into_response(),
+        Ok(true) => Json(admin_config_value(state.config())).into_response(),
         Ok(false) => unauthorized_response(),
         Err(error) => {
             tracing::error!(%error, "administrator authorization query failed");
@@ -2798,8 +2817,21 @@ async fn admin_config(headers: HeaderMap, State(state): State<AppState>) -> Resp
 
 #[derive(Serialize)]
 struct AdminConfigUpdateResponse {
-    config: Config,
+    config: serde_json::Value,
     restart_required: Vec<&'static str>,
+}
+
+fn admin_config_value(mut config: Config) -> serde_json::Value {
+    let has_password = config.outbound_proxy.password.is_some();
+    config.outbound_proxy.password = None;
+    let mut value = serde_json::to_value(config).expect("configuration is serializable");
+    if let Some(outbound_proxy) = value
+        .get_mut("outbound_proxy")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        outbound_proxy.insert("has_password".into(), has_password.into());
+    }
+    value
 }
 
 #[derive(Serialize)]
@@ -2928,6 +2960,20 @@ async fn update_admin_config(
         }
     };
 
+    let current = state.config();
+    if next_config
+        .outbound_proxy
+        .username
+        .as_deref()
+        .is_none_or(|username| username.trim().is_empty())
+    {
+        next_config.outbound_proxy.username = None;
+        next_config.outbound_proxy.password = None;
+    } else if next_config.outbound_proxy.password.is_none()
+        && next_config.outbound_proxy.username == current.outbound_proxy.username
+    {
+        next_config.outbound_proxy.password = current.outbound_proxy.password.clone();
+    }
     if let Err(error) = next_config.validate() {
         return (
             StatusCode::BAD_REQUEST,
@@ -2935,11 +2981,8 @@ async fn update_admin_config(
         )
             .into_response();
     }
-    let current = state.config();
-    // The management API intentionally never receives secret credentials. Keep
-    // the service-owned credentials while applying other runtime settings.
+    // Private per-upstream credentials remain service-owned.
     next_config.upstream_auth = current.upstream_auth.clone();
-    next_config.outbound_proxy = current.outbound_proxy.clone();
     if next_config.listen_addr != current.listen_addr
         || next_config.database_path != current.database_path
     {
@@ -2978,10 +3021,17 @@ async fn update_admin_config(
     } else {
         None
     };
-    let restart_required = (next_config.timeout.request_secs != current.timeout.request_secs)
-        .then_some("timeout.request_secs")
-        .into_iter()
-        .collect::<Vec<_>>();
+    let next_client = if next_config.timeout.request_secs != current.timeout.request_secs
+        || next_config.outbound_proxy != current.outbound_proxy
+    {
+        match build_upstream_client(&next_config) {
+            Ok(client) => Some(client),
+            Err(error) => return bad_request_response(error.to_string()),
+        }
+    } else {
+        None
+    };
+    let restart_required = Vec::new();
     if let Err(error) = state
         .database
         .save_runtime_config(
@@ -2995,11 +3045,14 @@ async fn update_admin_config(
         return internal_error_response();
     }
     *state.config.write().expect("runtime config lock poisoned") = next_config.clone();
+    if let Some(client) = next_client {
+        *state.client.write().expect("upstream client lock poisoned") = client;
+    }
     if let Some(webauthn) = next_webauthn {
         *state.webauthn.write().expect("WebAuthn lock poisoned") = webauthn;
     }
     Json(AdminConfigUpdateResponse {
-        config: next_config,
+        config: admin_config_value(next_config),
         restart_required,
     })
     .into_response()
@@ -4006,7 +4059,7 @@ mod tests {
         let state = AppState {
             config: Arc::new(RwLock::new(Config::default())),
             database: Arc::new(database),
-            client: Client::new(),
+            client: Arc::new(RwLock::new(Client::new())),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
@@ -4035,7 +4088,7 @@ mod tests {
         let state = AppState {
             config: Arc::new(RwLock::new(config)),
             database: Arc::new(database),
-            client: Client::new(),
+            client: Arc::new(RwLock::new(Client::new())),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
@@ -4886,7 +4939,7 @@ on_exceeded = "stop_proxy"
         let state = AppState {
             config: Arc::new(RwLock::new(initial_config)),
             database: Arc::new(database.clone()),
-            client: Client::new(),
+            client: Arc::new(RwLock::new(Client::new())),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
@@ -4905,9 +4958,25 @@ on_exceeded = "stop_proxy"
         let mut next_config = state.config();
         next_config.public_base_url = "https://mirror.example".to_string();
         next_config.enabled_proxies = vec!["npm".to_string()];
+        next_config.outbound_proxy = OutboundProxyConfig {
+            enabled: true,
+            url: "socks5h://proxy.example:1080".to_string(),
+            no_proxy: vec!["localhost".to_string()],
+            username: Some("proxy-user".to_string()),
+            password: Some("proxy-password".to_string()),
+        };
 
         let response = update_admin_config(headers, State(state.clone()), Json(next_config)).await;
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            response["config"]["outbound_proxy"]["password"],
+            serde_json::Value::Null
+        );
+        assert_eq!(response["config"]["outbound_proxy"]["has_password"], true);
         assert_eq!(state.config().public_base_url, "https://mirror.example");
         assert_eq!(state.config().enabled_proxies, ["npm"]);
 
@@ -4917,6 +4986,10 @@ on_exceeded = "stop_proxy"
             .unwrap();
         assert_eq!(reloaded.public_base_url, "https://mirror.example");
         assert_eq!(reloaded.enabled_proxies, ["npm"]);
+        assert_eq!(
+            reloaded.outbound_proxy.password.as_deref(),
+            Some("proxy-password")
+        );
     }
 
     #[tokio::test]
@@ -4949,7 +5022,7 @@ on_exceeded = "stop_proxy"
         let state = AppState {
             config: Arc::new(RwLock::new(config)),
             database: Arc::new(database.clone()),
-            client: Client::new(),
+            client: Arc::new(RwLock::new(Client::new())),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
@@ -4986,7 +5059,7 @@ on_exceeded = "stop_proxy"
         let state = AppState {
             config: Arc::new(RwLock::new(Config::default())),
             database: Arc::new(database.clone()),
-            client: Client::new(),
+            client: Arc::new(RwLock::new(Client::new())),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
@@ -5040,7 +5113,7 @@ on_exceeded = "stop_proxy"
         let state = AppState {
             config: Arc::new(RwLock::new(Config::default())),
             database: Arc::new(database.clone()),
-            client: Client::new(),
+            client: Arc::new(RwLock::new(Client::new())),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),

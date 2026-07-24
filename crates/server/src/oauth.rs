@@ -53,8 +53,6 @@ struct ProviderView {
     email_field: String,
     email_verified_field: Option<String>,
     display_name_field: String,
-    allow_registration: bool,
-    auto_link_by_email: bool,
 }
 
 impl From<AuthProvider> for ProviderView {
@@ -78,8 +76,6 @@ impl From<AuthProvider> for ProviderView {
             email_field: provider.email_field,
             email_verified_field: provider.email_verified_field,
             display_name_field: provider.display_name_field,
-            allow_registration: provider.allow_registration,
-            auto_link_by_email: provider.auto_link_by_email,
         }
     }
 }
@@ -89,7 +85,6 @@ struct PublicProvider {
     slug: String,
     display_name: String,
     kind: String,
-    allow_registration: bool,
 }
 
 #[derive(Deserialize)]
@@ -117,10 +112,6 @@ pub(crate) struct ProviderRequest {
     email_verified_field: Option<String>,
     #[serde(default = "default_name_field")]
     display_name_field: String,
-    #[serde(default)]
-    allow_registration: bool,
-    #[serde(default)]
-    auto_link_by_email: bool,
 }
 
 #[derive(Serialize)]
@@ -339,8 +330,13 @@ async fn save_provider(
         email_field: request.email_field.trim().to_string(),
         email_verified_field: clean_optional(request.email_verified_field),
         display_name_field: request.display_name_field.trim().to_string(),
-        allow_registration: request.allow_registration,
-        auto_link_by_email: request.auto_link_by_email,
+        // Registration eligibility is controlled exclusively by the global
+        // registration policy. Keep the legacy database column enabled so it
+        // cannot accidentally reintroduce a second, provider-specific gate.
+        allow_registration: true,
+        // A verified provider email is authoritative for an administrator-
+        // configured provider. Always link it to the matching local account.
+        auto_link_by_email: true,
     };
     let has_preserved_secret = if id != 0 && preserve_secret {
         matches!(state.database.auth_provider_by_id(id).await, Ok(Some(existing)) if existing.client_secret.is_some())
@@ -463,7 +459,6 @@ pub(crate) async fn public_providers(State(state): State<AppState>) -> Response 
                     slug: provider.slug,
                     display_name: provider.display_name,
                     kind: provider.kind,
-                    allow_registration: provider.allow_registration,
                 })
                 .collect::<Vec<_>>(),
         )
@@ -755,7 +750,7 @@ async fn complete_identity(
                 return callback_error("verified_email_required");
             };
             match state.database.user_by_email(email).await {
-                Ok(Some(user)) if provider.auto_link_by_email => {
+                Ok(Some(user)) => {
                     match state
                         .database
                         .bind_external_identity(
@@ -772,13 +767,11 @@ async fn complete_identity(
                         _ => return callback_error("identity_in_use"),
                     }
                 }
-                Ok(Some(_)) => return callback_error("manual_link_required"),
                 Ok(None) => {
-                    let invitation_id =
-                        match registration_allowed(state, provider, email, invitation).await {
-                            Ok(value) => value,
-                            Err(error) => return callback_error(error),
-                        };
+                    let invitation_id = match registration_allowed(state, email, invitation).await {
+                        Ok(value) => value,
+                        Err(error) => return callback_error(error),
+                    };
                     let display_name = if claims.display_name.trim().is_empty() {
                         email.split('@').next().unwrap_or("user")
                     } else {
@@ -837,13 +830,9 @@ async fn complete_identity(
 
 async fn registration_allowed(
     state: &AppState,
-    provider: &AuthProvider,
     email: &str,
     invitation: Option<&str>,
 ) -> Result<Option<i64>, &'static str> {
-    if !provider.allow_registration {
-        return Err("registration_disabled");
-    }
     let config = state.config();
     match config.registration.mode.as_str() {
         "open" => Ok(None),
@@ -1407,6 +1396,8 @@ mod tests {
         let json = serde_json::to_string(&ProviderView::from(provider)).unwrap();
         assert!(json.contains("\"has_client_secret\":true"));
         assert!(!json.contains("plain-secret"));
+        assert!(!json.contains("allow_registration"));
+        assert!(!json.contains("auto_link_by_email"));
     }
 
     #[test]

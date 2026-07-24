@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
+import multiavatar from '@multiavatar/multiavatar/esm'
 import {
   ArrowLeft,
   CheckCircle2,
@@ -60,6 +61,14 @@ type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access'> & {
   listen_addr: string
   upstreams: Record<string, string | Record<string, string>>
   timeout: { request_secs: number }
+  outbound_proxy: {
+    enabled: boolean
+    url: string
+    no_proxy: string[]
+    username: string | null
+    password: string | null
+    has_password: boolean
+  }
   rate_limit: { enabled: boolean; requests_per_minute: number }
   cache: { enabled: boolean; directory: string; max_entry_mb: number }
   user_access: {
@@ -172,6 +181,35 @@ const copy = async (value: string) => {
   if (!copied) throw new Error('clipboard unavailable')
 }
 
+function MirrorProxyMark({ size = 18 }: { size?: number }) {
+  return <svg className="mirrorproxy-mark" width={size} height={size} viewBox="0 0 64 64" fill="none" aria-hidden="true">
+    <rect x="5" y="5" width="54" height="54" rx="14" stroke="currentColor" strokeWidth="4" />
+    <path d="M19 22h14m0 0-5-5m5 5-5 5M45 42H31m0 0 5-5m-5 5 5 5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" />
+    <rect x="14" y="17" width="9" height="10" rx="3" fill="currentColor" />
+    <rect x="41" y="37" width="9" height="10" rx="3" fill="currentColor" />
+    <path d="M19 33h26" stroke="currentColor" strokeDasharray="3 5" strokeLinecap="round" strokeOpacity=".42" strokeWidth="3" />
+  </svg>
+}
+
+function SiteFooter() {
+  const [serviceVersion, setServiceVersion] = React.useState('')
+
+  React.useEffect(() => {
+    fetch('/version')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('version unavailable')))
+      .then((value: { version?: string }) => setServiceVersion(value.version ?? ''))
+      .catch(() => undefined)
+  }, [])
+
+  return <footer className="site-footer">
+    <span>© {new Date().getFullYear()} {window.location.hostname}</span>
+    <span className="site-footer-project">
+      <a href="https://github.com/inbjo/MirrorProxy" target="_blank" rel="noreferrer"><Github size={15} /> MirrorProxy</a>
+      {serviceVersion ? <code>v{serviceVersion}</code> : null}
+    </span>
+  </footer>
+}
+
 const messages = {
   en: {
     title: 'MirrorProxy',
@@ -254,6 +292,9 @@ const messages = {
     windowsPolicyHint: 'Windows may block remote scripts by default. This Process-scoped setting applies only to the current PowerShell window.',
     viewReleases: 'View stable releases',
     accountAccess: 'Sign in / Register',
+    accountHome: 'Account',
+    signOut: 'Sign out',
+    confirmSignOut: 'Sign out of this account?',
     copyright: 'MirrorProxy on GitHub',
   },
   zh: {
@@ -337,6 +378,9 @@ const messages = {
     windowsPolicyHint: 'Windows 默认可能阻止远程脚本；Process 作用域只对当前 PowerShell 窗口生效。',
     viewReleases: '查看稳定版本',
     accountAccess: '登录 / 注册',
+    accountHome: '用户中心',
+    signOut: '退出登录',
+    confirmSignOut: '确定退出当前账户吗？',
     copyright: 'MirrorProxy GitHub 仓库',
   },
 } satisfies Record<Locale, Record<string, string>>
@@ -360,7 +404,7 @@ type UserUsage = {
   daily: Array<{ day: string; target_code: string; response_bytes: number; request_count: number; error_count: number }>
   targets: Array<{ target_code: string; response_bytes: number; request_count: number; error_count: number }>
 }
-type PublicAuthProvider = { slug: string; display_name: string; kind: string; allow_registration: boolean }
+type PublicAuthProvider = { slug: string; display_name: string; kind: string }
 type LinkedIdentity = { id: number; provider_slug: string; provider_name: string; provider_subject: string; email: string | null; email_verified: boolean; created_at: number }
 
 const accountMessages = {
@@ -374,7 +418,8 @@ const accountMessages = {
     allowedDomains: 'Allowed domains', emailMethod: 'Continue with email', emailMethodHint: 'We will send a six-digit code and a one-time sign-in link. No password is stored.', providerMethod: 'Continue with a configured provider', providerMethodHint: 'Only providers enabled by the administrator are shown.',
     email: 'Email address', sendCode: 'Send magic link', sending: 'Sending…', code: 'Six-digit code', verify: 'Verify and continue', verifying: 'Verifying…', codeFallback: 'Or use the verification code', codeHint: 'For the fastest sign-in, open the magic link in your email. Enter this code only as a fallback; it expires shortly and can be used once.',
     emailSent: 'Check your inbox and open the magic link to continue. A six-digit code is included as a fallback.', emailUnavailable: 'Email sign-in is not configured on this service.', noMethods: 'No sign-in method is available. Ask the administrator to configure SMTP or an identity provider.', invalidCode: 'The verification code is invalid or expired.', invalidLink: 'This sign-in link is invalid or expired.', loginOnly: 'Existing accounts only', canRegister: 'Registration enabled',
-    trafficAddress: 'Accounting-only proxy address', trafficAddressHint: 'Anyone who knows this address can use your traffic allowance. Rotate it if you suspect it leaked.', rotate: 'Generate a new routing address', connectedMethods: 'Connected sign-in methods', connect: 'Connect', disconnect: 'Disconnect', rotateFailed: 'The routing address cannot be changed yet.', disconnected: 'was disconnected.', disconnectFailed: 'This identity cannot be disconnected because it is your only available sign-in method.', today: 'Today', thisMonth: 'This month', personalRemaining: 'Personal remaining', requests: 'Requests', trafficUsage: 'Traffic usage', groupRemaining: 'Billing group remaining', byMirror: 'By mirror type', recentTrend: 'Recent trend', signOut: 'Sign out',
+    oauthRegistrationClosed: 'This registration policy does not allow a new account for this identity. Ask the administrator to review the global registration mode.', oauthVerifiedEmail: 'The identity provider did not return a verified email address.', oauthManualLink: 'An account already uses this email. Sign in to that account first, then connect this provider from the account page.', oauthDenied: 'Authorization was cancelled or denied by the identity provider.', oauthFailed: 'Third-party sign-in failed. Please try again or contact the administrator.',
+    trafficAddress: 'Accounting-only proxy address', trafficAddressHint: 'Anyone who knows this address can use your traffic allowance. Rotate it if you suspect it leaked.', rotate: 'Generate a new routing address', connectedMethods: 'Connected sign-in methods', connect: 'Connect', disconnect: 'Disconnect', rotateFailed: 'The routing address cannot be changed yet.', disconnected: 'was disconnected.', disconnectFailed: 'This identity cannot be disconnected while email sign-in is unavailable.', confirmRotate: 'Generate a new accounting address? The current address will stop working immediately.', confirmDisconnect: 'Disconnect this sign-in method? You can reconnect it later with the same verified email.', confirmSignOut: 'Sign out of this account?', today: 'Today', thisMonth: 'This month', personalRemaining: 'Personal remaining', requests: 'Requests', trafficUsage: 'Traffic usage', groupRemaining: 'Billing group remaining', byMirror: 'By mirror type', recentTrend: 'Recent trend', signOut: 'Sign out',
   },
   zh: {
     account: 'MirrorProxy 用户中心', back: '返回镜像首页', language: '语言', theme: '主题', identity: '账户 / 身份验证', signIn: '用户登录', signInOrRegister: '登录或创建账户', existingWelcome: '你的 MirrorProxy 账户',
@@ -386,7 +431,8 @@ const accountMessages = {
     allowedDomains: '允许注册的邮箱域名', emailMethod: '使用邮箱继续', emailMethodHint: '系统会发送六位验证码和一次性登录链接，不保存用户密码。', providerMethod: '使用第三方账号继续', providerMethodHint: '这里只展示管理员已经启用的登录方式。',
     email: '邮箱地址', sendCode: '发送 Magic Link', sending: '发送中…', code: '六位验证码', verify: '验证并继续', verifying: '验证中…', codeFallback: '或者使用邮件验证码', codeHint: '推荐直接点击邮件中的 Magic Link；验证码仅作为备用方式，短时间内有效且只能使用一次。',
     emailSent: '请查看邮箱并点击 Magic Link 继续；邮件中同时附带六位验证码作为备用方式。', emailUnavailable: '管理员尚未配置邮件登录。', noMethods: '当前没有可用的登录方式，请联系管理员配置 SMTP 或第三方登录。', invalidCode: '验证码无效或已经过期。', invalidLink: '登录链接无效或已经过期。', loginOnly: '仅限已有账户登录', canRegister: '支持注册新账户',
-    trafficAddress: '专属计费代理地址', trafficAddressHint: '知道此地址的人都能消耗你的流量额度。如怀疑泄漏，请及时更换。', rotate: '生成新的代理地址', connectedMethods: '已绑定的登录方式', connect: '绑定', disconnect: '解绑', rotateFailed: '当前暂时不能更换代理地址。', disconnected: '已解绑。', disconnectFailed: '这是账户唯一可用的登录方式，无法解绑。', today: '今日', thisMonth: '本月', personalRemaining: '个人剩余额度', requests: '请求数', trafficUsage: '流量使用情况', groupRemaining: '计费组剩余额度', byMirror: '按镜像类型', recentTrend: '近期趋势', signOut: '退出登录',
+    oauthRegistrationClosed: '当前全局注册模式不允许这个身份创建新账户，请联系管理员检查注册模式。', oauthVerifiedEmail: '第三方登录没有返回已验证的邮箱地址，无法创建账户。', oauthManualLink: '该邮箱已经存在账户。请先登录原账户，再从用户中心绑定这个第三方登录。', oauthDenied: '你取消了授权，或者第三方平台拒绝了授权请求。', oauthFailed: '第三方登录失败，请重试或联系管理员。',
+    trafficAddress: '专属计费代理地址', trafficAddressHint: '知道此地址的人都能消耗你的流量额度。如怀疑泄漏，请及时更换。', rotate: '生成新的代理地址', connectedMethods: '已绑定的登录方式', connect: '绑定', disconnect: '解绑', rotateFailed: '当前暂时不能更换代理地址。', disconnected: '已解绑。', disconnectFailed: '邮件登录不可用时，不能解绑最后一个第三方登录方式。', confirmRotate: '确定生成新的专属代理地址吗？当前地址会立即失效。', confirmDisconnect: '确定解绑这个登录方式吗？之后仍可使用相同的已验证邮箱重新绑定。', confirmSignOut: '确定退出当前账户吗？', today: '今日', thisMonth: '本月', personalRemaining: '个人剩余额度', requests: '请求数', trafficUsage: '流量使用情况', groupRemaining: '计费组剩余额度', byMirror: '按镜像类型', recentTrend: '近期趋势', signOut: '退出登录',
   },
 } satisfies Record<Locale, Record<string, string>>
 
@@ -405,8 +451,24 @@ function UserPage() {
   const [verifying, setVerifying] = React.useState(false)
   const invitation = new URLSearchParams(location.search).get('invitation')
   const magicToken = new URLSearchParams(location.search).get('token')
+  const oauthError = new URLSearchParams(location.search).get('oauth_error')
   const automaticToken = magicToken
   const t = accountMessages[locale]
+  const oauthErrorMessage = oauthError === 'registration_disabled' || oauthError === 'invitation_required' || oauthError === 'invalid_invitation'
+    ? t.oauthRegistrationClosed
+    : oauthError === 'verified_email_required'
+      ? t.oauthVerifiedEmail
+      : oauthError === 'manual_link_required'
+        ? t.oauthManualLink
+        : oauthError === 'provider_denied'
+          ? t.oauthDenied
+          : oauthError
+            ? t.oauthFailed
+            : ''
+  const feedback = message || oauthErrorMessage
+  const profileAvatarUrl = profile
+    ? `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(multiavatar(profile.user.email))}`
+    : null
 
   React.useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -445,7 +507,7 @@ function UserPage() {
     event.preventDefault()
     setSending(true); setMessage('')
     try {
-      const response = await fetch('/api/auth/email/request', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, invitation_token: invitation }) })
+      const response = await fetch('/api/auth/email/request', { method: 'POST', headers: { 'content-type': 'application/json', 'x-mirrorproxy-locale': locale }, body: JSON.stringify({ email, invitation_token: invitation }) })
       setMessage(response.ok ? t.emailSent : t.emailUnavailable)
     } finally { setSending(false) }
   }
@@ -459,11 +521,13 @@ function UserPage() {
     } finally { setVerifying(false) }
   }
   const rotate = async () => {
+    if (!window.confirm(t.confirmRotate)) return
     const response = await fetch('/api/account/routing-id/rotate', { method: 'POST' })
     if (!response.ok) { setMessage(t.rotateFailed); return }
     await loadProfile()
   }
   const unlink = async (identity: LinkedIdentity) => {
+    if (!window.confirm(`${t.confirmDisconnect}\n\n${identity.provider_name}`)) return
     const response = await fetch(`/api/account/providers/${identity.id}`, { method: 'DELETE' })
     setMessage(response.ok ? `${identity.provider_name} ${t.disconnected}` : t.disconnectFailed)
     if (response.ok) await loadProfile()
@@ -474,6 +538,7 @@ function UserPage() {
   }
 
   const signOut = async () => {
+    if (!window.confirm(t.confirmSignOut)) return
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
     setProfile(null); setUsage(null); setIdentities([])
   }
@@ -488,7 +553,7 @@ function UserPage() {
   })()
   const registrationAvailable = registration?.mode === 'open' || registration?.mode === 'domain_allowlist' || (registration?.mode === 'invite_only' && Boolean(magicToken || invitation))
 
-  return <main className="account-page"><header className="account-topbar"><a className="brand-mark" href="/"><ServerCog size={18} /> {t.account}</a><div className="toolbar"><a className="account-back" href="/"><ArrowLeft size={16} /> {t.back}</a><button className="icon-button" onClick={() => setLocale(locale === 'en' ? 'zh' : 'en')} title={t.language}><Languages size={18} /></button><button className="icon-button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title={t.theme}>{theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}</button></div></header><section className="account-shell" aria-label={t.account}><div className="account-heading"><div><span className="console-kicker">{t.identity}</span><h1>{profile ? t.existingWelcome : registrationAvailable ? t.signInOrRegister : t.signIn}</h1></div>{profile ? <button className="account-signout" onClick={signOut}><LogOut size={16} /> {t.signOut}</button> : null}</div>{profile ? <div className="account-dashboard"><section className="account-profile-card"><div className="account-avatar"><UserRound size={24} /></div><div><h2>{profile.user.display_name}</h2><p>{profile.user.email}</p></div>{profile.proxy_base_url ? <div className="account-routing-address"><label>{t.trafficAddress}<input readOnly value={profile.proxy_base_url} /></label><p className="account-help">{t.trafficAddressHint}</p><button className="secondary-button" onClick={rotate}>{t.rotate}</button></div> : null}<div className="identity-panel"><h3>{t.connectedMethods}</h3>{identities.map((identity) => <div className="identity-row" key={identity.id}><span><strong>{identity.provider_name}</strong><small>{identity.email ?? identity.provider_subject}</small></span><button onClick={() => unlink(identity)}>{t.disconnect}</button></div>)}{providers.some((provider) => !identities.some((identity) => identity.provider_slug === provider.slug)) ? <div className="provider-actions">{providers.filter((provider) => !identities.some((identity) => identity.provider_slug === provider.slug)).map((provider) => <a className="provider-button" href={providerUrl(provider, true)} key={provider.slug}>{t.connect} {provider.display_name}</a>)}</div> : null}</div>{message ? <p className="account-feedback">{message}</p> : null}</section>{usage ? <section className="account-usage"><div className="console-section-head"><div><h2>{t.trafficUsage}</h2><p>{usage.month}{usage.group ? ` · ${usage.group.name}` : ''}</p></div></div><div className="console-metrics"><ConsoleMetric label={t.today} value={byteLabel(usage.today_response_bytes)} /><ConsoleMetric label={t.thisMonth} value={byteLabel(usage.response_bytes)} /><ConsoleMetric label={t.personalRemaining} value={usage.quota.remaining_bytes === null ? '∞' : byteLabel(usage.quota.remaining_bytes)} /><ConsoleMetric label={t.requests} value={usage.request_count.toLocaleString()} /></div>{usage.group ? <p className="account-help">{t.groupRemaining}: {usage.group.quota.remaining_bytes === null ? '∞' : byteLabel(usage.group.quota.remaining_bytes)}</p> : null}<div className="stats-columns"><div><h3>{t.byMirror}</h3>{usage.targets.map((target) => <div className="stat-row" key={target.target_code}><span>{target.target_code}</span><strong>{byteLabel(target.response_bytes)}</strong><small>{target.request_count} req</small></div>)}</div><div><h3>{t.recentTrend}</h3>{usage.daily.slice(-30).map((point) => <div className="stat-row" key={`${point.day}-${point.target_code}`}><span>{point.day.slice(5)} · {point.target_code}</span><strong>{byteLabel(point.response_bytes)}</strong><small>{point.error_count} err</small></div>)}</div></div></section> : null}</div> : <div className="account-auth-layout"><aside className={`registration-policy registration-policy-${policy?.tone ?? 'loading'}`}><span className="registration-policy-icon"><UserRound size={21} /></span><div><span className="eyebrow">REGISTRATION POLICY</span><h2>{policy?.title ?? '…'}</h2><p>{policy?.body}</p>{registration?.mode === 'domain_allowlist' && registration.allowed_email_domains.length ? <div className="allowed-domain-list"><small>{t.allowedDomains}</small>{registration.allowed_email_domains.map((domain) => <code key={domain}>@{domain}</code>)}</div> : null}</div></aside><div className="auth-methods">{providers.length ? <section className="auth-method-card"><div className="auth-method-head"><span><UserRound size={19} /></span><div><h2>{t.providerMethod}</h2><p>{t.providerMethodHint}</p></div></div><div className="provider-actions provider-actions-stacked">{providers.map((provider) => <a className="provider-button" href={providerUrl(provider)} key={provider.slug}><span><LogIn size={16} /> {provider.display_name}</span><small>{provider.allow_registration && registrationAvailable ? t.canRegister : t.loginOnly}</small></a>)}</div></section> : null}{registration?.email_login_enabled ? <section className="auth-method-card email-auth-card"><div className="auth-method-head"><span><Mail size={19} /></span><div><h2>{t.emailMethod}</h2><p>{t.emailMethodHint}</p></div></div><form className="account-form" onSubmit={requestLogin}><label>{t.email}<input required autoComplete="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="primary-button" disabled={sending} type="submit">{sending ? t.sending : t.sendCode}</button></form><div className="auth-divider"><span>{t.codeFallback}</span></div><form className="account-form account-code-form" onSubmit={verify}><label>{t.code}<input required autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" value={code} onChange={(event) => setCode(event.target.value)} /></label><p>{t.codeHint}</p><button className="primary-button" disabled={verifying} type="submit">{verifying ? t.verifying : t.verify}</button></form></section> : null}{registration && !registration.email_login_enabled && providers.length === 0 ? <section className="auth-empty-state"><KeyRound size={25} /><h2>{t.emailUnavailable}</h2><p>{t.noMethods}</p></section> : null}{message ? <p className="account-feedback" role="status">{message}</p> : null}</div></div>}</section></main>
+  return <main className="account-page"><header className="account-topbar"><a className="brand-mark" href="/"><ServerCog size={18} /> {t.account}</a><div className="toolbar"><a className="account-back" href="/"><ArrowLeft size={16} /> {t.back}</a><button className="icon-button" onClick={() => setLocale(locale === 'en' ? 'zh' : 'en')} title={t.language}><Languages size={18} /></button><button className="icon-button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title={t.theme}>{theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}</button></div></header><section className="account-shell" aria-label={t.account}><div className="account-heading"><div><span className="console-kicker">{t.identity}</span><h1>{profile ? t.existingWelcome : registrationAvailable ? t.signInOrRegister : t.signIn}</h1></div>{profile ? <button className="account-signout" onClick={signOut}><LogOut size={16} /> {t.signOut}</button> : null}</div>{profile ? <div className="account-dashboard"><section className="account-profile-card">{profileAvatarUrl ? <img className="account-avatar" src={profileAvatarUrl} alt="" /> : null}<div><h2>{profile.user.display_name}</h2><p>{profile.user.email}</p></div>{profile.proxy_base_url ? <div className="account-routing-address"><label>{t.trafficAddress}<input readOnly value={profile.proxy_base_url} /></label><p className="account-help">{t.trafficAddressHint}</p><button className="secondary-button" onClick={rotate}>{t.rotate}</button></div> : null}<div className="identity-panel"><h3>{t.connectedMethods}</h3>{identities.map((identity) => <div className="identity-row" key={identity.id}><span><strong>{identity.provider_name}</strong><small>{identity.email ?? identity.provider_subject}</small></span><button className="revoke-button" onClick={() => unlink(identity)}>{t.disconnect}</button></div>)}{providers.some((provider) => !identities.some((identity) => identity.provider_slug === provider.slug)) ? <div className="provider-actions">{providers.filter((provider) => !identities.some((identity) => identity.provider_slug === provider.slug)).map((provider) => <a className="provider-button" href={providerUrl(provider, true)} key={provider.slug}>{t.connect} {provider.display_name}</a>)}</div> : null}</div>{feedback ? <p className="account-feedback">{feedback}</p> : null}</section>{usage ? <section className="account-usage"><div className="console-section-head"><div><h2>{t.trafficUsage}</h2><p>{usage.month}{usage.group ? ` · ${usage.group.name}` : ''}</p></div></div><div className="console-metrics"><ConsoleMetric label={t.today} value={byteLabel(usage.today_response_bytes)} /><ConsoleMetric label={t.thisMonth} value={byteLabel(usage.response_bytes)} /><ConsoleMetric label={t.personalRemaining} value={usage.quota.remaining_bytes === null ? '∞' : byteLabel(usage.quota.remaining_bytes)} /><ConsoleMetric label={t.requests} value={usage.request_count.toLocaleString()} /></div>{usage.group ? <p className="account-help">{t.groupRemaining}: {usage.group.quota.remaining_bytes === null ? '∞' : byteLabel(usage.group.quota.remaining_bytes)}</p> : null}<div className="stats-columns"><div><h3>{t.byMirror}</h3>{usage.targets.map((target) => <div className="stat-row" key={target.target_code}><span>{target.target_code}</span><strong>{byteLabel(target.response_bytes)}</strong><small>{target.request_count} req</small></div>)}</div><div><h3>{t.recentTrend}</h3>{usage.daily.slice(-30).map((point) => <div className="stat-row" key={`${point.day}-${point.target_code}`}><span>{point.day.slice(5)} · {point.target_code}</span><strong>{byteLabel(point.response_bytes)}</strong><small>{point.error_count} err</small></div>)}</div></div></section> : null}</div> : <div className="account-auth-layout"><aside className={`registration-policy registration-policy-${policy?.tone ?? 'loading'}`}><span className="registration-policy-icon"><UserRound size={21} /></span><div><span className="eyebrow">REGISTRATION POLICY</span><h2>{policy?.title ?? '…'}</h2><p>{policy?.body}</p>{registration?.mode === 'domain_allowlist' && registration.allowed_email_domains.length ? <div className="allowed-domain-list"><small>{t.allowedDomains}</small>{registration.allowed_email_domains.map((domain) => <code key={domain}>@{domain}</code>)}</div> : null}</div></aside><div className="auth-methods">{providers.length ? <section className="auth-method-card"><div className="auth-method-head"><span><UserRound size={19} /></span><div><h2>{t.providerMethod}</h2><p>{t.providerMethodHint}</p></div></div><div className="provider-actions provider-actions-stacked">{providers.map((provider) => <a className="provider-button" href={providerUrl(provider)} key={provider.slug}><span><LogIn size={16} /> {provider.display_name}</span><small>{registrationAvailable ? t.canRegister : t.loginOnly}</small></a>)}</div></section> : null}{registration?.email_login_enabled ? <section className="auth-method-card email-auth-card"><div className="auth-method-head"><span><Mail size={19} /></span><div><h2>{t.emailMethod}</h2><p>{t.emailMethodHint}</p></div></div><form className="account-form" onSubmit={requestLogin}><label>{t.email}<input required autoComplete="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="primary-button" disabled={sending} type="submit">{sending ? t.sending : t.sendCode}</button></form><div className="auth-divider"><span>{t.codeFallback}</span></div><form className="account-form account-code-form" onSubmit={verify}><label>{t.code}<input required autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" value={code} onChange={(event) => setCode(event.target.value)} /></label><p>{t.codeHint}</p><button className="primary-button" disabled={verifying} type="submit">{verifying ? t.verifying : t.verify}</button></form></section> : null}{registration && !registration.email_login_enabled && providers.length === 0 ? <section className="auth-empty-state"><KeyRound size={25} /><h2>{t.emailUnavailable}</h2><p>{t.noMethods}</p></section> : null}{feedback ? <p className="account-feedback" role="status">{feedback}</p> : null}</div></div>}</section></main>
 }
 
 function PublicApp() {
@@ -506,7 +571,7 @@ function PublicApp() {
     },
   })
   const [catalog, setCatalog] = React.useState<SourceCatalog | null>(null)
-  const [personalBaseUrl, setPersonalBaseUrl] = React.useState<string | null>(null)
+  const [publicProfile, setPublicProfile] = React.useState<UserProfile | null>(null)
   const [copied, setCopied] = React.useState<string | null>(null)
   const t = messages[locale]
 
@@ -536,10 +601,14 @@ function PublicApp() {
   React.useEffect(() => {
     fetch('/api/account/profile')
       .then((response) => response.ok ? response.json() as Promise<UserProfile> : Promise.reject())
-      .then((profile) => setPersonalBaseUrl(profile.proxy_base_url))
-      .catch(() => setPersonalBaseUrl(null))
+      .then((profile) => setPublicProfile(profile))
+      .catch(() => setPublicProfile(null))
   }, [])
 
+  const personalBaseUrl = publicProfile?.proxy_base_url ?? null
+  const avatarUrl = publicProfile
+    ? `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(multiavatar(publicProfile.user.email))}`
+    : null
   const baseUrl = (personalBaseUrl || config.public_base_url).replace(/\/$/, '')
   const githubCommand = `${baseUrl}/https://github.com/inbjo/Conductor/releases/download/nightly/conductor-client-linux-amd64.deb`
   const composerCommand = `composer config repo.packagist composer ${baseUrl}/composer`
@@ -568,14 +637,26 @@ function PublicApp() {
     window.setTimeout(() => setCopied(null), 1400)
   }
 
+  const signOut = async () => {
+    if (!window.confirm(t.confirmSignOut)) return
+    const response = await fetch('/api/auth/logout', { method: 'POST' })
+    if (response.ok) setPublicProfile(null)
+  }
+
   return (
     <main className="shell">
       <header className="topbar">
         <div>
-          <div className="brand-mark"><ServerCog size={18} /> MirrorProxy</div>
+          <div className="brand-mark"><MirrorProxyMark size={19} /> MirrorProxy</div>
         </div>
         <div className="toolbar">
-          <a className="account-entry" href="/login"><UserRound size={17} /> {t.accountAccess}</a>
+          {publicProfile && avatarUrl ? <div className="public-account-control">
+            <a className="account-entry account-profile-entry" href="/account" title={t.accountHome}>
+              <img className="public-account-avatar" src={avatarUrl} alt="" />
+              <span className="public-account-name">{publicProfile.user.display_name}</span>
+            </a>
+            <button className="public-account-logout" onClick={signOut} title={t.signOut} aria-label={t.signOut}><LogOut size={17} /></button>
+          </div> : <a className="account-entry" href="/login"><UserRound size={17} /> {t.accountAccess}</a>}
           <button className="icon-button" onClick={() => setLocale(locale === 'en' ? 'zh' : 'en')} title="Language">
             <Languages size={18} />
           </button>
@@ -587,10 +668,7 @@ function PublicApp() {
 
       <AccelerationWorkbench baseUrl={baseUrl} config={config} catalog={catalog} labels={t} onCopy={copyCommand} copied={copied} />
 
-      <footer className="site-footer">
-        <span>© {new Date().getFullYear()} MirrorProxy</span>
-        <a href="https://github.com/inbjo/MirrorProxy" target="_blank" rel="noreferrer"><Github size={15} /> {t.copyright}</a>
-      </footer>
+      <SiteFooter />
 
       {false && <div className="legacy-home">
       <section className="status-strip">
@@ -797,7 +875,7 @@ function InstallCommand({ title, hint, command, copied, copyLabel, copiedLabel, 
 }
 
 function InstallCode({ command, copied, copyLabel, copiedLabel, onCopy }: { command: string; copied: boolean; copyLabel: string; copiedLabel: string; onCopy: () => void }) {
-  return <div className="install-command"><code>{command}</code><button onClick={onCopy}><Clipboard size={15} /> {copied ? copiedLabel : copyLabel}</button></div>
+  return <div className="install-command"><code className="scrollbar-thin scrollbar-track-transparent scrollbar-thumb-slate-400 dark:scrollbar-thumb-slate-600">{command}</code><button onClick={onCopy}><Clipboard size={15} /> {copied ? copiedLabel : copyLabel}</button></div>
 }
 
 function LinkConverter({ title, icon, hint, value, onChange, output, outputLabel, placeholder, copyLabel, copiedLabel, copied, onCopy }: { title: string; icon: React.ReactNode; hint: string; value: string; onChange: (value: string) => void; output: string; outputLabel: string; placeholder: string; copyLabel: string; copiedLabel: string; copied: boolean; onCopy: () => void }) {
@@ -824,7 +902,7 @@ function SourceConfigModal({ target, baseUrl, catalog, labels, copied, onCopy, o
 }
 
 function ConfigOption({ title, description, value, copyLabel, copiedLabel, copied, onCopy }: { title: string; description: string; value: string; copyLabel: string; copiedLabel: string; copied: boolean; onCopy: () => void }) {
-  return <section className="config-option"><span>{title}</span><p>{description}</p><pre><code>{value}</code></pre><button onClick={onCopy}>{copied ? copiedLabel : copyLabel}</button></section>
+  return <section className="config-option"><span>{title}</span><p>{description}</p><pre><code className="modal-command-scrollbar scrollbar-thin scrollbar-track-transparent scrollbar-thumb-slate-400 scrollbar-thumb-rounded-full">{value}</code></pre><button onClick={onCopy}>{copied ? copiedLabel : copyLabel}</button></section>
 }
 
 function sourceCategoryIcon(category: SourceTarget['category']) {
@@ -937,7 +1015,7 @@ function AdminPage() {
   return <main className="admin-page">
     <header className="topbar admin-page-header">
       <a className="brand-mark admin-brand" href="/">
-        <span className="admin-brand-icon"><ServerCog size={18} /></span>
+        <span className="admin-brand-icon"><MirrorProxyMark size={20} /></span>
         <span className="admin-brand-copy"><strong>MirrorProxy</strong><small>{locale === 'zh' ? '管理后台' : 'Admin console'}</small></span>
       </a>
       <div className="toolbar">
@@ -946,6 +1024,7 @@ function AdminPage() {
       </div>
     </header>
     <AdminConsole locale={locale} />
+    <SiteFooter />
   </main>
 }
 
@@ -1052,6 +1131,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
       ...config,
       public_base_url: config.public_base_url || window.location.origin,
       trusted_proxies: config.trusted_proxies ?? [],
+      outbound_proxy: config.outbound_proxy ?? { enabled: false, url: '', no_proxy: ['127.0.0.1', 'localhost'], username: null, password: null, has_password: false },
       user_access: config.user_access ?? { base_domain: '', mode: 'public', infrastructure_ready: false, routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
       registration: config.registration ?? { mode: 'invite_only', allowed_email_domains: [], email_token_ttl_minutes: 10 },
       webauthn,
@@ -1137,7 +1217,8 @@ function AdminConsole({ locale }: { locale: Locale }) {
     }
   }
 
-  const signOut = async () => {
+  const signOut = async (requireConfirmation = true) => {
+    if (requireConfirmation && !window.confirm(locale === 'zh' ? '确定退出管理员后台吗？' : 'Sign out of the administrator console?')) return
     if (token) await fetch('/admin/api/auth/logout', { method: 'POST' }).catch(() => undefined)
     setIdentity(null); setToken(null); setDraft(null); setStats(null); setAuditLog([]); setAuditTotal(0); setRestartRequired([]); setNotice(null)
   }
@@ -1180,7 +1261,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
     setPasswordBusy(false)
     if (!response.ok) { setError(text.passwordError); return }
     setCurrentPassword(''); setNewPassword('')
-    await signOut()
+    await signOut(false)
     setError(text.passwordChanged)
   }
 
@@ -1195,7 +1276,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
     setUsernameBusy(false)
     if (!response.ok) { setError(text.usernameError); return }
     setNewUsername(''); setUsernamePassword(''); setUsername('')
-    await signOut()
+    await signOut(false)
     setError(text.usernameChanged)
   }
 
@@ -1233,6 +1314,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
   const updateQuota = (key: keyof AdminConfig['quota'], value: string | boolean | number | null) => setDraft((current) => current ? { ...current, quota: { ...current.quota, [key]: value } } : current)
   const updateRate = (key: keyof AdminConfig['rate_limit'], value: string | boolean | number) => setDraft((current) => current ? { ...current, rate_limit: { ...current.rate_limit, [key]: value } } : current)
   const updateCache = (key: keyof AdminConfig['cache'], value: string | boolean | number) => setDraft((current) => current ? { ...current, cache: { ...current.cache, [key]: value } } : current)
+  const updateOutboundProxy = (key: keyof AdminConfig['outbound_proxy'], value: string | boolean | string[] | null) => setDraft((current) => current ? { ...current, outbound_proxy: { ...current.outbound_proxy, [key]: value } } : current)
   const updateUserAccess = (key: keyof AdminConfig['user_access'], value: string | number | boolean) => setDraft((current) => current ? { ...current, user_access: { ...current.user_access, [key]: value } } : current)
   const updateRegistration = (key: keyof AdminConfig['registration'], value: string | number | string[]) => setDraft((current) => current ? { ...current, registration: { ...current.registration, [key]: value } } : current)
   const toggleAdapter = (adapter: string) => setDraft((current) => {
@@ -1268,7 +1350,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
   return (
     <section className="admin-console" aria-label={text.title}>
       {notice ? <div className={`admin-toast admin-toast-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} aria-live="polite"><span className="admin-toast-icon">{notice.tone === 'error' ? <CircleAlert size={19} /> : <CheckCircle2 size={19} />}</span><span className="admin-toast-copy"><strong>{notice.title}</strong><span>{notice.message}</span></span><button type="button" onClick={() => setNotice(null)} aria-label={text.closeNotice}><X size={16} /></button></div> : null}
-      <div className="console-head"><div><span className="console-kicker"><ShieldCheck size={15} /> ADMIN</span><h2>{text.title}</h2></div>{token ? <button className="secondary-button compact-button console-logout" onClick={signOut}><LogOut size={15} /> {text.signOut}</button> : null}</div>
+      <div className="console-head"><div><span className="console-kicker"><ShieldCheck size={15} /> ADMIN</span><h2>{text.title}</h2></div>{token ? <button className="secondary-button compact-button console-logout" onClick={() => signOut()}><LogOut size={15} /> {text.signOut}</button> : null}</div>
       {!token ? <form className="login-card admin-login-card" onSubmit={signIn}><div className="admin-login-intro"><h3>{text.login}</h3><p>{text.passwordHint}</p></div><label className="admin-username-field">{text.username}<input autoFocus required autoComplete="username webauthn" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="admin-password-field">{text.password}<input required={!passkeyEnabled} autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error ? <p className="form-error admin-login-error">{error}</p> : null}<div className="login-actions admin-login-actions"><button className="primary-button password-login-button" type="submit"><LogIn size={17} /> {text.signIn}</button>{passkeyEnabled ? <button className="secondary-button passkey-login-button" disabled={passkeyBusy || !username.trim()} type="button" onClick={signInWithPasskey}><KeyRound size={17} /> {text.usePasskey}</button> : null}</div></form> : null}
       {token && draft && stats ? <div className="console-workspace">
         <nav className="admin-tabs" aria-label={text.title}>{tabs.map((tab) => <button aria-current={activeTab === tab.id ? 'page' : undefined} className={activeTab === tab.id ? 'active' : ''} key={tab.id} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>)}</nav>
@@ -1292,6 +1374,16 @@ function AdminConsole({ locale }: { locale: Locale }) {
               <section className="runtime-config-group runtime-config-group-wide">
                 <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '代理与请求头' : 'Proxy and request headers'}</h5><p>{locale === 'zh' ? '只有可信反向代理的转发头才会参与客户端地址识别。' : 'Only forwarding headers from trusted reverse proxies are used.'}</p></div>
                 <div className="runtime-config-fields"><label className="wide-field">{text.trustedProxies}<input aria-describedby="trusted-proxies-hint" value={draft.trusted_proxies.join(', ')} onChange={(event) => update('trusted_proxies', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small id="trusted-proxies-hint">{text.trustedProxiesHint}</small></label><label className="toggle-field wide-field"><input type="checkbox" checked={draft.forward_client_authorization} onChange={(event) => update('forward_client_authorization', event.target.checked)} />{text.forwardAuth}</label></div>
+              </section>
+              <section className="runtime-config-group runtime-config-group-wide">
+                <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '镜像上游代理' : 'Mirror upstream proxy'}</h5><p>{locale === 'zh' ? '让所有镜像上游请求通过一个 HTTP、HTTPS 或 SOCKS5 代理；保存后立即生效。' : 'Route every mirror-upstream request through one HTTP, HTTPS, or SOCKS5 proxy; changes apply immediately.'}</p></div>
+                <div className="runtime-config-fields">
+                  <label className="toggle-field wide-field"><input type="checkbox" checked={draft.outbound_proxy.enabled} onChange={(event) => updateOutboundProxy('enabled', event.target.checked)} />{locale === 'zh' ? '启用镜像上游代理' : 'Enable mirror upstream proxy'}</label>
+                  <label className="wide-field">{locale === 'zh' ? '代理地址' : 'Proxy URL'}<input placeholder="socks5h://proxy.example.com:1080" value={draft.outbound_proxy.url} onChange={(event) => updateOutboundProxy('url', event.target.value)} /><small>{locale === 'zh' ? '支持 http://、https://、socks5:// 和 socks5h://；socks5h 由代理解析 DNS。' : 'Supports http://, https://, socks5://, and socks5h://; socks5h resolves DNS through the proxy.'}</small></label>
+                  <label>{locale === 'zh' ? '用户名（可选）' : 'Username (optional)'}<input autoComplete="off" value={draft.outbound_proxy.username ?? ''} onChange={(event) => updateOutboundProxy('username', event.target.value || null)} /></label>
+                  <label>{locale === 'zh' ? '密码（可选）' : 'Password (optional)'}<input autoComplete="new-password" type="password" placeholder={draft.outbound_proxy.has_password ? (locale === 'zh' ? '已保存，留空表示不修改' : 'Saved; leave blank to keep') : ''} value={draft.outbound_proxy.password ?? ''} onChange={(event) => updateOutboundProxy('password', event.target.value || null)} /></label>
+                  <label className="wide-field">{locale === 'zh' ? '不使用代理的地址' : 'Bypass proxy for'}<input placeholder="127.0.0.1, localhost" value={draft.outbound_proxy.no_proxy.join(', ')} onChange={(event) => updateOutboundProxy('no_proxy', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small>{locale === 'zh' ? '多个主机或地址用逗号分隔。' : 'Separate hosts or addresses with commas.'}</small></label>
+                </div>
               </section>
               <section className="runtime-config-group">
                 <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '请求限流' : 'Request rate limiting'}</h5><p>{locale === 'zh' ? '启用后按客户端限制每分钟请求数。' : 'Limits requests per client when enabled.'}</p></div>
@@ -1369,6 +1461,9 @@ function AdminSessionManagement({ locale, onCurrentRevoked }: { locale: Locale; 
   }, [])
   React.useEffect(() => { load().catch(() => undefined) }, [load])
   const revoke = async (session: AdminSessionView) => {
+    if (!window.confirm(locale === 'zh'
+      ? `确定撤销${session.current ? '当前' : '这个'}管理员会话吗？${session.current ? '撤销后需要重新登录。' : ''}`
+      : `Revoke ${session.current ? 'the current' : 'this'} administrator session?${session.current ? ' You will need to sign in again.' : ''}`)) return
     const response = await fetch(`/admin/api/auth/sessions/${session.id}`, { method: 'DELETE' })
     if (!response.ok) return
     if (session.current) onCurrentRevoked(); else await load()
@@ -1393,18 +1488,18 @@ type AuthProviderView = {
   id: number; slug: string; display_name: string; kind: 'oauth2' | 'oidc'; preset: string; enabled: boolean; client_id: string; has_client_secret: boolean
   issuer_url: string | null; authorization_url: string | null; token_url: string | null; userinfo_url: string | null; emails_url: string | null
   scopes: string[]; subject_field: string; email_field: string; email_verified_field: string | null; display_name_field: string
-  allow_registration: boolean; auto_link_by_email: boolean
 }
-type AuthProviderTemplate = Omit<AuthProviderView, 'id' | 'slug' | 'enabled' | 'client_id' | 'has_client_secret' | 'subject_field' | 'email_field' | 'email_verified_field' | 'display_name_field' | 'allow_registration' | 'auto_link_by_email'>
+type AuthProviderTemplate = Omit<AuthProviderView, 'id' | 'slug' | 'enabled' | 'client_id' | 'has_client_secret' | 'subject_field' | 'email_field' | 'email_verified_field' | 'display_name_field'>
 type AuthProviderDraft = AuthProviderView & { client_secret: string }
 
-const emptyAuthProvider = (): AuthProviderDraft => ({ id: 0, slug: '', display_name: '', kind: 'oauth2', preset: 'custom_oauth2', enabled: false, client_id: '', client_secret: '', has_client_secret: false, issuer_url: null, authorization_url: null, token_url: null, userinfo_url: null, emails_url: null, scopes: [], subject_field: 'id', email_field: 'email', email_verified_field: null, display_name_field: 'name', allow_registration: false, auto_link_by_email: false })
+const emptyAuthProvider = (): AuthProviderDraft => ({ id: 0, slug: '', display_name: '', kind: 'oauth2', preset: 'custom_oauth2', enabled: false, client_id: '', client_secret: '', has_client_secret: false, issuer_url: null, authorization_url: null, token_url: null, userinfo_url: null, emails_url: null, scopes: [], subject_field: 'id', email_field: 'email', email_verified_field: null, display_name_field: 'name' })
 
 function AdminAuthProviders({ locale }: { locale: Locale }) {
   const [providers, setProviders] = React.useState<AuthProviderView[]>([])
   const [templates, setTemplates] = React.useState<AuthProviderTemplate[]>([])
   const [draft, setDraft] = React.useState<AuthProviderDraft>(emptyAuthProvider)
-  const [notice, setNotice] = React.useState('')
+  const [notice, setNotice] = React.useState<AdminNotice | null>(null)
+  const [testingProviderId, setTestingProviderId] = React.useState<number | null>(null)
   const load = React.useCallback(async () => {
     const response = await fetch('/admin/api/auth-providers')
     if (!response.ok) return
@@ -1412,6 +1507,11 @@ function AdminAuthProviders({ locale }: { locale: Locale }) {
     setProviders(Array.isArray(value.providers) ? value.providers : []); setTemplates(Array.isArray(value.templates) ? value.templates : [])
   }, [])
   React.useEffect(() => { load().catch(() => undefined) }, [load])
+  React.useEffect(() => {
+    if (!notice) return
+    const timeout = window.setTimeout(() => setNotice(null), notice.tone === 'error' ? 9000 : 4500)
+    return () => window.clearTimeout(timeout)
+  }, [notice])
   const chooseTemplate = (preset: string) => {
     const template = templates.find((item) => item.preset === preset)
     if (!template) return
@@ -1421,25 +1521,43 @@ function AdminAuthProviders({ locale }: { locale: Locale }) {
   const save = async (event: React.FormEvent) => {
     event.preventDefault()
     const response = await fetch(draft.id ? `/admin/api/auth-providers/${draft.id}` : '/admin/api/auth-providers', { method: draft.id ? 'PUT' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...draft, client_secret: draft.client_secret || null }) })
-    setNotice(response.ok ? (locale === 'zh' ? '登录方式已保存。' : 'Identity provider saved.') : `${locale === 'zh' ? '无法保存' : 'Unable to save provider'}: ${(await response.json().catch(() => ({})) as { error?: string }).error ?? (locale === 'zh' ? '请检查配置' : 'check the configuration')}`)
+    const reason = response.ok ? '' : (await response.json().catch(() => ({})) as { error?: string }).error
+    setNotice(response.ok
+      ? { tone: 'success', title: locale === 'zh' ? '保存成功' : 'Provider saved', message: locale === 'zh' ? '第三方登录配置已保存。' : 'The identity provider configuration was saved.' }
+      : { tone: 'error', title: locale === 'zh' ? '保存失败' : 'Unable to save provider', message: reason ?? (locale === 'zh' ? '请检查配置后重试。' : 'Check the configuration and try again.') })
     if (response.ok) { setDraft(emptyAuthProvider()); await load() }
   }
   const remove = async (provider: AuthProviderView) => {
     if (!confirm(`${locale === 'zh' ? '删除' : 'Delete'} ${provider.display_name}?`)) return
     const response = await fetch(`/admin/api/auth-providers/${provider.id}`, { method: 'DELETE' })
-    setNotice(response.ok ? (locale === 'zh' ? '登录方式已删除。' : 'Identity provider deleted.') : (locale === 'zh' ? '仍有用户绑定此登录方式，无法删除。' : 'Provider cannot be deleted while user identities are linked.'))
+    setNotice(response.ok
+      ? { tone: 'success', title: locale === 'zh' ? '删除成功' : 'Provider deleted', message: `${provider.display_name} ${locale === 'zh' ? '已删除。' : 'was deleted.'}` }
+      : { tone: 'error', title: locale === 'zh' ? '无法删除' : 'Unable to delete provider', message: locale === 'zh' ? '仍有用户绑定此登录方式。' : 'User identities are still linked to this provider.' })
     if (response.ok) await load()
   }
   const test = async (provider: AuthProviderView) => {
-    const response = await fetch(`/admin/api/auth-providers/${provider.id}/test`, { method: 'POST' })
-    setNotice(response.ok ? `${provider.display_name} ${locale === 'zh' ? '连接正常。' : 'is reachable.'}` : `${provider.display_name} ${locale === 'zh' ? '连接检查失败。' : 'connectivity check failed.'}`)
+    setTestingProviderId(provider.id)
+    setNotice(null)
+    try {
+      const response = await fetch(`/admin/api/auth-providers/${provider.id}/test`, { method: 'POST' })
+      const result = await response.json().catch(() => ({})) as { ok?: boolean; error?: string }
+      const succeeded = response.ok && result.ok === true
+      setNotice(succeeded
+        ? { tone: 'success', title: locale === 'zh' ? '连接测试成功' : 'Provider connection succeeded', message: `${provider.display_name} ${locale === 'zh' ? '连接正常，可以用于用户登录。' : 'is reachable and ready for sign-in.'}` }
+        : { tone: 'error', title: locale === 'zh' ? '连接测试失败' : 'Provider connection failed', message: result.error ?? `${provider.display_name} ${locale === 'zh' ? '无法连接，请检查配置。' : 'could not be reached. Check its configuration.'}` })
+    } catch {
+      setNotice({ tone: 'error', title: locale === 'zh' ? '连接测试失败' : 'Provider connection failed', message: locale === 'zh' ? '无法连接本地 MirrorProxy 服务，请稍后重试。' : 'Could not reach the local MirrorProxy service. Try again shortly.' })
+    } finally {
+      setTestingProviderId(null)
+    }
   }
   const set = <K extends keyof AuthProviderDraft>(key: K, value: AuthProviderDraft[K]) => setDraft((current) => ({ ...current, [key]: value }))
   const custom = draft.preset.startsWith('custom_')
   return <section className="admin-tab-panel settings-stack identity-provider-settings">
-    <div className="settings-card"><div className="settings-card-head"><div><h4>OAuth2 / OpenID Connect</h4><p>{locale === 'zh' ? '优先选择平台模板，通常只需 Client ID 和 Client Secret。' : 'Start with a provider template; most platforms only need a client ID and secret.'}</p></div><button onClick={() => setDraft(emptyAuthProvider())}>{locale === 'zh' ? '新增登录方式' : 'New provider'}</button></div><div className="admin-account-list">{providers.map((provider) => <div className="admin-account-row" key={provider.id}><span><strong>{provider.display_name}</strong><small>{provider.kind.toUpperCase()} · {provider.enabled ? (locale === 'zh' ? '已启用' : 'enabled') : (locale === 'zh' ? '已停用' : 'disabled')}</small></span><span><button onClick={() => test(provider)}>{locale === 'zh' ? '测试' : 'Test'}</button><button onClick={() => edit(provider)}>{locale === 'zh' ? '编辑' : 'Edit'}</button><button onClick={() => remove(provider)}>{locale === 'zh' ? '删除' : 'Delete'}</button></span></div>)}</div></div>
-    <form className="settings-card provider-form" onSubmit={save}><label>{locale === 'zh' ? '平台模板' : 'Provider template'}<select value={draft.preset} onChange={(event) => chooseTemplate(event.target.value)}>{templates.map((template) => <option value={template.preset} key={template.preset}>{template.display_name}</option>)}</select></label><label>{locale === 'zh' ? '登录按钮名称' : 'Sign-in button label'}<input required maxLength={80} value={draft.display_name} onChange={(event) => set('display_name', event.target.value)} /></label><label>Client ID<input required value={draft.client_id} onChange={(event) => set('client_id', event.target.value)} /></label><label>Client Secret<input type="password" placeholder={draft.has_client_secret ? (locale === 'zh' ? '已保存，留空表示不修改' : 'Saved; leave blank to keep') : (locale === 'zh' ? '启用前必填' : 'Required before enabling')} value={draft.client_secret} onChange={(event) => set('client_secret', event.target.value)} /></label>{draft.kind === 'oidc' ? <label className="wide-field">Issuer URL<input required type="url" placeholder="https://id.example.com/realms/company" value={draft.issuer_url ?? ''} onChange={(event) => set('issuer_url', event.target.value || null)} /></label> : null}<label className="toggle-field"><input type="checkbox" checked={draft.enabled} onChange={(event) => set('enabled', event.target.checked)} />{locale === 'zh' ? '启用此登录方式' : 'Enable this provider'}</label><label className="toggle-field"><input type="checkbox" checked={draft.allow_registration} onChange={(event) => set('allow_registration', event.target.checked)} />{locale === 'zh' ? '允许符合条件的新用户' : 'Allow eligible new users'}</label><label className="toggle-field"><input type="checkbox" checked={draft.auto_link_by_email} onChange={(event) => set('auto_link_by_email', event.target.checked)} />{locale === 'zh' ? '按已验证邮箱自动绑定' : 'Auto-link verified matching email'}</label>{custom ? <details className="advanced-details wide-field"><summary>{locale === 'zh' ? '自定义协议高级字段' : 'Custom protocol fields'}</summary><div className="provider-advanced-grid"><label>{locale === 'zh' ? '唯一标识' : 'Slug'}<input required pattern="[a-z0-9-]{2,50}" value={draft.slug} onChange={(event) => set('slug', event.target.value.toLowerCase())} /></label><label>{locale === 'zh' ? '协议' : 'Protocol'}<select value={draft.kind} onChange={(event) => set('kind', event.target.value as 'oauth2' | 'oidc')}><option value="oauth2">OAuth2</option><option value="oidc">OpenID Connect</option></select></label>{draft.kind === 'oauth2' ? <><label>Authorization URL<input required type="url" value={draft.authorization_url ?? ''} onChange={(event) => set('authorization_url', event.target.value || null)} /></label><label>Token URL<input required type="url" value={draft.token_url ?? ''} onChange={(event) => set('token_url', event.target.value || null)} /></label><label>UserInfo URL<input required type="url" value={draft.userinfo_url ?? ''} onChange={(event) => set('userinfo_url', event.target.value || null)} /></label><label>{locale === 'zh' ? '已验证邮箱 URL' : 'Verified emails URL'}<input type="url" value={draft.emails_url ?? ''} onChange={(event) => set('emails_url', event.target.value || null)} /></label><label>{locale === 'zh' ? '用户 ID 字段' : 'Subject field'}<input value={draft.subject_field} onChange={(event) => set('subject_field', event.target.value)} /></label><label>{locale === 'zh' ? '邮箱字段' : 'Email field'}<input value={draft.email_field} onChange={(event) => set('email_field', event.target.value)} /></label><label>{locale === 'zh' ? '邮箱已验证字段' : 'Verified field'}<input value={draft.email_verified_field ?? ''} onChange={(event) => set('email_verified_field', event.target.value || null)} /></label><label>{locale === 'zh' ? '显示名称字段' : 'Name field'}<input value={draft.display_name_field} onChange={(event) => set('display_name_field', event.target.value)} /></label></> : null}<label className="wide-field">Scopes<input value={draft.scopes.join(' ')} onChange={(event) => set('scopes', event.target.value.split(/\s+/).filter(Boolean))} /></label></div></details> : null}<button className="primary-button" type="submit">{draft.id ? (locale === 'zh' ? '保存修改' : 'Update provider') : (locale === 'zh' ? '添加登录方式' : 'Add provider')}</button></form>
-    {notice ? <p className="inline-notice">{notice}</p> : null}<p className="provider-callback">{locale === 'zh' ? '回调地址' : 'Callback URL'}: <code>{window.location.origin}/api/auth/&lt;slug&gt;/callback</code></p>
+    {notice ? <div className={`admin-toast admin-toast-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} aria-live="polite"><span className="admin-toast-icon">{notice.tone === 'error' ? <CircleAlert size={19} /> : <CheckCircle2 size={19} />}</span><span className="admin-toast-copy"><strong>{notice.title}</strong><span>{notice.message}</span></span><button type="button" onClick={() => setNotice(null)} aria-label={locale === 'zh' ? '关闭提示' : 'Close notification'}><X size={16} /></button></div> : null}
+    <div className="settings-card"><div className="settings-card-head"><div><h4>OAuth2 / OpenID Connect</h4><p>{locale === 'zh' ? '优先选择平台模板，通常只需 Client ID 和 Client Secret。' : 'Start with a provider template; most platforms only need a client ID and secret.'}</p></div><button onClick={() => setDraft(emptyAuthProvider())}>{locale === 'zh' ? '新增登录方式' : 'New provider'}</button></div><div className="admin-account-list">{providers.map((provider) => <div className="admin-account-row" key={provider.id}><span><strong>{provider.display_name}</strong><small>{provider.kind.toUpperCase()} · {provider.enabled ? (locale === 'zh' ? '已启用' : 'enabled') : (locale === 'zh' ? '已停用' : 'disabled')}</small></span><span><button disabled={testingProviderId === provider.id} onClick={() => test(provider)}>{testingProviderId === provider.id ? (locale === 'zh' ? '测试中…' : 'Testing…') : (locale === 'zh' ? '测试' : 'Test')}</button><button onClick={() => edit(provider)}>{locale === 'zh' ? '编辑' : 'Edit'}</button><button onClick={() => remove(provider)}>{locale === 'zh' ? '删除' : 'Delete'}</button></span></div>)}</div></div>
+    <form className="settings-card provider-form" onSubmit={save}><div className="provider-registration-policy wide-field"><ShieldCheck size={18} /><span><strong>{locale === 'zh' ? '新用户规则由全局注册模式统一控制' : 'New-user access follows the global registration policy'}</strong><small>{locale === 'zh' ? '请在“访问与配额”中选择开放注册、指定邮箱域名、仅邀请或禁止新用户。所有已启用的第三方登录方式遵循同一规则；第三方返回已验证邮箱时，会自动绑定同邮箱的已有账户。' : 'Choose open, allowed domains, invitation only, or disabled under Access & quota. Every enabled provider follows that rule; a verified provider email is automatically linked to the matching existing account.'}</small></span></div><label>{locale === 'zh' ? '平台模板' : 'Provider template'}<select value={draft.preset} onChange={(event) => chooseTemplate(event.target.value)}>{templates.map((template) => <option value={template.preset} key={template.preset}>{template.display_name}</option>)}</select></label><label>{locale === 'zh' ? '登录按钮名称' : 'Sign-in button label'}<input required maxLength={80} value={draft.display_name} onChange={(event) => set('display_name', event.target.value)} /></label><label>Client ID<input required value={draft.client_id} onChange={(event) => set('client_id', event.target.value)} /></label><label>Client Secret<input type="password" placeholder={draft.has_client_secret ? (locale === 'zh' ? '已保存，留空表示不修改' : 'Saved; leave blank to keep') : (locale === 'zh' ? '启用前必填' : 'Required before enabling')} value={draft.client_secret} onChange={(event) => set('client_secret', event.target.value)} /></label>{draft.kind === 'oidc' ? <label className="wide-field">Issuer URL<input required type="url" placeholder="https://id.example.com/realms/company" value={draft.issuer_url ?? ''} onChange={(event) => set('issuer_url', event.target.value || null)} /></label> : null}<label className="toggle-field wide-field"><input type="checkbox" checked={draft.enabled} onChange={(event) => set('enabled', event.target.checked)} />{locale === 'zh' ? '启用此登录方式' : 'Enable this provider'}</label>{custom ? <details className="advanced-details wide-field"><summary>{locale === 'zh' ? '自定义协议高级字段' : 'Custom protocol fields'}</summary><div className="provider-advanced-grid"><label>{locale === 'zh' ? '唯一标识' : 'Slug'}<input required pattern="[a-z0-9-]{2,50}" value={draft.slug} onChange={(event) => set('slug', event.target.value.toLowerCase())} /></label><label>{locale === 'zh' ? '协议' : 'Protocol'}<select value={draft.kind} onChange={(event) => set('kind', event.target.value as 'oauth2' | 'oidc')}><option value="oauth2">OAuth2</option><option value="oidc">OpenID Connect</option></select></label>{draft.kind === 'oauth2' ? <><label>Authorization URL<input required type="url" value={draft.authorization_url ?? ''} onChange={(event) => set('authorization_url', event.target.value || null)} /></label><label>Token URL<input required type="url" value={draft.token_url ?? ''} onChange={(event) => set('token_url', event.target.value || null)} /></label><label>UserInfo URL<input required type="url" value={draft.userinfo_url ?? ''} onChange={(event) => set('userinfo_url', event.target.value || null)} /></label><label>{locale === 'zh' ? '已验证邮箱 URL' : 'Verified emails URL'}<input type="url" value={draft.emails_url ?? ''} onChange={(event) => set('emails_url', event.target.value || null)} /></label><label>{locale === 'zh' ? '用户 ID 字段' : 'Subject field'}<input value={draft.subject_field} onChange={(event) => set('subject_field', event.target.value)} /></label><label>{locale === 'zh' ? '邮箱字段' : 'Email field'}<input value={draft.email_field} onChange={(event) => set('email_field', event.target.value)} /></label><label>{locale === 'zh' ? '邮箱已验证字段' : 'Verified field'}<input value={draft.email_verified_field ?? ''} onChange={(event) => set('email_verified_field', event.target.value || null)} /></label><label>{locale === 'zh' ? '显示名称字段' : 'Name field'}<input value={draft.display_name_field} onChange={(event) => set('display_name_field', event.target.value)} /></label></> : null}<label className="wide-field">Scopes<input value={draft.scopes.join(' ')} onChange={(event) => set('scopes', event.target.value.split(/\s+/).filter(Boolean))} /></label></div></details> : null}<button className="primary-button" type="submit">{draft.id ? (locale === 'zh' ? '保存修改' : 'Update provider') : (locale === 'zh' ? '添加登录方式' : 'Add provider')}</button></form>
+    <p className="provider-callback">{locale === 'zh' ? '回调地址' : 'Callback URL'}: <code>{window.location.origin}/api/auth/&lt;slug&gt;/callback</code></p>
   </section>
 }
 
@@ -1486,15 +1604,18 @@ function AdminEmailSettings({ locale }: { locale: Locale }) {
     event.preventDefault()
     setSendingInvite(true); setInviteNotice(null)
     try {
-      const response = await fetch('/admin/api/invitations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: inviteEmail, display_name: inviteEmail.split('@')[0] }) })
+      const response = await fetch('/admin/api/invitations', { method: 'POST', headers: { 'content-type': 'application/json', 'x-mirrorproxy-locale': locale }, body: JSON.stringify({ email: inviteEmail, display_name: inviteEmail.split('@')[0] }) })
       if (!response.ok) { setInviteNotice({ tone: 'error', message: emailAdminError(await responseError(response), response.status, locale, locale === 'zh' ? '无法创建邀请。' : 'Unable to create invitation.') }); return }
       setInviteNotice({ tone: 'success', message: locale === 'zh' ? '邀请邮件已加入发送队列。' : 'Invitation queued for delivery.' })
       setInviteEmail(''); await load()
     } finally { setSendingInvite(false) }
   }
-  const revoke = async (id: number) => { await fetch(`/admin/api/invitations/${id}`, { method: 'DELETE' }); await load() }
+  const revoke = async (id: number) => {
+    if (!window.confirm(locale === 'zh' ? '确定撤销这条邀请吗？邀请链接会立即失效。' : 'Revoke this invitation? Its link will stop working immediately.')) return
+    await fetch(`/admin/api/invitations/${id}`, { method: 'DELETE' }); await load()
+  }
   const resend = async (id: number) => {
-    const response = await fetch(`/admin/api/invitations/${id}/resend`, { method: 'POST' })
+    const response = await fetch(`/admin/api/invitations/${id}/resend`, { method: 'POST', headers: { 'x-mirrorproxy-locale': locale } })
     setInviteNotice({ tone: response.ok ? 'success' : 'error', message: response.ok ? (locale === 'zh' ? '邀请邮件已重新加入队列。' : 'Invitation queued again.') : emailAdminError(await responseError(response), response.status, locale, locale === 'zh' ? '无法重新发送邀请。' : 'Unable to resend invitation.') })
     if (response.ok) await load()
   }
@@ -1503,7 +1624,7 @@ function AdminEmailSettings({ locale }: { locale: Locale }) {
     setTestingSmtp(true); setMailNotice(null)
     try {
       const response = await fetch('/admin/api/smtp/test', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ recipient: testRecipient }),
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-mirrorproxy-locale': locale }, body: JSON.stringify({ recipient: testRecipient }),
       })
       setMailNotice({ tone: response.ok ? 'success' : 'error', message: response.ok ? (locale === 'zh' ? '测试邮件已加入发送队列，请检查收件箱。' : 'Test email queued; check the recipient inbox.') : emailAdminError(await responseError(response), response.status, locale, locale === 'zh' ? '无法发送测试邮件。' : 'Unable to queue a test email.') })
     } finally { setTestingSmtp(false) }
@@ -1570,12 +1691,21 @@ function BillingUserRow({ initialUser, groups, locale, reloadUsers }: { initialU
     await load()
   }
   const toggle = async () => {
+    if (!window.confirm(user.disabled
+      ? (locale === 'zh' ? `确定启用用户 ${user.email} 吗？` : `Enable ${user.email}?`)
+      : (locale === 'zh' ? `确定禁用用户 ${user.email} 吗？该用户的登录会话会立即失效。` : `Disable ${user.email}? Their active sessions will be revoked immediately.`))) return
     const response = await fetch(`/admin/api/users/${user.id}/status`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ disabled: !user.disabled }) })
     if (response.ok) setUser({ ...user, disabled: !user.disabled })
   }
-  const rotate = async () => { await fetch(`/admin/api/users/${user.id}/routing-id/rotate`, { method: 'POST' }) }
+  const rotate = async () => {
+    if (!window.confirm(locale === 'zh' ? `确定更换 ${user.email} 的专属代理地址吗？当前地址会立即失效。` : `Rotate the dedicated proxy address for ${user.email}? The current address will stop working immediately.`)) return
+    await fetch(`/admin/api/users/${user.id}/routing-id/rotate`, { method: 'POST' })
+  }
   const loadIdentities = async () => { const response = await fetch(`/admin/api/users/${user.id}/identities`); if (response.ok) setIdentities(await response.json() as LinkedIdentity[]) }
-  const unlink = async (identity: LinkedIdentity) => { const response = await fetch(`/admin/api/users/${user.id}/identities/${identity.id}`, { method: 'DELETE' }); if (response.ok) await loadIdentities() }
+  const unlink = async (identity: LinkedIdentity) => {
+    if (!window.confirm(locale === 'zh' ? `确定解除 ${user.email} 与 ${identity.provider_name} 的绑定吗？` : `Unlink ${identity.provider_name} from ${user.email}?`)) return
+    const response = await fetch(`/admin/api/users/${user.id}/identities/${identity.id}`, { method: 'DELETE' }); if (response.ok) await loadIdentities()
+  }
   const remove = async () => { if (!confirm(locale === 'zh' ? `确定删除 ${user.email}？历史流量和审计记录会保留。` : `Soft-delete ${user.email}? Existing traffic and audit history will be retained.`)) return; const response = await fetch(`/admin/api/users/${user.id}`, { method: 'DELETE' }); if (response.ok) await reloadUsers() }
   return (
     <div className="admin-user-record">
@@ -1600,7 +1730,7 @@ function BillingUserRow({ initialUser, groups, locale, reloadUsers }: { initialU
           </div>
         </div> : null}
       </div>
-      {identities ? <div className="admin-identity-detail">{identities.length ? identities.map((identity) => <span key={identity.id}><strong>{identity.provider_name}</strong><small>{identity.email ?? identity.provider_subject}</small><button onClick={() => unlink(identity)}>{locale === 'zh' ? '解除绑定' : 'Unlink'}</button></span>) : <small>{locale === 'zh' ? '未绑定第三方登录身份。' : 'No linked external identities.'}</small>}</div> : null}
+      {identities ? <div className="admin-identity-detail">{identities.length ? identities.map((identity) => <span key={identity.id}><strong>{identity.provider_name}</strong><small>{identity.email ?? identity.provider_subject}</small><button className="revoke-button" onClick={() => unlink(identity)}>{locale === 'zh' ? '解除绑定' : 'Unlink'}</button></span>) : <small>{locale === 'zh' ? '未绑定第三方登录身份。' : 'No linked external identities.'}</small>}</div> : null}
     </div>
   )
 }
