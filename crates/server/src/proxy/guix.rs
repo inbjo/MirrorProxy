@@ -34,8 +34,8 @@ pub async fn proxy(
         return Err(ProxyError::Disabled("guix"));
     }
     let path = sanitize(&path)?;
-    let mut upstream =
-        reqwest::Url::parse(&config.upstreams.guix).map_err(|_| ProxyError::InvalidUrl)?;
+    let mut upstream = reqwest::Url::parse(proxy::select_upstream(&config.upstreams.guix)?)
+        .map_err(|_| ProxyError::InvalidUrl)?;
     let base_path = upstream.path().trim_end_matches('/');
     upstream.set_path(&format!("{base_path}/{path}"));
     upstream.set_query(request.uri().query());

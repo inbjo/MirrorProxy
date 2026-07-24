@@ -25,7 +25,6 @@ const SESSION_LIFETIME_SECS: i64 = 24 * 60 * 60;
 const ADMIN_LOGIN_FAILURE_LIMIT: i64 = 5;
 const ADMIN_LOGIN_LOCK_SECS: i64 = 15 * 60;
 const WEBAUTHN_CHALLENGE_LIFETIME_SECS: i64 = 5 * 60;
-const RECENT_ADMIN_VERIFICATION_SECS: i64 = 10 * 60;
 const ROUTING_ID_INSERT_ATTEMPTS: usize = 16;
 const USER_SESSION_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
 
@@ -35,9 +34,9 @@ pub struct Database {
 }
 
 pub struct InitialAdminCredentials {
-    pub username: &'static str,
+    pub username: String,
     pub password: String,
-    pub generated: bool,
+    pub password_generated: bool,
 }
 
 #[derive(Debug)]
@@ -71,6 +70,14 @@ pub enum AdminLoginOutcome {
     Locked { retry_after_secs: u64 },
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum AdminUsernameChangeOutcome {
+    Changed,
+    InvalidCredentials,
+    UsernameExists,
+}
+
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct AdminAccount {
     pub username: String,
@@ -133,7 +140,7 @@ pub struct SmtpSettings {
     pub security: String,
     pub username: Option<String>,
     #[serde(skip_serializing)]
-    pub encrypted_password: Option<String>,
+    pub password: Option<String>,
     pub from_name: String,
     pub from_address: String,
 }
@@ -153,7 +160,8 @@ pub struct OutboxMessage {
     pub id: i64,
     pub recipient: String,
     pub subject: String,
-    pub encrypted_body: String,
+    pub body: String,
+    pub html_body: Option<String>,
     pub attempts: u32,
 }
 
@@ -174,7 +182,7 @@ pub struct AuthProvider {
     pub enabled: bool,
     pub client_id: String,
     #[serde(skip_serializing)]
-    pub encrypted_client_secret: Option<String>,
+    pub client_secret: Option<String>,
     pub issuer_url: Option<String>,
     pub authorization_url: Option<String>,
     pub token_url: Option<String>,
@@ -203,7 +211,7 @@ pub struct ExternalUserIdentity {
 #[derive(Clone, Debug)]
 pub struct StoredAuthFlow {
     pub provider_id: i64,
-    pub encrypted_payload: String,
+    pub payload: String,
     pub mode: String,
     pub user_id: Option<i64>,
 }
@@ -362,6 +370,53 @@ impl Database {
             .context("failed to add traffic reservation column")?;
         }
         self.ensure_admin_columns().await?;
+        self.ensure_plaintext_secret_columns().await?;
+        self.ensure_email_outbox_columns().await?;
+        Ok(())
+    }
+
+    async fn ensure_email_outbox_columns(&self) -> anyhow::Result<()> {
+        let columns = sqlx::query("PRAGMA table_info(email_outbox)")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .filter_map(|row| row.try_get::<String, _>("name").ok())
+            .collect::<Vec<_>>();
+        if !columns.iter().any(|column| column == "html_body") {
+            sqlx::query("ALTER TABLE email_outbox ADD COLUMN html_body TEXT")
+                .execute(&self.pool)
+                .await
+                .context("failed to add email_outbox.html_body")?;
+        }
+        Ok(())
+    }
+
+    async fn ensure_plaintext_secret_columns(&self) -> anyhow::Result<()> {
+        for (table, old_column, new_column) in [
+            ("smtp_settings", "encrypted_password", "password"),
+            ("email_outbox", "encrypted_body", "body"),
+            ("auth_providers", "encrypted_client_secret", "client_secret"),
+            ("user_auth_flows", "encrypted_payload", "payload"),
+        ] {
+            let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
+                .fetch_all(&self.pool)
+                .await?
+                .into_iter()
+                .filter_map(|row| row.try_get::<String, _>("name").ok())
+                .collect::<Vec<_>>();
+            if columns.iter().any(|column| column == old_column)
+                && !columns.iter().any(|column| column == new_column)
+            {
+                sqlx::query(&format!(
+                    "ALTER TABLE {table} RENAME COLUMN {old_column} TO {new_column}"
+                ))
+                .execute(&self.pool)
+                .await
+                .with_context(|| {
+                    format!("failed to rename {table}.{old_column} to {new_column}")
+                })?;
+            }
+        }
         Ok(())
     }
 
@@ -426,16 +481,10 @@ impl Database {
             .iter()
             .filter_map(|row| row.try_get::<String, _>("name").ok())
             .collect::<Vec<_>>();
-        for (column, statement) in [
-            (
-                "auth_method",
-                "ALTER TABLE admin_sessions ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'password'",
-            ),
-            (
-                "verified_at",
-                "ALTER TABLE admin_sessions ADD COLUMN verified_at INTEGER NOT NULL DEFAULT 0",
-            ),
-        ] {
+        for (column, statement) in [(
+            "auth_method",
+            "ALTER TABLE admin_sessions ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'password'",
+        )] {
             if !session_columns.iter().any(|existing| existing == column) {
                 sqlx::query(statement)
                     .execute(&self.pool)
@@ -443,9 +492,6 @@ impl Database {
                     .with_context(|| format!("failed to add admin_sessions.{column}"))?;
             }
         }
-        sqlx::query("UPDATE admin_sessions SET verified_at = created_at WHERE verified_at = 0")
-            .execute(&self.pool)
-            .await?;
         Ok(())
     }
 
@@ -455,27 +501,42 @@ impl Database {
             .await?;
         let count: i64 = row.try_get("count")?;
         if count > 0 {
+            sqlx::query(
+                "INSERT OR IGNORE INTO settings (key, value, version, updated_at) SELECT 'initial_admin_user_handle', user_handle, 1, ? FROM admin_users WHERE role = 'super_admin' ORDER BY id LIMIT 1",
+            )
+            .bind(unix_timestamp())
+            .execute(&self.pool)
+            .await?;
             return Ok(None);
         }
 
-        let (password, generated) =
+        let username = "admin".to_string();
+        let (password, password_generated) =
             initial_admin_password(std::env::var("MIRRORPROXY_ADMIN_PASSWORD").ok());
         let password_hash = hash_password(&password)?;
+        let user_handle = Uuid::new_v4().to_string();
         let now = unix_timestamp();
         sqlx::query(
             "INSERT INTO admin_users (username, password_hash, user_handle, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         )
-        .bind("admin")
+        .bind(&username)
         .bind(password_hash)
-        .bind(Uuid::new_v4().to_string())
+        .bind(&user_handle)
         .bind(now)
         .bind(now)
         .execute(&self.pool)
         .await?;
+        sqlx::query(
+            "INSERT INTO settings (key, value, version, updated_at) VALUES ('initial_admin_user_handle', ?, 1, ?)",
+        )
+        .bind(user_handle)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
         Ok(Some(InitialAdminCredentials {
-            username: "admin",
+            username,
             password,
-            generated,
+            password_generated,
         }))
     }
 
@@ -560,13 +621,12 @@ impl Database {
         let token = random_secret(48);
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO admin_sessions (token_hash, username, auth_method, created_at, expires_at, last_used_at, verified_at) VALUES (?, ?, 'password', ?, ?, ?, ?)",
+            "INSERT INTO admin_sessions (token_hash, username, auth_method, created_at, expires_at, last_used_at) VALUES (?, ?, 'password', ?, ?, ?)",
         )
         .bind(hash_token(&token))
         .bind(username)
         .bind(now)
         .bind(expires_at)
-        .bind(now)
         .bind(now)
         .execute(&mut *transaction)
         .await?;
@@ -675,6 +735,77 @@ impl Database {
         Ok(true)
     }
 
+    pub async fn change_admin_username(
+        &self,
+        username: &str,
+        current_password: &str,
+        new_username: &str,
+    ) -> anyhow::Result<AdminUsernameChangeOutcome> {
+        let row = sqlx::query("SELECT password_hash FROM admin_users WHERE username = ?")
+            .bind(username)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else {
+            return Ok(AdminUsernameChangeOutcome::InvalidCredentials);
+        };
+        let password_hash: String = row.try_get("password_hash")?;
+        if !verify_password(current_password, &password_hash) {
+            return Ok(AdminUsernameChangeOutcome::InvalidCredentials);
+        }
+        if sqlx::query("SELECT 1 FROM admin_users WHERE username = ?")
+            .bind(new_username)
+            .fetch_optional(&self.pool)
+            .await?
+            .is_some()
+        {
+            return Ok(AdminUsernameChangeOutcome::UsernameExists);
+        }
+
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        for statement in [
+            "DELETE FROM admin_sessions WHERE username = ?",
+            "DELETE FROM admin_passkeys WHERE username = ?",
+            "DELETE FROM admin_webauthn_challenges WHERE username = ?",
+        ] {
+            sqlx::query(statement)
+                .bind(username)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        sqlx::query("UPDATE admin_users SET username = ?, updated_at = ? WHERE username = ?")
+            .bind(new_username)
+            .bind(now)
+            .bind(username)
+            .execute(&mut *transaction)
+            .await?;
+        let runtime_config = sqlx::query("SELECT value FROM settings WHERE key = 'runtime_config'")
+            .fetch_optional(&mut *transaction)
+            .await?;
+        if let Some(row) = runtime_config {
+            let raw: String = row.try_get("value")?;
+            let mut config: Config = serde_json::from_str(&raw)
+                .context("stored runtime configuration is invalid JSON")?;
+            if config.webauthn.break_glass_username == username {
+                config.webauthn.break_glass_username = new_username.to_string();
+                sqlx::query("UPDATE settings SET value = ?, version = version + 1, updated_at = ? WHERE key = 'runtime_config'")
+                    .bind(serde_json::to_string(&config)?)
+                    .bind(now)
+                    .execute(&mut *transaction)
+                    .await?;
+            }
+        }
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'change_admin_username', ?)")
+            .bind(now)
+            .bind(new_username)
+            .bind(format!("previous_username={username}; authentication state revoked"))
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(AdminUsernameChangeOutcome::Changed)
+    }
+
+    #[cfg(test)]
     pub async fn list_admins(&self) -> anyhow::Result<Vec<AdminAccount>> {
         sqlx::query(
             "SELECT username, role, disabled, created_at, updated_at FROM admin_users ORDER BY username",
@@ -750,6 +881,7 @@ impl Database {
         Ok(true)
     }
 
+    #[cfg(test)]
     pub async fn create_admin(
         &self,
         actor: &str,
@@ -781,6 +913,7 @@ impl Database {
         Ok(true)
     }
 
+    #[cfg(test)]
     pub async fn set_admin_disabled(
         &self,
         actor: &str,
@@ -832,6 +965,7 @@ impl Database {
         Ok(result.rows_affected() == 1)
     }
 
+    #[cfg(test)]
     pub async fn reset_admin_password(
         &self,
         actor: &str,
@@ -865,6 +999,67 @@ impl Database {
         .await?;
         transaction.commit().await?;
         Ok(true)
+    }
+
+    pub async fn reset_initial_admin_password(
+        &self,
+        actor: &str,
+    ) -> anyhow::Result<Option<InitialAdminCredentials>> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT username FROM admin_users WHERE user_handle = (SELECT value FROM settings WHERE key = 'initial_admin_user_handle')",
+        )
+            .fetch_optional(&mut *transaction)
+            .await?;
+        let row = match row {
+            Some(row) => row,
+            None => {
+                let fallback = sqlx::query(
+                    "SELECT username, user_handle FROM admin_users WHERE role = 'super_admin' ORDER BY id LIMIT 1",
+                )
+                .fetch_optional(&mut *transaction)
+                .await?;
+                let Some(fallback) = fallback else {
+                    return Ok(None);
+                };
+                let user_handle: String = fallback.try_get("user_handle")?;
+                sqlx::query("INSERT INTO settings (key, value, version, updated_at) VALUES ('initial_admin_user_handle', ?, 1, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, version = settings.version + 1, updated_at = excluded.updated_at")
+                    .bind(user_handle)
+                    .bind(now)
+                    .execute(&mut *transaction)
+                    .await?;
+                fallback
+            }
+        };
+        let username: String = row.try_get("username")?;
+        let password = random_secret(28);
+        sqlx::query(
+            "UPDATE admin_users SET password_hash = ?, disabled = 0, failed_login_count = 0, locked_until = NULL, updated_at = ? WHERE username = ?",
+        )
+        .bind(hash_password(&password)?)
+        .bind(now)
+        .bind(&username)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query("DELETE FROM admin_sessions WHERE username = ?")
+            .bind(&username)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query(
+            "INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'admin_password_reset', ?)",
+        )
+        .bind(now)
+        .bind(actor)
+        .bind(format!("username={username}; all sessions revoked"))
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(Some(InitialAdminCredentials {
+            username,
+            password,
+            password_generated: true,
+        }))
     }
 
     pub async fn admin_user_handle(&self, username: &str) -> anyhow::Result<Option<Uuid>> {
@@ -1087,19 +1282,6 @@ impl Database {
         Ok(Some((row.try_get("username")?, row.try_get("state_json")?)))
     }
 
-    pub async fn is_recent_admin_session(&self, token: &str) -> anyhow::Result<bool> {
-        let now = unix_timestamp();
-        let row = sqlx::query(
-            "SELECT COUNT(*) AS count FROM admin_sessions WHERE token_hash = ? AND expires_at > ? AND verified_at >= ?",
-        )
-        .bind(hash_token(token))
-        .bind(now)
-        .bind(now - RECENT_ADMIN_VERIFICATION_SECS)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(row.try_get::<i64, _>("count")? == 1)
-    }
-
     pub async fn create_passkey_session(
         &self,
         username: &str,
@@ -1118,13 +1300,12 @@ impl Database {
         let token = random_secret(48);
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO admin_sessions (token_hash, username, auth_method, created_at, expires_at, last_used_at, verified_at) VALUES (?, ?, 'passkey', ?, ?, ?, ?)",
+            "INSERT INTO admin_sessions (token_hash, username, auth_method, created_at, expires_at, last_used_at) VALUES (?, ?, 'passkey', ?, ?, ?)",
         )
         .bind(hash_token(&token))
         .bind(username)
         .bind(now)
         .bind(expires_at)
-        .bind(now)
         .bind(now)
         .execute(&mut *transaction)
         .await?;
@@ -1532,17 +1713,17 @@ impl Database {
     }
 
     pub async fn list_auth_providers(&self) -> anyhow::Result<Vec<AuthProvider>> {
-        sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, encrypted_client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers ORDER BY display_name")
+        sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers ORDER BY display_name")
             .fetch_all(&self.pool).await?.into_iter().map(auth_provider_from_row).collect()
     }
 
     pub async fn auth_provider_by_slug(&self, slug: &str) -> anyhow::Result<Option<AuthProvider>> {
-        sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, encrypted_client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers WHERE slug = ? COLLATE NOCASE")
+        sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers WHERE slug = ? COLLATE NOCASE")
             .bind(slug).fetch_optional(&self.pool).await?.map(auth_provider_from_row).transpose()
     }
 
     pub async fn auth_provider_by_id(&self, id: i64) -> anyhow::Result<Option<AuthProvider>> {
-        sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, encrypted_client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers WHERE id = ?")
+        sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers WHERE id = ?")
             .bind(id).fetch_optional(&self.pool).await?.map(auth_provider_from_row).transpose()
     }
 
@@ -1553,22 +1734,22 @@ impl Database {
         preserve_secret: bool,
     ) -> anyhow::Result<i64> {
         let now = unix_timestamp();
-        let encrypted_secret = if preserve_secret && provider.id != 0 {
-            sqlx::query("SELECT encrypted_client_secret FROM auth_providers WHERE id = ?")
+        let client_secret = if preserve_secret && provider.id != 0 {
+            sqlx::query("SELECT client_secret FROM auth_providers WHERE id = ?")
                 .bind(provider.id)
                 .fetch_optional(&self.pool)
                 .await?
-                .map(|row| row.try_get::<Option<String>, _>("encrypted_client_secret"))
+                .map(|row| row.try_get::<Option<String>, _>("client_secret"))
                 .transpose()?
                 .flatten()
         } else {
-            provider.encrypted_client_secret.clone()
+            provider.client_secret.clone()
         };
         let scopes = serde_json::to_string(&provider.scopes)?;
         let mut transaction = self.pool.begin().await?;
         let id = if provider.id == 0 {
-            sqlx::query("INSERT INTO auth_providers (slug, display_name, kind, preset, enabled, client_id, encrypted_client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(&provider.slug).bind(&provider.display_name).bind(&provider.kind).bind(&provider.preset).bind(provider.enabled).bind(&provider.client_id).bind(&encrypted_secret).bind(&provider.issuer_url).bind(&provider.authorization_url).bind(&provider.token_url).bind(&provider.userinfo_url).bind(&provider.emails_url).bind(&scopes).bind(&provider.subject_field).bind(&provider.email_field).bind(&provider.email_verified_field).bind(&provider.display_name_field).bind(provider.allow_registration).bind(provider.auto_link_by_email).bind(now).bind(now).execute(&mut *transaction).await?.last_insert_rowid()
+            sqlx::query("INSERT INTO auth_providers (slug, display_name, kind, preset, enabled, client_id, client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(&provider.slug).bind(&provider.display_name).bind(&provider.kind).bind(&provider.preset).bind(provider.enabled).bind(&provider.client_id).bind(&client_secret).bind(&provider.issuer_url).bind(&provider.authorization_url).bind(&provider.token_url).bind(&provider.userinfo_url).bind(&provider.emails_url).bind(&scopes).bind(&provider.subject_field).bind(&provider.email_field).bind(&provider.email_verified_field).bind(&provider.display_name_field).bind(provider.allow_registration).bind(provider.auto_link_by_email).bind(now).bind(now).execute(&mut *transaction).await?.last_insert_rowid()
         } else {
             let previous_slug: String =
                 sqlx::query_scalar("SELECT slug FROM auth_providers WHERE id = ?")
@@ -1576,8 +1757,8 @@ impl Database {
                     .fetch_optional(&mut *transaction)
                     .await?
                     .context("authentication provider not found")?;
-            let result = sqlx::query("UPDATE auth_providers SET slug=?, display_name=?, kind=?, preset=?, enabled=?, client_id=?, encrypted_client_secret=?, issuer_url=?, authorization_url=?, token_url=?, userinfo_url=?, emails_url=?, scopes_json=?, subject_field=?, email_field=?, email_verified_field=?, display_name_field=?, allow_registration=?, auto_link_by_email=?, updated_at=? WHERE id=?")
-                .bind(&provider.slug).bind(&provider.display_name).bind(&provider.kind).bind(&provider.preset).bind(provider.enabled).bind(&provider.client_id).bind(&encrypted_secret).bind(&provider.issuer_url).bind(&provider.authorization_url).bind(&provider.token_url).bind(&provider.userinfo_url).bind(&provider.emails_url).bind(&scopes).bind(&provider.subject_field).bind(&provider.email_field).bind(&provider.email_verified_field).bind(&provider.display_name_field).bind(provider.allow_registration).bind(provider.auto_link_by_email).bind(now).bind(provider.id).execute(&mut *transaction).await?;
+            let result = sqlx::query("UPDATE auth_providers SET slug=?, display_name=?, kind=?, preset=?, enabled=?, client_id=?, client_secret=?, issuer_url=?, authorization_url=?, token_url=?, userinfo_url=?, emails_url=?, scopes_json=?, subject_field=?, email_field=?, email_verified_field=?, display_name_field=?, allow_registration=?, auto_link_by_email=?, updated_at=? WHERE id=?")
+                .bind(&provider.slug).bind(&provider.display_name).bind(&provider.kind).bind(&provider.preset).bind(provider.enabled).bind(&provider.client_id).bind(&client_secret).bind(&provider.issuer_url).bind(&provider.authorization_url).bind(&provider.token_url).bind(&provider.userinfo_url).bind(&provider.emails_url).bind(&scopes).bind(&provider.subject_field).bind(&provider.email_field).bind(&provider.email_verified_field).bind(&provider.display_name_field).bind(provider.allow_registration).bind(provider.auto_link_by_email).bind(now).bind(provider.id).execute(&mut *transaction).await?;
             if result.rows_affected() == 0 {
                 anyhow::bail!("authentication provider not found");
             }
@@ -1624,7 +1805,7 @@ impl Database {
         &self,
         state: &str,
         provider_id: i64,
-        encrypted_payload: &str,
+        payload: &str,
         mode: &str,
         user_id: Option<i64>,
         expires_at: i64,
@@ -1634,15 +1815,15 @@ impl Database {
             .bind(now)
             .execute(&self.pool)
             .await?;
-        sqlx::query("INSERT INTO user_auth_flows (state_hash, provider_id, encrypted_payload, mode, user_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-            .bind(hash_token(state)).bind(provider_id).bind(encrypted_payload).bind(mode).bind(user_id).bind(expires_at).bind(now).execute(&self.pool).await?;
+        sqlx::query("INSERT INTO user_auth_flows (state_hash, provider_id, payload, mode, user_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind(hash_token(state)).bind(provider_id).bind(payload).bind(mode).bind(user_id).bind(expires_at).bind(now).execute(&self.pool).await?;
         Ok(())
     }
 
     pub async fn take_user_auth_flow(&self, state: &str) -> anyhow::Result<Option<StoredAuthFlow>> {
         let now = unix_timestamp();
         let mut transaction = self.pool.begin().await?;
-        let row = sqlx::query("SELECT provider_id, encrypted_payload, mode, user_id FROM user_auth_flows WHERE state_hash = ? AND expires_at > ? AND used_at IS NULL")
+        let row = sqlx::query("SELECT provider_id, payload, mode, user_id FROM user_auth_flows WHERE state_hash = ? AND expires_at > ? AND used_at IS NULL")
             .bind(hash_token(state)).bind(now).fetch_optional(&mut *transaction).await?;
         let Some(row) = row else {
             return Ok(None);
@@ -1660,7 +1841,7 @@ impl Database {
         transaction.commit().await?;
         Ok(Some(StoredAuthFlow {
             provider_id: row.try_get("provider_id")?,
-            encrypted_payload: row.try_get("encrypted_payload")?,
+            payload: row.try_get("payload")?,
             mode: row.try_get("mode")?,
             user_id: row.try_get("user_id")?,
         }))
@@ -1738,7 +1919,7 @@ impl Database {
     }
 
     pub async fn smtp_settings(&self) -> anyhow::Result<Option<SmtpSettings>> {
-        sqlx::query("SELECT enabled, host, port, security, username, encrypted_password, from_name, from_address FROM smtp_settings WHERE singleton = 1")
+        sqlx::query("SELECT enabled, host, port, security, username, password, from_name, from_address FROM smtp_settings WHERE singleton = 1")
             .fetch_optional(&self.pool)
             .await?
             .map(|row| {
@@ -1748,7 +1929,7 @@ impl Database {
                     port: row.try_get::<i64, _>("port")? as u16,
                     security: row.try_get("security")?,
                     username: row.try_get("username")?,
-                    encrypted_password: row.try_get("encrypted_password")?,
+                    password: row.try_get("password")?,
                     from_name: row.try_get("from_name")?,
                     from_address: row.try_get("from_address")?,
                 })
@@ -1764,21 +1945,21 @@ impl Database {
         preserve_password: bool,
     ) -> anyhow::Result<()> {
         let now = unix_timestamp();
-        let encrypted_password = if preserve_password {
+        let password = if preserve_password {
             self.smtp_settings()
                 .await?
-                .and_then(|current| current.encrypted_password)
+                .and_then(|current| current.password)
         } else {
-            settings.encrypted_password.clone()
+            settings.password.clone()
         };
         let mut transaction = self.pool.begin().await?;
-        sqlx::query("INSERT INTO smtp_settings (singleton, enabled, host, port, security, username, encrypted_password, from_name, from_address, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET enabled=excluded.enabled, host=excluded.host, port=excluded.port, security=excluded.security, username=excluded.username, encrypted_password=excluded.encrypted_password, from_name=excluded.from_name, from_address=excluded.from_address, updated_at=excluded.updated_at")
+        sqlx::query("INSERT INTO smtp_settings (singleton, enabled, host, port, security, username, password, from_name, from_address, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET enabled=excluded.enabled, host=excluded.host, port=excluded.port, security=excluded.security, username=excluded.username, password=excluded.password, from_name=excluded.from_name, from_address=excluded.from_address, updated_at=excluded.updated_at")
             .bind(settings.enabled)
             .bind(&settings.host)
             .bind(i64::from(settings.port))
             .bind(&settings.security)
             .bind(&settings.username)
-            .bind(encrypted_password)
+            .bind(password)
             .bind(&settings.from_name)
             .bind(&settings.from_address)
             .bind(now)
@@ -1823,7 +2004,8 @@ impl Database {
     }
 
     pub async fn list_email_invitations(&self) -> anyhow::Result<Vec<EmailInvitation>> {
-        sqlx::query("SELECT id, email, display_name, status, expires_at, created_at FROM email_invitations ORDER BY id DESC")
+        sqlx::query("SELECT id, email, display_name, status, expires_at, created_at FROM email_invitations WHERE created_at >= ? ORDER BY id DESC LIMIT 10")
+            .bind(unix_timestamp() - 3 * 24 * 60 * 60)
             .fetch_all(&self.pool)
             .await?
             .into_iter()
@@ -1954,11 +2136,12 @@ impl Database {
         &self,
         recipient: &str,
         subject: &str,
-        encrypted_body: &str,
+        body: &str,
+        html_body: Option<&str>,
     ) -> anyhow::Result<i64> {
         let now = unix_timestamp();
-        let result = sqlx::query("INSERT INTO email_outbox (recipient, subject, encrypted_body, next_attempt_at, created_at) VALUES (?, ?, ?, ?, ?)")
-            .bind(normalize_email(recipient)).bind(subject).bind(encrypted_body).bind(now).bind(now).execute(&self.pool).await?;
+        let result = sqlx::query("INSERT INTO email_outbox (recipient, subject, body, html_body, next_attempt_at, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(normalize_email(recipient)).bind(subject).bind(body).bind(html_body).bind(now).bind(now).execute(&self.pool).await?;
         Ok(result.last_insert_rowid())
     }
 
@@ -2003,9 +2186,9 @@ impl Database {
     }
 
     pub async fn pending_outbox(&self, limit: u32) -> anyhow::Result<Vec<OutboxMessage>> {
-        sqlx::query("SELECT id, recipient, subject, encrypted_body, attempts FROM email_outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?")
+        sqlx::query("SELECT id, recipient, subject, body, html_body, attempts FROM email_outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?")
             .bind(unix_timestamp()).bind(i64::from(limit)).fetch_all(&self.pool).await?
-            .into_iter().map(|row| Ok(OutboxMessage { id: row.try_get("id")?, recipient: row.try_get("recipient")?, subject: row.try_get("subject")?, encrypted_body: row.try_get("encrypted_body")?, attempts: row.try_get::<i64, _>("attempts")? as u32 }))
+            .into_iter().map(|row| Ok(OutboxMessage { id: row.try_get("id")?, recipient: row.try_get("recipient")?, subject: row.try_get("subject")?, body: row.try_get("body")?, html_body: row.try_get("html_body")?, attempts: row.try_get::<i64, _>("attempts")? as u32 }))
             .collect::<Result<Vec<_>, sqlx::Error>>().map_err(Into::into)
     }
 
@@ -2561,12 +2744,21 @@ impl Database {
         }))
     }
 
-    pub async fn recent_audit_log(&self, limit: u32) -> anyhow::Result<Vec<AuditLogEntry>> {
-        let limit = i64::from(limit.clamp(1, 100));
-        sqlx::query(
-            "SELECT created_at, username, action, detail FROM config_audit_log ORDER BY created_at DESC, id DESC LIMIT ?",
+    pub async fn audit_log_page(
+        &self,
+        page: u32,
+        per_page: u32,
+    ) -> anyhow::Result<(Vec<AuditLogEntry>, u64)> {
+        let page = page.max(1);
+        let per_page = per_page.clamp(1, 50);
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM config_audit_log")
+            .fetch_one(&self.pool)
+            .await?;
+        let rows = sqlx::query(
+            "SELECT created_at, username, action, detail FROM config_audit_log ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
         )
-        .bind(limit)
+        .bind(i64::from(per_page))
+        .bind(i64::from(page.saturating_sub(1)) * i64::from(per_page))
         .fetch_all(&self.pool)
         .await?
         .into_iter()
@@ -2578,8 +2770,8 @@ impl Database {
                 detail: row.try_get("detail")?,
             })
         })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(Into::into)
+        .collect::<Result<Vec<_>, _>>()?;
+        Ok((rows, total.max(0) as u64))
     }
 }
 
@@ -2656,7 +2848,7 @@ fn auth_provider_from_row(row: SqliteRow) -> anyhow::Result<AuthProvider> {
         preset: row.try_get("preset")?,
         enabled: row.try_get("enabled")?,
         client_id: row.try_get("client_id")?,
-        encrypted_client_secret: row.try_get("encrypted_client_secret")?,
+        client_secret: row.try_get("client_secret")?,
         issuer_url: row.try_get("issuer_url")?,
         authorization_url: row.try_get("authorization_url")?,
         token_url: row.try_get("token_url")?,
@@ -2742,7 +2934,7 @@ const MIGRATIONS: &[&str] = &[
     "PRAGMA journal_mode = WAL",
     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS admin_users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'super_admin', disabled INTEGER NOT NULL DEFAULT 0, failed_login_count INTEGER NOT NULL DEFAULT 0, locked_until INTEGER, user_handle TEXT UNIQUE, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS admin_sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, auth_method TEXT NOT NULL DEFAULT 'password', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, verified_at INTEGER NOT NULL DEFAULT 0, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS admin_sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, auth_method TEXT NOT NULL DEFAULT 'password', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS admin_passkeys (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, name TEXT NOT NULL, credential_id TEXT NOT NULL UNIQUE, passkey_json TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS admin_webauthn_challenges (challenge_hash TEXT PRIMARY KEY, username TEXT NOT NULL, kind TEXT NOT NULL, state_json TEXT NOT NULL, session_token_hash TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, disabled INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
@@ -2756,13 +2948,13 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS user_traffic_monthly (month TEXT NOT NULL, user_id INTEGER NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(month, user_id), FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS group_traffic_monthly (month TEXT NOT NULL, group_id INTEGER NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(month, group_id), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS user_routing_ids (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, public_number INTEGER NOT NULL UNIQUE, routing_id TEXT NOT NULL UNIQUE COLLATE NOCASE, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, revoked_at INTEGER, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
-    "CREATE TABLE IF NOT EXISTS smtp_settings (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), enabled INTEGER NOT NULL DEFAULT 0, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 587, security TEXT NOT NULL DEFAULT 'starttls', username TEXT, encrypted_password TEXT, from_name TEXT NOT NULL DEFAULT 'MirrorProxy', from_address TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS smtp_settings (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), enabled INTEGER NOT NULL DEFAULT 0, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 587, security TEXT NOT NULL DEFAULT 'starttls', username TEXT, password TEXT, from_name TEXT NOT NULL DEFAULT 'MirrorProxy', from_address TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS email_invitations (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, display_name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'pending', expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, accepted_at INTEGER, revoked_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS email_login_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, code_hash TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, invitation_id INTEGER, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL, FOREIGN KEY(invitation_id) REFERENCES email_invitations(id) ON DELETE SET NULL)",
-    "CREATE TABLE IF NOT EXISTS email_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT NOT NULL, subject TEXT NOT NULL, encrypted_body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, last_error TEXT, created_at INTEGER NOT NULL, sent_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS email_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, html_body TEXT, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, last_error TEXT, created_at INTEGER NOT NULL, sent_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS email_rate_limits (limit_key TEXT PRIMARY KEY, window_start INTEGER NOT NULL, request_count INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS auth_providers (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL UNIQUE COLLATE NOCASE, display_name TEXT NOT NULL, kind TEXT NOT NULL, preset TEXT NOT NULL DEFAULT 'custom', enabled INTEGER NOT NULL DEFAULT 0, client_id TEXT NOT NULL, encrypted_client_secret TEXT, issuer_url TEXT, authorization_url TEXT, token_url TEXT, userinfo_url TEXT, emails_url TEXT, scopes_json TEXT NOT NULL, subject_field TEXT NOT NULL DEFAULT 'id', email_field TEXT NOT NULL DEFAULT 'email', email_verified_field TEXT, display_name_field TEXT NOT NULL DEFAULT 'name', allow_registration INTEGER NOT NULL DEFAULT 0, auto_link_by_email INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS user_auth_flows (state_hash TEXT PRIMARY KEY, provider_id INTEGER NOT NULL, encrypted_payload TEXT NOT NULL, mode TEXT NOT NULL, user_id INTEGER, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL, FOREIGN KEY(provider_id) REFERENCES auth_providers(id) ON DELETE CASCADE, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS auth_providers (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL UNIQUE COLLATE NOCASE, display_name TEXT NOT NULL, kind TEXT NOT NULL, preset TEXT NOT NULL DEFAULT 'custom', enabled INTEGER NOT NULL DEFAULT 0, client_id TEXT NOT NULL, client_secret TEXT, issuer_url TEXT, authorization_url TEXT, token_url TEXT, userinfo_url TEXT, emails_url TEXT, scopes_json TEXT NOT NULL, subject_field TEXT NOT NULL DEFAULT 'id', email_field TEXT NOT NULL DEFAULT 'email', email_verified_field TEXT, display_name_field TEXT NOT NULL DEFAULT 'name', allow_registration INTEGER NOT NULL DEFAULT 0, auto_link_by_email INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS user_auth_flows (state_hash TEXT PRIMARY KEY, provider_id INTEGER NOT NULL, payload TEXT NOT NULL, mode TEXT NOT NULL, user_id INTEGER, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL, FOREIGN KEY(provider_id) REFERENCES auth_providers(id) ON DELETE CASCADE, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS proxy_targets (code TEXT PRIMARY KEY, enabled INTEGER NOT NULL, upstream_url TEXT NOT NULL, route_prefix TEXT NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS traffic_daily (day TEXT NOT NULL, target_code TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, target_code))",
     "CREATE TABLE IF NOT EXISTS traffic_monthly (month TEXT PRIMARY KEY, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, quota_exceeded INTEGER NOT NULL DEFAULT 0)",
@@ -2811,13 +3003,13 @@ mod tests {
         let credentials = credentials.expect("first database open should create admin");
         assert_eq!(credentials.username, "admin");
         assert!(database
-            .login("admin", "wrong-password")
+            .login(&credentials.username, "wrong-password")
             .await
             .unwrap()
             .is_none());
 
         let session = database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
@@ -2831,21 +3023,25 @@ mod tests {
         let (database, credentials) = Database::open(":memory:").await.unwrap();
         let credentials = credentials.unwrap();
         let session = database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
         assert!(!database
-            .change_admin_password("admin", "wrong", "next-password-123")
+            .change_admin_password(&credentials.username, "wrong", "next-password-123")
             .await
             .unwrap());
         assert!(database
-            .change_admin_password("admin", &credentials.password, "next-password-123")
+            .change_admin_password(
+                &credentials.username,
+                &credentials.password,
+                "next-password-123",
+            )
             .await
             .unwrap());
         assert!(!database.authorize(&session.token).await.unwrap());
         assert!(database
-            .login("admin", "next-password-123")
+            .login(&credentials.username, "next-password-123")
             .await
             .unwrap()
             .is_some());
@@ -2857,7 +3053,7 @@ mod tests {
         let credentials = credentials.unwrap();
         for attempt in 0..ADMIN_LOGIN_FAILURE_LIMIT {
             let outcome = database
-                .login_with_context("admin", "wrong-password", "192.0.2.1")
+                .login_with_context(&credentials.username, "wrong-password", "192.0.2.1")
                 .await
                 .unwrap();
             if attempt + 1 < ADMIN_LOGIN_FAILURE_LIMIT {
@@ -2868,7 +3064,7 @@ mod tests {
         }
         assert!(matches!(
             database
-                .login_with_context("admin", &credentials.password, "192.0.2.1")
+                .login_with_context(&credentials.username, &credentials.password, "192.0.2.1")
                 .await
                 .unwrap(),
             AdminLoginOutcome::Locked { .. }
@@ -2877,7 +3073,8 @@ mod tests {
 
     #[tokio::test]
     async fn manages_multiple_admins_and_protects_the_last_super_admin() {
-        let (database, _) = Database::open(":memory:").await.unwrap();
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let initial_username = credentials.unwrap().username;
         assert!(database
             .create_admin("admin", "operator", "operator-password-123", "admin")
             .await
@@ -2887,7 +3084,7 @@ mod tests {
             .await
             .unwrap());
         assert!(!database
-            .set_admin_disabled("admin", "admin", true)
+            .set_admin_disabled("admin", &initial_username, true)
             .await
             .unwrap());
         assert!(database
@@ -3035,6 +3232,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invitation_history_is_limited_to_three_days_and_ten_rows() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        for index in 0..12 {
+            database
+                .create_email_invitation(
+                    "admin",
+                    &format!("person-{index}@example.com"),
+                    "Person",
+                    &format!("token-{index}"),
+                    unix_timestamp() + 600,
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(database.list_email_invitations().await.unwrap().len(), 10);
+
+        sqlx::query("UPDATE email_invitations SET created_at = ?")
+            .bind(unix_timestamp() - 4 * 24 * 60 * 60)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        assert!(database.list_email_invitations().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn email_codes_lock_after_five_failures_and_sends_are_rate_limited() {
         let (database, _) = Database::open(":memory:").await.unwrap();
         database
@@ -3076,13 +3298,13 @@ mod tests {
     async fn email_outbox_retries_are_bounded_and_errors_are_sanitized() {
         let (database, _) = Database::open(":memory:").await.unwrap();
         let id = database
-            .enqueue_email("PERSON@example.com", "Subject", "encrypted-value")
+            .enqueue_email("PERSON@example.com", "Subject", "message body", None)
             .await
             .unwrap();
         let queued = database.pending_outbox(10).await.unwrap();
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].recipient, "person@example.com");
-        assert_eq!(queued[0].encrypted_body, "encrypted-value");
+        assert_eq!(queued[0].body, "message body");
 
         database
             .mark_outbox_failed(id, 5, &"x".repeat(300))
@@ -3099,6 +3321,43 @@ mod tests {
         assert_eq!(row.try_get::<String, _>("status").unwrap(), "failed");
         assert_eq!(row.try_get::<i64, _>("attempts").unwrap(), 5);
         assert_eq!(row.try_get::<i64, _>("error_length").unwrap(), 200);
+    }
+
+    #[tokio::test]
+    async fn smtp_password_and_outbox_body_are_stored_as_plaintext() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        database
+            .save_smtp_settings(
+                "admin",
+                &SmtpSettings {
+                    enabled: true,
+                    host: "smtp.example.com".to_string(),
+                    port: 587,
+                    security: "starttls".to_string(),
+                    username: Some("mailer".to_string()),
+                    password: Some("smtp-secret".to_string()),
+                    from_name: "MirrorProxy".to_string(),
+                    from_address: "mirror@example.com".to_string(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        database
+            .enqueue_email("person@example.com", "Subject", "plain body", None)
+            .await
+            .unwrap();
+
+        let password: String = sqlx::query_scalar("SELECT password FROM smtp_settings")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+        let body: String = sqlx::query_scalar("SELECT body FROM email_outbox")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+        assert_eq!(password, "smtp-secret");
+        assert_eq!(body, "plain body");
     }
 
     #[tokio::test]
@@ -3158,6 +3417,108 @@ mod tests {
         assert!(!database.authorize(&session.token).await.unwrap());
         assert!(database
             .login("operator", "replacement-password-123")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn username_change_and_password_reset_follow_the_renamed_initial_admin() {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let credentials = credentials.unwrap();
+        let mut config = Config::default();
+        config.webauthn.break_glass_username = credentials.username.clone();
+        database
+            .save_runtime_config("system", &config, "seed runtime configuration")
+            .await
+            .unwrap();
+        let session = database
+            .login(&credentials.username, &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            database
+                .change_admin_username(
+                    &credentials.username,
+                    &credentials.password,
+                    "recovered-admin",
+                )
+                .await
+                .unwrap(),
+            AdminUsernameChangeOutcome::Changed
+        );
+        assert!(!database.authorize(&session.token).await.unwrap());
+        assert!(database
+            .login(&credentials.username, &credentials.password)
+            .await
+            .unwrap()
+            .is_none());
+        let recovered_session = database
+            .login("recovered-admin", &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            database
+                .load_or_seed_runtime_config(Config::default())
+                .await
+                .unwrap()
+                .webauthn
+                .break_glass_username,
+            "recovered-admin"
+        );
+        let replacement = database
+            .reset_initial_admin_password("cli")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(replacement.username, "recovered-admin");
+        assert_eq!(replacement.password.len(), 28);
+        assert!(!database.authorize(&recovered_session.token).await.unwrap());
+        assert!(database
+            .login("recovered-admin", &credentials.password)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(database
+            .login("recovered-admin", &replacement.password)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(database
+            .audit_log_page(1, 10)
+            .await
+            .unwrap()
+            .0
+            .iter()
+            .any(|entry| entry.action == "admin_password_reset"
+                && entry.detail.contains("username=recovered-admin")));
+    }
+
+    #[tokio::test]
+    async fn username_change_rejects_an_existing_username_without_changing_credentials() {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let credentials = credentials.unwrap();
+        database
+            .create_admin("cli", "existing-admin", "existing-password-123", "admin")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            database
+                .change_admin_username(
+                    &credentials.username,
+                    &credentials.password,
+                    "existing-admin",
+                )
+                .await
+                .unwrap(),
+            AdminUsernameChangeOutcome::UsernameExists
+        );
+        assert!(database
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .is_some());
@@ -3304,6 +3665,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn public_and_user_reservations_share_the_global_traffic_limit() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let user = database
+            .create_user("admin", "shared-limit@example.com", "Shared Limit", 12)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(database
+            .try_reserve_monthly_bytes("2026-07", 10, 6)
+            .await
+            .unwrap());
+        assert_eq!(
+            database
+                .try_reserve_hierarchical_bytes("2026-07", user.id, Some(10), Some(8), 5)
+                .await
+                .unwrap(),
+            HierarchicalReservationOutcome::Exceeded { scope: "global" }
+        );
+        assert_eq!(
+            database
+                .try_reserve_hierarchical_bytes("2026-07", user.id, Some(10), Some(8), 4)
+                .await
+                .unwrap(),
+            HierarchicalReservationOutcome::Reserved { group_id: None }
+        );
+    }
+
+    #[tokio::test]
     async fn hierarchical_quota_reservations_are_atomic_and_usage_is_attributed() {
         let (database, _) = Database::open(":memory:").await.unwrap();
         let first = database
@@ -3406,14 +3796,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_recent_audit_log() {
+    async fn paginates_audit_log() {
         let (database, _) = Database::open(":memory:").await.unwrap();
-        database
-            .save_runtime_config("admin", &Config::default(), "update runtime configuration")
-            .await
-            .unwrap();
+        for _ in 0..3 {
+            database
+                .save_runtime_config("admin", &Config::default(), "update runtime configuration")
+                .await
+                .unwrap();
+        }
 
-        let entries = database.recent_audit_log(10).await.unwrap();
+        let (entries, total) = database.audit_log_page(2, 2).await.unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(entries.len(), 1);
         assert!(entries.iter().any(|entry| entry.username == "admin"
             && entry.action == "update runtime configuration"
             && entry.detail == "runtime_config"));
@@ -3422,14 +3816,14 @@ mod tests {
     #[tokio::test]
     async fn stores_provider_secrets_and_preserves_them_on_update() {
         let (database, _) = Database::open(":memory:").await.unwrap();
-        let mut provider = test_auth_provider("github", "encrypted-secret");
+        let mut provider = test_auth_provider("github", "plain-secret");
         let id = database
             .save_auth_provider("admin", &provider, false)
             .await
             .unwrap();
         provider.id = id;
         provider.display_name = "GitHub Enterprise".to_string();
-        provider.encrypted_client_secret = None;
+        provider.client_secret = None;
         database
             .save_auth_provider("admin", &provider, true)
             .await
@@ -3437,12 +3831,16 @@ mod tests {
 
         let stored = database.auth_provider_by_id(id).await.unwrap().unwrap();
         assert_eq!(stored.display_name, "GitHub Enterprise");
-        assert_eq!(
-            stored.encrypted_client_secret.as_deref(),
-            Some("encrypted-secret")
-        );
+        assert_eq!(stored.client_secret.as_deref(), Some("plain-secret"));
         let serialized = serde_json::to_string(&stored).unwrap();
-        assert!(!serialized.contains("encrypted-secret"));
+        assert!(!serialized.contains("plain-secret"));
+        let database_value: String =
+            sqlx::query_scalar("SELECT client_secret FROM auth_providers WHERE id = ?")
+                .bind(id)
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert_eq!(database_value, "plain-secret");
     }
 
     #[tokio::test]
@@ -3456,7 +3854,7 @@ mod tests {
             .store_user_auth_flow(
                 "raw-state",
                 provider_id,
-                "encrypted-flow",
+                "plain-flow",
                 "login",
                 None,
                 unix_timestamp() + 60,
@@ -3474,8 +3872,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap()
-                .encrypted_payload,
-            "encrypted-flow"
+                .payload,
+            "plain-flow"
         );
         assert!(database
             .take_user_auth_flow("raw-state")
@@ -3525,7 +3923,7 @@ mod tests {
             .await
             .unwrap());
         provider.slug = "company-github".to_string();
-        provider.encrypted_client_secret = None;
+        provider.client_secret = None;
         database
             .save_auth_provider("admin", &provider, true)
             .await
@@ -3617,17 +4015,17 @@ mod tests {
         let (database, credentials) = Database::open(":memory:").await.unwrap();
         let credentials = credentials.unwrap();
         let first = database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
         let second = database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
         let sessions = database
-            .list_admin_sessions("admin", &first.token)
+            .list_admin_sessions(&credentials.username, &first.token)
             .await
             .unwrap();
         assert_eq!(sessions.len(), 2);
@@ -3639,7 +4037,7 @@ mod tests {
             .id
             .clone();
         assert!(database
-            .revoke_admin_session("admin", "admin", &second_id)
+            .revoke_admin_session("admin", &credentials.username, &second_id)
             .await
             .unwrap());
         assert!(database.authorize(&first.token).await.unwrap());
@@ -3679,7 +4077,7 @@ mod tests {
         assert!(deleted_at.is_some());
     }
 
-    fn test_auth_provider(slug: &str, encrypted_secret: &str) -> AuthProvider {
+    fn test_auth_provider(slug: &str, client_secret: &str) -> AuthProvider {
         AuthProvider {
             id: 0,
             slug: slug.to_string(),
@@ -3688,7 +4086,7 @@ mod tests {
             preset: "github".to_string(),
             enabled: true,
             client_id: "client-id".to_string(),
-            encrypted_client_secret: Some(encrypted_secret.to_string()),
+            client_secret: Some(client_secret.to_string()),
             issuer_url: None,
             authorization_url: Some("https://github.com/login/oauth/authorize".to_string()),
             token_url: Some("https://github.com/login/oauth/access_token".to_string()),

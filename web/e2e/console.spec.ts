@@ -95,7 +95,7 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
     await route.fulfill({ json: { username: 'admin', role: 'super_admin' } })
   })
   await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
-  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/audit-log*', route => route.fulfill({ json: { items: [], page: 1, per_page: 20, total: 0 } }))
   await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
   await page.route('**/admin/api/config', async route => {
     if (route.request().method() === 'PUT') {
@@ -123,7 +123,7 @@ test('refreshes statistics from the admin console', async ({ page }) => {
   await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
-  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/audit-log*', route => route.fulfill({ json: { items: [], page: 1, per_page: 20, total: 0 } }))
   await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
   await page.route('**/admin/api/stats', route => {
     statsRequests += 1
@@ -144,7 +144,7 @@ test('localizes the administrator tabs and primary settings in Chinese', async (
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
   await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
-  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/audit-log*', route => route.fulfill({ json: { items: [], page: 1, per_page: 20, total: 0 } }))
   await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
 
   await page.goto('/admin')
@@ -166,7 +166,7 @@ test('changes the administrator password and revokes the active session', async 
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
   await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
-  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/audit-log*', route => route.fulfill({ json: { items: [], page: 1, per_page: 20, total: 0 } }))
   await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
   await page.route('**/admin/api/password', async route => {
     passwordRequest = route.request().postDataJSON()
@@ -182,9 +182,10 @@ test('changes the administrator password and revokes the active session', async 
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in' }).click()
   await page.getByRole('button', { name: 'Administrators & security' }).click()
-  await page.getByLabel('Current password').fill('correct-password')
-  await page.getByLabel('New password (12 characters minimum)').fill('replacement-password')
-  await page.getByRole('button', { name: 'Change password', exact: true }).click()
+  const passwordForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Change password', exact: true }) })
+  await passwordForm.getByLabel('Current password').fill('correct-password')
+  await passwordForm.getByLabel('New password (12 characters minimum)').fill('replacement-password')
+  await passwordForm.getByRole('button', { name: 'Change password', exact: true }).click()
   await expect.poll(() => passwordRequest).toEqual({ current_password: 'correct-password', new_password: 'replacement-password' })
   await expect.poll(() => loggedOut).toBe(true)
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
@@ -207,7 +208,7 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', route => route.fulfill({ json: { ...adminConfig, webauthn: { ...adminConfig.webauthn, enabled: true, rp_id: 'localhost', rp_origin: 'https://localhost' } } }))
   await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
-  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/audit-log*', route => route.fulfill({ json: { items: [], page: 1, per_page: 20, total: 0 } }))
   await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
   await page.route('**/admin/api/auth/passkeys', route => route.fulfill({ json: registered ? [{ id: 1, name: 'Test platform key', created_at: 1784592000, last_used_at: null }] : [] }))
   await page.route('**/admin/api/auth/passkeys/register/start', route => route.fulfill({ json: {
@@ -262,7 +263,6 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
 
 test('signs in by email and rotates the accounting-only routing address', async ({ page }) => {
   let signedIn = false
-  let requested: Record<string, unknown> | undefined
   let verified: Record<string, unknown> | undefined
   let routingId = 'first-routing-id'
   await page.route('**/api/account/profile', route => route.fulfill(signedIn ? {
@@ -277,10 +277,6 @@ test('signs in by email and rotates the accounting-only routing address', async 
   } } : { status: 401, json: { error: 'unauthorized' } }))
   await page.route('**/api/account/providers', route => route.fulfill(signedIn ? { json: [] } : { status: 401, json: { error: 'unauthorized' } }))
   await page.route('**/api/auth/providers', route => route.fulfill({ json: [] }))
-  await page.route('**/api/auth/email/request', async route => {
-    requested = route.request().postDataJSON() as Record<string, unknown>
-    await route.fulfill({ status: 202 })
-  })
   await page.route('**/api/auth/email/verify', async route => {
     verified = route.request().postDataJSON() as Record<string, unknown>
     signedIn = true
@@ -291,12 +287,9 @@ test('signs in by email and rotates the accounting-only routing address', async 
     await route.fulfill({ json: { routing_id: routingId } })
   })
 
-  await page.goto('/login?email=person%2Btag%40example.com&invitation=invite-token')
-  await page.getByRole('button', { name: 'Send code and magic link' }).click()
-  await expect.poll(() => requested).toEqual({ email: 'person+tag@example.com', invitation_token: 'invite-token' })
-  await page.getByLabel('Six-digit code').fill('123456')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect.poll(() => verified).toEqual({ email: 'person+tag@example.com', code: '123456' })
+  await page.goto('/login?email=person%2Btag%40example.com&token=invite-token')
+  await expect.poll(() => verified).toEqual({ email: 'person+tag@example.com', token: 'invite-token' })
+  await expect(page).toHaveURL(/\/account$/)
   await expect(page.locator('input[readonly]')).toHaveValue('https://first-routing-id.mirror.example')
   await expect(page.getByRole('heading', { name: 'Traffic usage' })).toBeVisible()
   await expect(page.getByText('1.0 KB', { exact: true })).toBeVisible()
@@ -313,7 +306,7 @@ test('configures SMTP, queues a test email, and resends an invitation', async ({
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
   await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
-  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/audit-log*', route => route.fulfill({ json: { items: [], page: 1, per_page: 20, total: 0 } }))
   await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
   await page.route('**/admin/api/smtp', async route => {
     if (route.request().method() === 'PUT') {
@@ -321,7 +314,7 @@ test('configures SMTP, queues a test email, and resends an invitation', async ({
       await route.fulfill({ status: 204 })
       return
     }
-    await route.fulfill({ json: { enabled: true, host: 'smtp.example.com', port: 587, security: 'starttls', username: 'mailer', has_password: true, from_name: 'MirrorProxy', from_address: 'mirror@example.com', master_key_configured: true } })
+    await route.fulfill({ json: { enabled: true, host: 'smtp.example.com', port: 587, security: 'starttls', username: 'mailer', has_password: true, from_name: 'MirrorProxy', from_address: 'mirror@example.com' } })
   })
   await page.route('**/admin/api/smtp/test', async route => {
     testRecipient = route.request().postDataJSON() as Record<string, unknown>
@@ -364,7 +357,7 @@ test('assigns a user to a billing group with a custom quota', async ({ page }) =
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
   await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
-  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/audit-log*', route => route.fulfill({ json: { items: [], page: 1, per_page: 20, total: 0 } }))
   await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
   await page.route('**/admin/api/groups', route => route.fulfill({ json: [{ id: 3, name: 'Engineering', monthly_limit_bytes: 107374182400, member_count: 0 }] }))
   await page.route('**/admin/api/users', route => route.fulfill({ json: [{ id: 7, email: 'person@example.com', display_name: 'Person', disabled: false, routing_id: 'route-id' }] }))
@@ -399,7 +392,7 @@ test('offers OAuth login and preserves the invitation in the authorization URL',
   await page.route('**/api/auth/providers', route => route.fulfill({ json: [{ slug: 'github', display_name: 'GitHub', kind: 'oauth2' }] }))
 
   await page.goto('/login?invitation=invite-secret')
-  const github = page.getByRole('link', { name: 'Continue with GitHub' })
+  const github = page.getByRole('link', { name: /GitHub/ })
   await expect(github).toBeVisible()
   await expect(github).toHaveAttribute('href', '/api/auth/github/start?invitation=invite-secret')
 })
@@ -412,7 +405,7 @@ test('configures an OpenID Connect provider without exposing its saved secret', 
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
   await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
-  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/audit-log*', route => route.fulfill({ json: { items: [], page: 1, per_page: 20, total: 0 } }))
   await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
   await page.route('**/admin/api/auth-providers/4', async route => {
     providerUpdate = route.request().postDataJSON() as Record<string, unknown>
@@ -439,7 +432,7 @@ test('revokes administrator sessions and searches and soft-deletes users', async
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', route => route.fulfill({ json: adminConfig }))
   await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
-  await page.route('**/admin/api/audit-log', route => route.fulfill({ json: [] }))
+  await page.route('**/admin/api/audit-log*', route => route.fulfill({ json: { items: [], page: 1, per_page: 20, total: 0 } }))
   await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
   await page.route('**/admin/api/auth/sessions/*', async route => { revokedSession = route.request().url().split('/').pop() ?? ''; await route.fulfill({ status: 204 }) })
   await page.route('**/admin/api/auth/sessions', route => route.fulfill({ json: [{ id: '0123456789abcdef01234567', auth_method: 'passkey', created_at: 1784591000, expires_at: 1784678400, last_used_at: 1784592000, current: false }] }))

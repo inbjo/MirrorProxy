@@ -5,6 +5,8 @@ forward_client_authorization = false
 enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "julia", "luarocks", "clojars", "cocoapods", "pub", "anaconda", "texlive", "winget", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
 [upstreams]
+# Every string field accepts one or more HTTP(S) endpoints separated by commas.
+# Requests try endpoints in order until one returns HTTP 200.
 github = "https://github.com"
 github_raw = "https://raw.githubusercontent.com"
 packagist = "https://repo.packagist.org"
@@ -17,8 +19,6 @@ nvm = "https://nodejs.org/dist"
 opam = "https://opam.ocaml.org"
 go_proxy = "https://proxy.golang.org"
 maven = "https://repo.maven.apache.org/maven2"
-# Tried in order only when the primary repository returns HTTP 404.
-maven_fallbacks = ["https://jcenter.bintray.com"]
 rubygems = "https://rubygems.org"
 rustup = "https://static.rust-lang.org"
 nuget = "https://api.nuget.org"
@@ -81,6 +81,9 @@ max_total_mb = 256
 
 [quota]
 enabled = false
+# Count proxied response traffic twice when the VPS provider bills both inbound
+# upstream traffic and outbound client traffic.
+bidirectional_accounting = false
 monthly_gb = 500
 timezone = "local"
 on_exceeded = "stop_proxy"

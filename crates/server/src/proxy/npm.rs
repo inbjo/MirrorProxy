@@ -67,7 +67,7 @@ async fn proxy_npm_path(
         .unwrap_or_default();
 
     if is_metadata_request(&clean_path) {
-        let response = state.client.get(url).send().await?;
+        let response = proxy::get_with_fallback(&state, url).await?;
         let status = response.status();
         let is_json = response
             .headers()

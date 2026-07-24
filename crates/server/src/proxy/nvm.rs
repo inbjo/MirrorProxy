@@ -29,7 +29,8 @@ pub async fn proxy(
         return Err(ProxyError::Disabled("nvm"));
     }
     let p = sanitize(&path)?;
-    let mut u = reqwest::Url::parse(&c.upstreams.nvm).map_err(|_| ProxyError::InvalidUrl)?;
+    let mut u = reqwest::Url::parse(proxy::select_upstream(&c.upstreams.nvm)?)
+        .map_err(|_| ProxyError::InvalidUrl)?;
     let b = u.path().trim_end_matches('/');
     u.set_path(&format!("{b}/{p}"));
     u.set_query(request.uri().query());

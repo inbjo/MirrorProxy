@@ -72,6 +72,16 @@ pub enum ProxyError {
     InvalidHeader,
 }
 
+/// Returns the first endpoint from an ordered comma-separated upstream group.
+/// The forwarding layer expands the remaining endpoints and retries on 404.
+pub fn select_upstream(configured: &str) -> Result<&str, ProxyError> {
+    configured
+        .split(',')
+        .map(str::trim)
+        .find(|endpoint| !endpoint.is_empty())
+        .ok_or(ProxyError::InvalidUrl)
+}
+
 impl ProxyError {
     pub fn status_code(&self) -> StatusCode {
         match self {
@@ -118,44 +128,81 @@ async fn forward_request(
     method: Method,
     url: Url,
     incoming_headers: &HeaderMap,
-    body: Option<reqwest::Body>,
+    mut body: Option<reqwest::Body>,
 ) -> Result<Response, ProxyError> {
     let reqwest_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
         .map_err(|_| ProxyError::MethodNotAllowed)?;
     let config = state.config();
-    if cacheable_request(method.clone(), incoming_headers) {
-        if let Some(response) = read_disk_cache(&config.cache, &url) {
-            return Ok(response);
+    let candidates = if body.is_some() {
+        vec![url]
+    } else {
+        config.upstream_candidates_for(&url)
+    };
+    for (index, candidate) in candidates.iter().enumerate() {
+        if cacheable_request(method.clone(), incoming_headers) {
+            if let Some(response) = read_disk_cache(&config.cache, candidate) {
+                return Ok(response);
+            }
         }
+        let mut request = upstream_request(
+            &state.client,
+            reqwest_method.clone(),
+            candidate.clone(),
+            incoming_headers,
+            &config,
+        );
+        if let Some(body) = body.take() {
+            request = request.body(body);
+        }
+        let upstream = request.send().await?;
+        let status = upstream.status();
+        if status != StatusCode::OK && index + 1 < candidates.len() {
+            tracing::info!(upstream = %candidate, status = %status, next_upstream = %candidates[index + 1], "upstream did not return 200; trying the next configured endpoint");
+            continue;
+        }
+        let headers = upstream.headers().clone();
+        if cacheable_request(method.clone(), incoming_headers)
+            && config.cache.enabled
+            && status.is_success()
+            && headers
+                .get("content-length")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_some_and(|length| length <= max_cache_entry_bytes(&config.cache))
+        {
+            let response_body = upstream.bytes().await?;
+            write_disk_cache(&config.cache, candidate, status, &headers, &response_body);
+            return response_with_headers(status, &headers, Body::from(response_body));
+        }
+        let stream = upstream.bytes_stream().map_err(std::io::Error::other);
+        return response_with_headers(status, &headers, Body::from_stream(stream));
     }
-    let mut request = upstream_request(
-        &state.client,
-        reqwest_method,
-        url.clone(),
-        incoming_headers,
-        &config,
-    );
-    if let Some(body) = body {
-        request = request.body(body);
+    unreachable!("every upstream request has at least one candidate")
+}
+
+pub async fn get_with_fallback(
+    state: &AppState,
+    url: Url,
+) -> Result<reqwest::Response, ProxyError> {
+    let config = state.config();
+    let candidates = config.upstream_candidates_for(&url);
+    for (index, candidate) in candidates.iter().enumerate() {
+        let response = upstream_request(
+            &state.client,
+            reqwest::Method::GET,
+            candidate.clone(),
+            &HeaderMap::new(),
+            &config,
+        )
+        .send()
+        .await?;
+        if response.status() != StatusCode::OK && index + 1 < candidates.len() {
+            tracing::info!(upstream = %candidate, status = %response.status(), next_upstream = %candidates[index + 1], "upstream did not return 200; trying the next configured endpoint");
+            continue;
+        }
+        return Ok(response);
     }
-    let upstream = request.send().await?;
-    let status = upstream.status();
-    let headers = upstream.headers().clone();
-    if cacheable_request(method, incoming_headers)
-        && config.cache.enabled
-        && status.is_success()
-        && headers
-            .get("content-length")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .is_some_and(|length| length <= max_cache_entry_bytes(&config.cache))
-    {
-        let body = upstream.bytes().await?;
-        write_disk_cache(&config.cache, &url, status, &headers, &body);
-        return response_with_headers(status, &headers, Body::from(body));
-    }
-    let stream = upstream.bytes_stream().map_err(std::io::Error::other);
-    response_with_headers(status, &headers, Body::from_stream(stream))
+    unreachable!("every upstream request has at least one candidate")
 }
 
 fn upstream_request(
@@ -220,6 +267,28 @@ fn max_cache_entry_bytes(cache: &CacheConfig) -> u64 {
 }
 fn max_cache_total_bytes(cache: &CacheConfig) -> u64 {
     cache.max_total_mb.saturating_mul(1024 * 1024)
+}
+
+#[cfg(test)]
+mod upstream_selection_tests {
+    use super::*;
+
+    #[test]
+    fn selects_the_first_comma_separated_upstream() {
+        let configured = "https://rr-one.invalid/root, https://rr-two.invalid/root";
+        assert_eq!(
+            select_upstream(configured).unwrap(),
+            "https://rr-one.invalid/root"
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_upstream_group() {
+        assert!(matches!(
+            select_upstream(" , "),
+            Err(ProxyError::InvalidUrl)
+        ));
+    }
 }
 
 fn cache_paths(cache: &CacheConfig, url: &Url) -> Option<(PathBuf, PathBuf)> {
@@ -333,7 +402,7 @@ fn evict_disk_cache(cache: &CacheConfig) {
 }
 
 pub fn build_url(base: &str, path: &str, query: Option<&str>) -> Result<Url, ProxyError> {
-    let mut url = Url::parse(base).map_err(|_| ProxyError::InvalidUrl)?;
+    let mut url = Url::parse(select_upstream(base)?).map_err(|_| ProxyError::InvalidUrl)?;
     url.set_path(path);
     url.set_query(query);
     Ok(url)

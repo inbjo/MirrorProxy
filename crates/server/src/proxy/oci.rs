@@ -76,17 +76,43 @@ pub(super) async fn forward_with_public_auth(
     let reqwest_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
         .map_err(|_| ProxyError::MethodNotAllowed)?;
     let config = state.config();
+    let candidates = config.upstream_candidates_for(&url);
+    for (index, candidate) in candidates.iter().enumerate() {
+        let response = send_with_public_auth(
+            state,
+            reqwest_method.clone(),
+            candidate.clone(),
+            incoming_headers,
+            &config,
+        )
+        .await?;
+        if response.status() != reqwest::StatusCode::OK && index + 1 < candidates.len() {
+            tracing::info!(upstream = %candidate, status = %response.status(), next_upstream = %candidates[index + 1], "upstream did not return 200; trying the next configured endpoint");
+            continue;
+        }
+        return response_to_axum(response).await;
+    }
+    unreachable!("every OCI request has at least one upstream candidate")
+}
+
+async fn send_with_public_auth(
+    state: &AppState,
+    method: reqwest::Method,
+    url: Url,
+    incoming_headers: &HeaderMap,
+    config: &crate::config::Config,
+) -> Result<reqwest::Response, ProxyError> {
     let request = super::upstream_request(
         &state.client,
-        reqwest_method.clone(),
+        method.clone(),
         url.clone(),
         incoming_headers,
-        &config,
+        config,
     );
 
     let response = request.send().await?;
     if response.status() != reqwest::StatusCode::UNAUTHORIZED {
-        return response_to_axum(response).await;
+        return Ok(response);
     }
 
     let Some(challenge) = response
@@ -95,19 +121,13 @@ pub(super) async fn forward_with_public_auth(
         .and_then(|value| value.to_str().ok())
         .and_then(parse_bearer_challenge)
     else {
-        return response_to_axum(response).await;
+        return Ok(response);
     };
 
     let token = fetch_bearer_token(&state.client, &challenge).await?;
-    let retry = super::upstream_request(
-        &state.client,
-        reqwest_method,
-        url,
-        incoming_headers,
-        &config,
-    );
+    let retry = super::upstream_request(&state.client, method, url, incoming_headers, config);
 
-    response_to_axum(retry.bearer_auth(token).send().await?).await
+    Ok(retry.bearer_auth(token).send().await?)
 }
 
 async fn response_to_axum(response: reqwest::Response) -> Result<Response, ProxyError> {

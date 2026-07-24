@@ -36,7 +36,8 @@ pub async fn proxy(
     {
         return Err(ProxyError::InvalidUrl);
     }
-    let mut u = reqwest::Url::parse(&c.upstreams.nix).map_err(|_| ProxyError::InvalidUrl)?;
+    let mut u = reqwest::Url::parse(proxy::select_upstream(&c.upstreams.nix)?)
+        .map_err(|_| ProxyError::InvalidUrl)?;
     let b = u.path().trim_end_matches('/');
     u.set_path(&format!("{b}/{p}"));
     u.set_query(request.uri().query());

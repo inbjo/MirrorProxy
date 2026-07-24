@@ -35,12 +35,9 @@ pub async fn service_index(
     }
 
     let upstream_path = "/v3/index.json";
-    let url = proxy::build_url(
-        &config.upstreams.nuget,
-        upstream_path,
-        request.uri().query(),
-    )?;
-    let response = state.client.get(url).send().await?;
+    let upstream = proxy::select_upstream(&config.upstreams.nuget)?;
+    let url = proxy::build_url(upstream, upstream_path, request.uri().query())?;
+    let response = proxy::get_with_fallback(&state, url).await?;
     let status = response.status();
     let content_type = response
         .headers()
@@ -55,7 +52,7 @@ pub async fn service_index(
             serde_json::from_slice(&bytes).map_err(|_| ProxyError::InvalidUrl)?;
         rewrite_upstream_urls(
             &mut document,
-            &config.upstreams.nuget,
+            upstream,
             &state.public_base_url(request.headers()),
         );
         return Response::builder()
@@ -72,11 +69,7 @@ pub async fn service_index(
             .map_err(|_| ProxyError::InvalidHeader);
     }
 
-    let fallback_url = proxy::build_url(
-        &config.upstreams.nuget,
-        upstream_path,
-        request.uri().query(),
-    )?;
+    let fallback_url = proxy::build_url(upstream, upstream_path, request.uri().query())?;
     proxy::forward(
         &state,
         request.method().clone(),
@@ -97,7 +90,8 @@ pub async fn proxy(
     }
 
     let clean_path = sanitize_repository_path(&path)?;
-    let (upstream, upstream_path) = select_upstream(&clean_path, &config.upstreams.nuget)?;
+    let configured_upstream = proxy::select_upstream(&config.upstreams.nuget)?;
+    let (upstream, upstream_path) = select_upstream(&clean_path, configured_upstream)?;
     let url = proxy::build_url(&upstream, &upstream_path, request.uri().query())?;
     proxy::forward(&state, request.method().clone(), url, request.headers()).await
 }

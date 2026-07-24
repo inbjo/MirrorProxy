@@ -24,7 +24,7 @@ use serde_json::Value;
 use url::Url;
 
 use crate::{
-    admin_token, authenticated_user, bad_request_response,
+    authenticated_user, bad_request_response,
     database::{AuthProvider, ExternalRegistration},
     internal_error_response, require_super_admin, unauthorized_response, user_session_cookie,
     valid_user_email, AppState,
@@ -67,7 +67,7 @@ impl From<AuthProvider> for ProviderView {
             preset: provider.preset,
             enabled: provider.enabled,
             client_id: provider.client_id,
-            has_client_secret: provider.encrypted_client_secret.is_some(),
+            has_client_secret: provider.client_secret.is_some(),
             issuer_url: provider.issuer_url,
             authorization_url: provider.authorization_url,
             token_url: provider.token_url,
@@ -89,6 +89,7 @@ struct PublicProvider {
     slug: String,
     display_name: String,
     kind: String,
+    allow_registration: bool,
 }
 
 #[derive(Deserialize)]
@@ -300,7 +301,7 @@ async fn save_provider(
     id: i64,
     request: ProviderRequest,
 ) -> Response {
-    let identity = match require_recent_super_admin(&headers, &state).await {
+    let identity = match require_super_admin(&headers, &state).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -308,28 +309,12 @@ async fn save_provider(
         .client_secret
         .as_deref()
         .is_none_or(|value| value.trim().is_empty());
-    let encrypted_client_secret = match request
+    let client_secret = request
         .client_secret
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        Some(secret) => {
-            let Some(cipher) = state.master_key.as_deref() else {
-                return conflict(
-                    "MIRRORPROXY_MASTER_KEY is required before saving OAuth credentials",
-                );
-            };
-            match cipher.encrypt("oauth-client-secret", secret.as_bytes()) {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    tracing::error!(%error, "failed to encrypt OAuth client secret");
-                    return internal_error_response();
-                }
-            }
-        }
-        None => None,
-    };
+        .map(str::to_string);
     let provider = AuthProvider {
         id,
         slug: request.slug.trim().to_ascii_lowercase(),
@@ -338,7 +323,7 @@ async fn save_provider(
         preset: request.preset.trim().to_ascii_lowercase(),
         enabled: request.enabled,
         client_id: request.client_id.trim().to_string(),
-        encrypted_client_secret,
+        client_secret,
         issuer_url: clean_optional(request.issuer_url),
         authorization_url: clean_optional(request.authorization_url),
         token_url: clean_optional(request.token_url),
@@ -358,17 +343,12 @@ async fn save_provider(
         auto_link_by_email: request.auto_link_by_email,
     };
     let has_preserved_secret = if id != 0 && preserve_secret {
-        matches!(state.database.auth_provider_by_id(id).await, Ok(Some(existing)) if existing.encrypted_client_secret.is_some())
+        matches!(state.database.auth_provider_by_id(id).await, Ok(Some(existing)) if existing.client_secret.is_some())
     } else {
         false
     };
     if let Err(error) = validate_provider(&provider, has_preserved_secret) {
         return bad_request_response(error.to_string());
-    }
-    if provider.enabled && state.master_key.is_none() {
-        return conflict(
-            "MIRRORPROXY_MASTER_KEY is required before enabling an authentication provider",
-        );
     }
     match state
         .database
@@ -391,7 +371,7 @@ pub(crate) async fn delete_provider(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    let identity = match require_recent_super_admin(&headers, &state).await {
+    let identity = match require_super_admin(&headers, &state).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -422,7 +402,7 @@ pub(crate) async fn test_provider(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    if let Err(response) = require_recent_super_admin(&headers, &state).await {
+    if let Err(response) = require_super_admin(&headers, &state).await {
         return response;
     }
     let provider = match state.database.auth_provider_by_id(id).await {
@@ -483,6 +463,7 @@ pub(crate) async fn public_providers(State(state): State<AppState>) -> Response 
                     slug: provider.slug,
                     display_name: provider.display_name,
                     kind: provider.kind,
+                    allow_registration: provider.allow_registration,
                 })
                 .collect::<Vec<_>>(),
         )
@@ -538,25 +519,18 @@ async fn start_flow(
             return internal_error_response();
         }
     };
-    let Some(cipher) = state.master_key.as_deref() else {
-        return service_unavailable("external authentication is not configured");
-    };
     let callback_url = match callback_url(state, headers, &provider.slug) {
         Ok(value) => value,
         Err(error) => return bad_request_response(error.to_string()),
     };
     let state_token = random_token(48);
-    let secret = match decrypt_secret(cipher, &provider) {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::error!(provider = %provider.slug, %error, "failed to decrypt authentication provider secret");
-            return service_unavailable("external authentication credentials are unavailable");
-        }
+    let Some(secret) = provider.client_secret.as_deref() else {
+        return service_unavailable("external authentication credentials are unavailable");
     };
     let result = if provider.kind == "oidc" {
-        oidc_authorization(&provider, &secret, &callback_url, &state_token).await
+        oidc_authorization(&provider, secret, &callback_url, &state_token).await
     } else {
-        oauth_authorization_with_secret(&provider, &secret, &callback_url, &state_token)
+        oauth_authorization_with_secret(&provider, secret, &callback_url, &state_token)
     };
     let (authorization_url, verifier, nonce) = match result {
         Ok(value) => value,
@@ -570,13 +544,10 @@ async fn start_flow(
         nonce,
         invitation,
     };
-    let encoded = match serde_json::to_vec(&payload)
-        .context("serialize OAuth flow")
-        .and_then(|value| cipher.encrypt("oauth-flow", &value))
-    {
+    let encoded = match serde_json::to_string(&payload).context("serialize OAuth flow") {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(%error, "failed to protect authentication flow");
+            tracing::error!(%error, "failed to serialize authentication flow");
             return internal_error_response();
         }
     };
@@ -630,34 +601,25 @@ pub(crate) async fn callback(
         Ok(Some(value)) if value.enabled && value.slug.eq_ignore_ascii_case(&slug) => value,
         _ => return callback_error("invalid_provider"),
     };
-    let Some(cipher) = state.master_key.as_deref() else {
-        return callback_error("not_configured");
-    };
-    let payload: FlowPayload = match cipher
-        .decrypt("oauth-flow", &flow.encrypted_payload)
-        .and_then(|value| serde_json::from_slice(&value).context("decode OAuth flow"))
-    {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::error!(%error, "failed to decode authentication flow");
-            return callback_error("invalid_state");
-        }
-    };
+    let payload: FlowPayload =
+        match serde_json::from_str(&flow.payload).context("decode OAuth flow") {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(%error, "failed to decode authentication flow");
+                return callback_error("invalid_state");
+            }
+        };
     let callback_url = match callback_url(&state, &headers, &provider.slug) {
         Ok(value) => value,
         Err(_) => return callback_error("invalid_callback"),
     };
-    let secret = match decrypt_secret(cipher, &provider) {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::error!(provider = %provider.slug, %error, "failed to decrypt authentication provider secret");
-            return callback_error("not_configured");
-        }
+    let Some(secret) = provider.client_secret.as_deref() else {
+        return callback_error("not_configured");
     };
     let claims = if provider.kind == "oidc" {
-        oidc_exchange(&provider, &secret, &callback_url, code, &payload).await
+        oidc_exchange(&provider, secret, &callback_url, code, &payload).await
     } else {
-        oauth_exchange(&provider, &secret, &callback_url, code, &payload).await
+        oauth_exchange(&provider, secret, &callback_url, code, &payload).await
     };
     let claims = match claims {
         Ok(value) => value,
@@ -718,7 +680,8 @@ pub(crate) async fn unlink_identity(
             return internal_error_response();
         }
     };
-    let email_login_available = matches!(state.database.smtp_settings().await, Ok(Some(settings)) if settings.enabled && state.master_key.is_some());
+    let email_login_available =
+        matches!(state.database.smtp_settings().await, Ok(Some(settings)) if settings.enabled);
     if count <= 1 && !email_login_available {
         return conflict(
             "cannot remove the last external identity while email login is unavailable",
@@ -1170,15 +1133,6 @@ async fn oidc_client(
     .set_redirect_uri(OidcRedirectUrl::new(callback.to_string())?))
 }
 
-fn decrypt_secret(cipher: &crate::SecretCipher, provider: &AuthProvider) -> anyhow::Result<String> {
-    let encrypted = provider
-        .encrypted_client_secret
-        .as_deref()
-        .context("provider client secret is missing")?;
-    String::from_utf8(cipher.decrypt("oauth-client-secret", encrypted)?)
-        .context("provider client secret is not UTF-8")
-}
-
 fn control_plane_client() -> anyhow::Result<reqwest::Client> {
     reqwest::Client::builder()
         .no_proxy()
@@ -1217,7 +1171,7 @@ fn validate_provider(provider: &AuthProvider, has_preserved_secret: bool) -> any
     if provider.kind != "oauth2" && provider.kind != "oidc" {
         anyhow::bail!("kind must be oauth2 or oidc");
     }
-    if provider.enabled && provider.encrypted_client_secret.is_none() && !has_preserved_secret {
+    if provider.enabled && provider.client_secret.is_none() && !has_preserved_secret {
         anyhow::bail!("client_secret is required before enabling a provider");
     }
     if provider.kind == "oidc" {
@@ -1261,28 +1215,6 @@ fn validate_https(value: &str) -> anyhow::Result<()> {
         anyhow::bail!("provider endpoints must be credential-free HTTPS URLs without fragments");
     }
     Ok(())
-}
-
-async fn require_recent_super_admin(
-    headers: &HeaderMap,
-    state: &AppState,
-) -> Result<crate::database::AdminIdentity, Response> {
-    let identity = require_super_admin(headers, state).await?;
-    let Some(token) = admin_token(headers) else {
-        return Err(unauthorized_response());
-    };
-    match state.database.is_recent_admin_session(token).await {
-        Ok(true) => Ok(identity),
-        Ok(false) => Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "recent administrator verification required"})),
-        )
-            .into_response()),
-        Err(error) => {
-            tracing::error!(%error, "administrator recent verification query failed");
-            Err(internal_error_response())
-        }
-    }
 }
 
 fn callback_redirect(path: &str, session: Option<&str>) -> Response {
@@ -1419,7 +1351,7 @@ mod tests {
             preset: "github".into(),
             enabled: true,
             client_id: "client".into(),
-            encrypted_client_secret: Some("unused".into()),
+            client_secret: Some("unused".into()),
             issuer_url: None,
             authorization_url: Some("https://github.com/login/oauth/authorize".into()),
             token_url: Some("https://github.com/login/oauth/access_token".into()),
@@ -1449,7 +1381,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_api_never_serializes_the_encrypted_secret() {
+    fn provider_api_never_serializes_the_client_secret() {
         let provider = AuthProvider {
             id: 1,
             slug: "github".into(),
@@ -1458,7 +1390,7 @@ mod tests {
             preset: "github".into(),
             enabled: true,
             client_id: "client".into(),
-            encrypted_client_secret: Some("encrypted-secret".into()),
+            client_secret: Some("plain-secret".into()),
             issuer_url: None,
             authorization_url: Some("https://github.com/login/oauth/authorize".into()),
             token_url: Some("https://github.com/login/oauth/access_token".into()),
@@ -1474,7 +1406,7 @@ mod tests {
         };
         let json = serde_json::to_string(&ProviderView::from(provider)).unwrap();
         assert!(json.contains("\"has_client_secret\":true"));
-        assert!(!json.contains("encrypted-secret"));
+        assert!(!json.contains("plain-secret"));
     }
 
     #[test]
@@ -1489,7 +1421,7 @@ mod tests {
             preset: "custom_oidc".into(),
             enabled: false,
             client_id: "client".into(),
-            encrypted_client_secret: None,
+            client_secret: None,
             issuer_url: Some("https://identity.example".into()),
             authorization_url: None,
             token_url: None,

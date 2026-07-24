@@ -44,7 +44,7 @@ pub async fn proxy(
         &path,
         request.uri().query(),
     )?;
-    let response = state.client.get(url).send().await?;
+    let response = proxy::get_with_fallback(&state, url).await?;
     let status = response.status();
     let content_type = response
         .headers()
@@ -90,7 +90,8 @@ fn sanitize(path: &str) -> Result<String, ProxyError> {
     Ok(path.to_string())
 }
 fn repository_url(base: &str, path: &str, query: Option<&str>) -> Result<reqwest::Url, ProxyError> {
-    let mut url = reqwest::Url::parse(base).map_err(|_| ProxyError::InvalidUrl)?;
+    let mut url =
+        reqwest::Url::parse(proxy::select_upstream(base)?).map_err(|_| ProxyError::InvalidUrl)?;
     let base_path = url.path().trim_end_matches('/');
     url.set_path(&format!("{base_path}/{path}"));
     url.set_query(query);

@@ -11,18 +11,19 @@ use axum::{
     Json,
 };
 use lettre::{
-    message::Mailbox, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
-    AsyncTransport, Message, Tokio1Executor,
+    message::{Mailbox, MultiPart},
+    transport::smtp::authentication::Credentials,
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::{
-    admin_token, bad_request_response,
+    bad_request_response,
     database::{Database, SmtpSettings},
     internal_error_response, require_super_admin, unauthorized_response, user_session_cookie,
-    valid_user_email, AppState, SecretCipher,
+    valid_user_email, AppState,
 };
 
 #[derive(Serialize)]
@@ -35,7 +36,6 @@ struct PublicSmtpSettings {
     has_password: bool,
     from_name: String,
     from_address: String,
-    master_key_configured: bool,
 }
 
 #[derive(Deserialize)]
@@ -66,10 +66,9 @@ pub(crate) async fn get_smtp_settings(
                 port: settings.port,
                 security: settings.security,
                 username: settings.username,
-                has_password: settings.encrypted_password.is_some(),
+                has_password: settings.password.is_some(),
                 from_name: settings.from_name,
                 from_address: settings.from_address,
-                master_key_configured: state.master_key.is_some(),
             })
             .into_response()
         }
@@ -85,44 +84,25 @@ pub(crate) async fn update_smtp_settings(
     State(state): State<AppState>,
     Json(request): Json<UpdateSmtpSettingsRequest>,
 ) -> Response {
-    let identity = match require_recent_super_admin(&headers, &state).await {
+    let identity = match require_super_admin(&headers, &state).await {
         Ok(identity) => identity,
         Err(response) => return response,
     };
     if let Err(error) = validate_smtp_request(&request) {
         return bad_request_response(error.to_string());
     }
-    let encrypted_password = match request.password.as_deref() {
-        Some(password) if !password.is_empty() => {
-            let Some(cipher) = state.master_key.as_deref() else {
-                return conflict(
-                    "MIRRORPROXY_MASTER_KEY is required before saving SMTP credentials",
-                );
-            };
-            match cipher.encrypt("smtp-password", password.as_bytes()) {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    tracing::error!(%error, "failed to encrypt SMTP password");
-                    return internal_error_response();
-                }
-            }
-        }
-        _ => None,
-    };
-    if request.enabled && state.master_key.is_none() {
-        return conflict("MIRRORPROXY_MASTER_KEY is required before enabling email delivery");
-    }
+    let preserve_password = request.password.as_deref().is_none_or(str::is_empty);
+    let password = request.password.filter(|password| !password.is_empty());
     let settings = SmtpSettings {
         enabled: request.enabled,
         host: request.host.trim().to_string(),
         port: request.port,
         security: request.security,
         username: request.username.filter(|value| !value.trim().is_empty()),
-        encrypted_password,
+        password,
         from_name: request.from_name.trim().to_string(),
         from_address: request.from_address.trim().to_ascii_lowercase(),
     };
-    let preserve_password = request.password.as_deref().is_none_or(str::is_empty);
     match state
         .database
         .save_smtp_settings(&identity.username, &settings, preserve_password)
@@ -146,7 +126,7 @@ pub(crate) async fn test_smtp_settings(
     State(state): State<AppState>,
     Json(request): Json<TestSmtpRequest>,
 ) -> Response {
-    if let Err(response) = require_recent_super_admin(&headers, &state).await {
+    if let Err(response) = require_super_admin(&headers, &state).await {
         return response;
     }
     if !valid_user_email(request.recipient.trim()) {
@@ -167,10 +147,10 @@ pub(crate) async fn test_smtp_settings(
 
 #[derive(Deserialize)]
 pub(crate) struct CreateInvitationRequest {
-    email: String,
-    display_name: String,
+    pub(crate) email: String,
+    pub(crate) display_name: String,
     #[serde(default = "default_invitation_hours")]
-    expires_in_hours: u32,
+    pub(crate) expires_in_hours: u32,
 }
 
 fn default_invitation_hours() -> u32 {
@@ -224,21 +204,23 @@ pub(crate) async fn create_invitation(
             return internal_error_response();
         }
     };
-    let link = match login_link(
-        &state.config().public_base_url,
-        &email,
-        "invitation",
-        &token,
-    ) {
+    let link = match login_link(&state.public_base_url(&headers), &email, "token", &token) {
         Ok(link) => link,
         Err(error) => {
             tracing::error!(%error, "failed to build invitation URL");
             return internal_error_response();
         }
     };
-    let body =
-        format!("You were invited to MirrorProxy. Open this link before it expires:\n\n{link}");
-    match enqueue_plain_email(&state, &email, "MirrorProxy invitation", &body).await {
+    let (body, html_body) = invitation_email(&link, expires_at);
+    match enqueue_email(
+        &state,
+        &email,
+        "MirrorProxy invitation",
+        &body,
+        Some(&html_body),
+    )
+    .await
+    {
         Ok(()) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
         Err(response) => response,
     }
@@ -300,9 +282,9 @@ pub(crate) async fn resend_invitation(
         }
     };
     let link = match login_link(
-        &state.config().public_base_url,
+        &state.public_base_url(&headers),
         &invitation.email,
-        "invitation",
+        "token",
         &token,
     ) {
         Ok(link) => link,
@@ -311,9 +293,16 @@ pub(crate) async fn resend_invitation(
             return internal_error_response();
         }
     };
-    let body =
-        format!("You were invited to MirrorProxy. Open this link before it expires:\n\n{link}");
-    match enqueue_plain_email(&state, &invitation.email, "MirrorProxy invitation", &body).await {
+    let (body, html_body) = invitation_email(&link, invitation.expires_at);
+    match enqueue_email(
+        &state,
+        &invitation.email,
+        "MirrorProxy invitation",
+        &body,
+        Some(&html_body),
+    )
+    .await
+    {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(response) => response,
     }
@@ -326,6 +315,7 @@ pub(crate) struct RequestEmailLogin {
 }
 
 pub(crate) async fn request_email_login(
+    headers: HeaderMap,
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<RequestEmailLogin>,
@@ -333,9 +323,6 @@ pub(crate) async fn request_email_login(
     let email = request.email.trim().to_ascii_lowercase();
     if !valid_user_email(&email) {
         return StatusCode::ACCEPTED.into_response();
-    }
-    if state.master_key.is_none() {
-        return service_unavailable("email login is not configured");
     }
     let existing = match state.database.user_by_email(&email).await {
         Ok(user) => user,
@@ -394,7 +381,7 @@ pub(crate) async fn request_email_login(
         tracing::error!(%error, "failed to store email login token");
         return internal_error_response();
     }
-    let link = match login_link(&config.public_base_url, &email, "token", &token) {
+    let link = match login_link(&state.public_base_url(&headers), &email, "token", &token) {
         Ok(link) => link,
         Err(error) => {
             tracing::error!(%error, "failed to build email login URL");
@@ -404,7 +391,19 @@ pub(crate) async fn request_email_login(
     let body = format!(
         "Your MirrorProxy verification code is {code}.\n\nOr use this one-time link:\n{link}"
     );
-    match enqueue_plain_email(&state, &email, "MirrorProxy sign in", &body).await {
+    let html_body = format!(
+        "<p>Your MirrorProxy verification code is <strong>{code}</strong>.</p><p><a href=\"{}\">Sign in to MirrorProxy</a></p>",
+        html_escape(&link)
+    );
+    match enqueue_email(
+        &state,
+        &email,
+        "MirrorProxy sign in",
+        &body,
+        Some(&html_body),
+    )
+    .await
+    {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(response) => response,
     }
@@ -433,6 +432,14 @@ pub(crate) async fn verify_email_login(
         .await
     {
         Ok(Some(invitation_id)) => invitation_id,
+        Ok(None) if !is_code => match state.database.valid_invitation(&email, credential).await {
+            Ok(Some(invitation_id)) => Some(invitation_id),
+            Ok(None) => return unauthorized_response(),
+            Err(error) => {
+                tracing::error!(%error, "failed to validate direct invitation login");
+                return internal_error_response();
+            }
+        },
         Ok(None) => return unauthorized_response(),
         Err(error) => {
             tracing::error!(%error, "failed to consume email login token");
@@ -511,28 +518,6 @@ pub(crate) async fn verify_email_login(
     response
 }
 
-async fn require_recent_super_admin(
-    headers: &HeaderMap,
-    state: &AppState,
-) -> Result<crate::database::AdminIdentity, Response> {
-    let identity = require_super_admin(headers, state).await?;
-    let Some(token) = admin_token(headers) else {
-        return Err(unauthorized_response());
-    };
-    match state.database.is_recent_admin_session(token).await {
-        Ok(true) => Ok(identity),
-        Ok(false) => Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "recent administrator verification required" })),
-        )
-            .into_response()),
-        Err(error) => {
-            tracing::error!(%error, "administrator recent verification query failed");
-            Err(internal_error_response())
-        }
-    }
-}
-
 fn login_link(
     base_url: &str,
     email: &str,
@@ -573,7 +558,7 @@ fn default_smtp_settings() -> SmtpSettings {
         port: 587,
         security: "starttls".to_string(),
         username: None,
-        encrypted_password: None,
+        password: None,
         from_name: "MirrorProxy".to_string(),
         from_address: String::new(),
     }
@@ -585,9 +570,16 @@ async fn enqueue_plain_email(
     subject: &str,
     body: &str,
 ) -> Result<(), Response> {
-    let Some(cipher) = state.master_key.as_deref() else {
-        return Err(service_unavailable("email delivery is not configured"));
-    };
+    enqueue_email(state, recipient, subject, body, None).await
+}
+
+async fn enqueue_email(
+    state: &AppState,
+    recipient: &str,
+    subject: &str,
+    body: &str,
+    html_body: Option<&str>,
+) -> Result<(), Response> {
     match state.database.smtp_settings().await {
         Ok(Some(settings)) if settings.enabled => {}
         Ok(_) => return Err(service_unavailable("email delivery is not configured")),
@@ -596,15 +588,9 @@ async fn enqueue_plain_email(
             return Err(internal_error_response());
         }
     }
-    let encrypted = cipher
-        .encrypt("email-outbox", body.as_bytes())
-        .map_err(|error| {
-            tracing::error!(%error, "failed to encrypt email outbox body");
-            internal_error_response()
-        })?;
     state
         .database
-        .enqueue_email(recipient, subject, &encrypted)
+        .enqueue_email(recipient, subject, body, html_body)
         .await
         .map_err(|error| {
             tracing::error!(%error, "failed to enqueue email");
@@ -613,10 +599,10 @@ async fn enqueue_plain_email(
     Ok(())
 }
 
-pub(crate) fn spawn_email_outbox_worker(database: Arc<Database>, cipher: Arc<SecretCipher>) {
+pub(crate) fn spawn_email_outbox_worker(database: Arc<Database>) {
     tokio::spawn(async move {
         loop {
-            if let Err(error) = process_email_outbox(&database, &cipher).await {
+            if let Err(error) = process_email_outbox(&database).await {
                 tracing::warn!(%error, "email outbox processing failed");
             }
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -624,7 +610,7 @@ pub(crate) fn spawn_email_outbox_worker(database: Arc<Database>, cipher: Arc<Sec
     });
 }
 
-async fn process_email_outbox(database: &Database, cipher: &SecretCipher) -> anyhow::Result<()> {
+async fn process_email_outbox(database: &Database) -> anyhow::Result<()> {
     let Some(settings) = database
         .smtp_settings()
         .await?
@@ -633,11 +619,13 @@ async fn process_email_outbox(database: &Database, cipher: &SecretCipher) -> any
         return Ok(());
     };
     for item in database.pending_outbox(10).await? {
-        let result = async {
-            let body = cipher.decrypt("email-outbox", &item.encrypted_body)?;
-            let body = String::from_utf8(body)?;
-            send_email(&settings, cipher, &item.recipient, &item.subject, body).await
-        }
+        let result = send_email(
+            &settings,
+            &item.recipient,
+            &item.subject,
+            item.body,
+            item.html_body,
+        )
         .await;
         if result.is_ok() {
             database.mark_outbox_sent(item.id).await?;
@@ -652,10 +640,10 @@ async fn process_email_outbox(database: &Database, cipher: &SecretCipher) -> any
 
 async fn send_email(
     settings: &SmtpSettings,
-    cipher: &SecretCipher,
     recipient: &str,
     subject: &str,
     body: String,
+    html_body: Option<String>,
 ) -> anyhow::Result<()> {
     let mut builder = match settings.security.as_str() {
         "starttls" => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&settings.host)?,
@@ -664,18 +652,18 @@ async fn send_email(
         _ => anyhow::bail!("invalid SMTP security mode"),
     }
     .port(settings.port);
-    if let (Some(username), Some(encrypted_password)) =
-        (&settings.username, &settings.encrypted_password)
-    {
-        let password = String::from_utf8(cipher.decrypt("smtp-password", encrypted_password)?)?;
-        builder = builder.credentials(Credentials::new(username.clone(), password));
+    if let (Some(username), Some(password)) = (&settings.username, &settings.password) {
+        builder = builder.credentials(Credentials::new(username.clone(), password.clone()));
     }
     let from: Mailbox = format!("{} <{}>", settings.from_name, settings.from_address).parse()?;
     let message = Message::builder()
         .from(from)
         .to(recipient.parse()?)
-        .subject(subject)
-        .body(body)?;
+        .subject(subject);
+    let message = match html_body {
+        Some(html) => message.multipart(MultiPart::alternative_plain_html(body, html))?,
+        None => message.body(body)?,
+    };
     builder.build().send(message).await?;
     Ok(())
 }
@@ -684,6 +672,28 @@ fn email_domain_allowed(email: &str, domains: &[String]) -> bool {
     email
         .rsplit_once('@')
         .is_some_and(|(_, domain)| domains.iter().any(|allowed| allowed == domain))
+}
+
+fn invitation_email(link: &str, expires_at: i64) -> (String, String) {
+    let expiry = chrono::DateTime::from_timestamp(expires_at, 0)
+        .map(|value| value.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "the stated expiration time".to_string());
+    let plain = format!(
+        "You were invited to MirrorProxy. This invitation expires at {expiry}.\n\nOpen the link to create your account and sign in:\n{link}"
+    );
+    let html = format!(
+        "<div style=\"font-family:Arial,sans-serif;line-height:1.6;color:#172033\"><h2>MirrorProxy invitation</h2><p>You were invited to MirrorProxy.</p><p><a href=\"{}\" style=\"display:inline-block;padding:11px 18px;border-radius:6px;background:#146b7c;color:#fff;text-decoration:none;font-weight:700\">Accept invitation</a></p><p style=\"color:#667085\">This one-time invitation expires at <strong>{expiry}</strong>.</p></div>",
+        html_escape(link)
+    );
+    (plain, html)
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn random_token(length: usize) -> String {
@@ -699,14 +709,6 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .expect("system time before epoch")
         .as_secs() as i64
-}
-
-fn conflict(message: &str) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(serde_json::json!({ "error": message })),
-    )
-        .into_response()
 }
 
 fn service_unavailable(message: &str) -> Response {
@@ -737,6 +739,20 @@ mod tests {
     }
 
     #[test]
+    fn invitation_email_contains_clickable_link_and_expiration() {
+        let (plain, html) = invitation_email(
+            "https://mirror.example/login?email=person%40example.com&token=abc",
+            1_784_851_200,
+        );
+        assert!(plain.contains("expires at"));
+        assert!(plain.contains("token=abc"));
+        assert!(html.contains(
+            "<a href=\"https://mirror.example/login?email=person%40example.com&amp;token=abc\""
+        ));
+        assert!(html.contains("This one-time invitation expires at"));
+    }
+
+    #[test]
     fn public_smtp_settings_never_serialize_a_password() {
         let rendered = serde_json::to_string(&PublicSmtpSettings {
             enabled: true,
@@ -747,11 +763,9 @@ mod tests {
             has_password: true,
             from_name: "MirrorProxy".to_string(),
             from_address: "mirror@example.com".to_string(),
-            master_key_configured: true,
         })
         .unwrap();
         assert!(!rendered.contains("smtp-secret"));
-        assert!(!rendered.contains("encrypted_password"));
         assert!(!rendered.contains("\"password\""));
         assert!(rendered.contains("\"has_password\":true"));
     }

@@ -196,10 +196,9 @@ Passkey 安全要求：
 
 1. 管理员输入邮箱、显示名称、计费组和个人配额。
 2. 系统创建待接受邀请并发送邮件。
-3. 用户通过邀请链接进入登录页。
-4. 用户使用邮件验证码、Magic Link 或符合策略的 OAuth/OIDC 完成身份验证。
-5. 验证邮箱必须与邀请邮箱一致。
-6. 邀请成功接受后才创建或启用正式用户。
+3. 用户点击一次性邀请链接，系统校验邀请邮箱和 token。
+4. 校验成功后立即创建账户、接受邀请并建立登录 Session，无需再次接收验证码。
+5. 邀请邮箱必须与最终账户邮箱一致。
 
 邀请支持撤销、重新发送、过期和审计。
 
@@ -218,9 +217,9 @@ Passkey 安全要求：
 安全要求：
 
 - SMTP 密码和 OAuth Client Secret 不返回给前端。
-- 敏感配置使用 `MIRRORPROXY_MASTER_KEY` 加密后写入 SQLite。
+- SMTP 密码和 OAuth Client Secret 直接写入 SQLite。
 - 日志和审计不得包含密码、Client Secret、验证码或完整登录链接。
-- 未配置主密钥时，不允许在数据库中保存可恢复的敏感凭据，并在后台明确提示。
+- 数据库文件和备份必须按敏感凭据进行访问控制。
 
 邮件验证码和 Magic Link 共用一次性凭证模型：
 
@@ -602,10 +601,10 @@ feat: add user identity and sqids subdomain routing
 
 状态：已完成。已实现持久化 SMTP 管理、测试邮件、邀请创建/撤销/重发、邮箱验证码和
 Magic Link、`invite_only`/`domain_allowlist`/`open`/`disabled` 注册策略，以及独立的
-普通用户 Session。SMTP 密码和邮件 Outbox 正文由持久化 `MIRRORPROXY_MASTER_KEY`
-使用 XChaCha20-Poly1305 加密；验证码、Magic Link 和邀请凭证仅保存哈希，并具备一次性
+普通用户 Session。SMTP 密码和邮件 Outbox 正文直接保存在 SQLite；验证码、Magic Link
+和邀请凭证仅保存哈希，并具备一次性
 消费、过期、错误次数限制、分级发送限流和最多五次的退避重试。注册策略变更及 SMTP
-凭据修改要求近期超级管理员认证，敏感信息不会返回前端或写入审计。管理端支持 SMTP、
+凭据修改要求超级管理员权限，敏感信息不会返回前端或写入审计。管理端支持 SMTP、
 测试邮件和邀请操作，用户端支持邮件登录、查看及轮换计费子域名。全工作区 213 项测试、
 Clippy、前端 10 项单元测试、生产构建和 Compose 校验均已通过；新增 2 项浏览器流程后
 Playwright 可发现全部 10 项用例，但当前受限环境禁止监听本地端口，未能在本轮重新执行。
@@ -630,8 +629,8 @@ feat: add smtp invitations and passwordless email login
 登录与账号绑定，所有 Provider 使用 S256 PKCE、服务端哈希的一次性 state 和十分钟流程
 有效期；OIDC 额外校验 nonce、Issuer、Audience、签名、过期时间及可用的 Access Token
 Hash。内置 GitHub、GitLab、Gitee、Google、Microsoft、Keycloak、Authentik 与通用
-OAuth2/OIDC 模板。Provider Client Secret 和流程内容由持久化
-`MIRRORPROXY_MASTER_KEY` 使用 XChaCha20-Poly1305 加密，API、日志和审计仅暴露是否已配置。
+OAuth2/OIDC 模板。Provider Client Secret 和流程内容直接保存在 SQLite，API、日志和审计
+仅暴露是否已配置。
 控制面 HTTP Client 强制直连且禁止自动重定向，不继承镜像上游代理。
 
 只有 Provider 明确验证的邮箱才允许自动关联或注册；自动关联、Provider 注册开关、全局
@@ -770,7 +769,6 @@ feat: complete identity administration and deployment safeguards
 - 反向代理保留原始 Host。
 - 可信代理列表配置正确。
 - `/admin` 的 WebAuthn RP ID 和 Origin 检查通过。
-- `MIRRORPROXY_MASTER_KEY` 已配置并持久保存。
-- SQLite 数据目录和主密钥都已纳入备份方案。
+- SQLite 数据目录已纳入备份方案，并按敏感凭据进行访问控制。
 
 如果以上条件不满足，管理后台不得允许启用 `subdomain_required` 或管理员 Passkey 强制策略。

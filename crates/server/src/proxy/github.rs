@@ -38,12 +38,30 @@ pub async fn proxy(
     if !is_supported_method(&parts.method, &target) {
         return Err(ProxyError::MethodNotAllowed);
     }
+    let target = configured_target(&state.config(), target)?;
 
     if parts.method == Method::POST {
         proxy::forward_with_body(&state, parts.method, target, &parts.headers, body).await
     } else {
         proxy::forward(&state, parts.method, target, &parts.headers).await
     }
+}
+
+fn configured_target(config: &crate::config::Config, target: Url) -> Result<Url, ProxyError> {
+    let configured = match target.host_str() {
+        Some("github.com") => Some(&config.upstreams.github),
+        Some("raw.githubusercontent.com") => Some(&config.upstreams.github_raw),
+        _ => None,
+    };
+    let Some(configured) = configured else {
+        return Ok(target);
+    };
+    let mut rewritten =
+        Url::parse(proxy::select_upstream(configured)?).map_err(|_| ProxyError::InvalidUrl)?;
+    let base_path = rewritten.path().trim_end_matches('/');
+    rewritten.set_path(&format!("{base_path}{}", target.path()));
+    rewritten.set_query(target.query());
+    Ok(rewritten)
 }
 
 fn is_supported_method(method: &Method, target: &Url) -> bool {
@@ -114,5 +132,30 @@ mod tests {
         let api = Url::parse("https://api.github.com/repos/rust-lang/cargo").unwrap();
         assert!(!is_supported_method(&Method::POST, &api));
         assert!(is_supported_method(&Method::GET, &api));
+    }
+
+    #[test]
+    fn maps_github_hosts_to_configured_upstream_groups() {
+        let config = crate::config::Config {
+            upstreams: crate::config::Upstreams {
+                github: "https://one.example/github, https://two.example/github".to_string(),
+                ..crate::config::Upstreams::default()
+            },
+            ..crate::config::Config::default()
+        };
+        let first = configured_target(
+            &config,
+            Url::parse("https://github.com/org/repo/archive/main.zip?download=1").unwrap(),
+        )
+        .unwrap();
+        let candidates = config.upstream_candidates_for(&first);
+        assert_eq!(
+            first.as_str(),
+            "https://one.example/github/org/repo/archive/main.zip?download=1"
+        );
+        assert_eq!(
+            candidates[1].as_str(),
+            "https://two.example/github/org/repo/archive/main.zip?download=1"
+        );
     }
 }

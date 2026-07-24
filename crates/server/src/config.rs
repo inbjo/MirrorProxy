@@ -83,8 +83,6 @@ pub struct Upstreams {
     pub go_proxy: String,
     #[serde(default = "default_maven_repository")]
     pub maven: String,
-    #[serde(default = "default_maven_fallback_repositories")]
-    pub maven_fallbacks: Vec<String>,
     #[serde(default = "default_rubygems_repository")]
     pub rubygems: String,
     #[serde(default = "default_rustup_repository")]
@@ -187,6 +185,8 @@ pub struct CacheConfig {
 pub struct QuotaConfig {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
+    pub bidirectional_accounting: bool,
     #[serde(default = "default_quota_monthly_gb")]
     pub monthly_gb: u64,
     #[serde(default = "default_quota_timezone")]
@@ -330,9 +330,6 @@ impl Config {
                 self.timeout.request_secs = timeout;
             }
         }
-        if let Ok(value) = std::env::var("MIRRORPROXY_MAVEN_FALLBACKS") {
-            self.upstreams.maven_fallbacks = parse_url_list(&value);
-        }
         if let Ok(value) = std::env::var("MIRRORPROXY_RATE_LIMIT_ENABLED") {
             self.rate_limit.enabled = matches!(
                 value.to_ascii_lowercase().as_str(),
@@ -369,6 +366,10 @@ impl Config {
                 value.to_ascii_lowercase().as_str(),
                 "1" | "true" | "yes" | "on"
             );
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING") {
+            self.quota.bidirectional_accounting =
+                parse_env_bool("MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING", &value)?;
         }
         if let Ok(value) = std::env::var("MIRRORPROXY_QUOTA_MONTHLY_GB") {
             if let Ok(monthly_gb) = value.parse() {
@@ -568,18 +569,6 @@ impl Config {
         validate_http_url("upstreams.opam", &self.upstreams.opam)?;
         validate_http_url("upstreams.go_proxy", &self.upstreams.go_proxy)?;
         validate_http_url("upstreams.maven", &self.upstreams.maven)?;
-        for (index, fallback) in self.upstreams.maven_fallbacks.iter().enumerate() {
-            validate_http_url(&format!("upstreams.maven_fallbacks[{index}]"), fallback)?;
-            if fallback.trim_end_matches('/') == self.upstreams.maven.trim_end_matches('/') {
-                anyhow::bail!("upstreams.maven_fallbacks cannot repeat upstreams.maven");
-            }
-            if self.upstreams.maven_fallbacks[..index]
-                .iter()
-                .any(|candidate| candidate.trim_end_matches('/') == fallback.trim_end_matches('/'))
-            {
-                anyhow::bail!("upstreams.maven_fallbacks cannot contain duplicate repositories");
-            }
-        }
         validate_http_url("upstreams.rubygems", &self.upstreams.rubygems)?;
         validate_http_url("upstreams.rustup", &self.upstreams.rustup)?;
         validate_http_url("upstreams.nuget", &self.upstreams.nuget)?;
@@ -634,23 +623,118 @@ impl Config {
     pub fn upstream_auth_for(&self, url: &reqwest::Url) -> Option<&UpstreamAuth> {
         self.upstream_auth.iter().find_map(|(name, auth)| {
             let upstream = self.upstream_url(name)?;
-            let configured = reqwest::Url::parse(upstream).ok()?;
-            (configured.scheme() == url.scheme()
-                && configured.host_str() == url.host_str()
-                && configured.port_or_known_default() == url.port_or_known_default())
-            .then_some(auth)
+            upstream
+                .split(',')
+                .map(str::trim)
+                .filter_map(|endpoint| reqwest::Url::parse(endpoint).ok())
+                .any(|configured| {
+                    configured.scheme() == url.scheme()
+                        && configured.host_str() == url.host_str()
+                        && configured.port_or_known_default() == url.port_or_known_default()
+                })
+                .then_some(auth)
         })
+    }
+
+    /// Expands the configured upstream group that produced `requested`, keeping
+    /// its path and query while replacing the configured base URL in order.
+    pub fn upstream_candidates_for(&self, requested: &reqwest::Url) -> Vec<reqwest::Url> {
+        let upstreams = &self.upstreams;
+        let groups = [
+            &upstreams.github,
+            &upstreams.github_raw,
+            &upstreams.packagist,
+            &upstreams.docker_hub,
+            &upstreams.ghcr,
+            &upstreams.quay,
+            &upstreams.kubernetes,
+            &upstreams.npm,
+            &upstreams.nvm,
+            &upstreams.opam,
+            &upstreams.go_proxy,
+            &upstreams.rubygems,
+            &upstreams.rustup,
+            &upstreams.nuget,
+            &upstreams.cpan,
+            &upstreams.cran,
+            &upstreams.hackage,
+            &upstreams.julia,
+            &upstreams.luarocks,
+            &upstreams.clojars,
+            &upstreams.cocoapods,
+            &upstreams.pub_repository,
+            &upstreams.anaconda,
+            &upstreams.texlive,
+            &upstreams.winget,
+            &upstreams.elpa,
+            &upstreams.nix,
+            &upstreams.guix,
+            &upstreams.flatpak,
+            &upstreams.homebrew,
+            &upstreams.alpine,
+            &upstreams.openwrt,
+            &upstreams.termux,
+            &upstreams.debian,
+            &upstreams.ubuntu,
+            &upstreams.fedora,
+            &upstreams.archlinux,
+            &upstreams.opensuse,
+            &upstreams.void,
+            &upstreams.gentoo,
+            &upstreams.freebsd,
+            &upstreams.crates_index,
+            &upstreams.crates_api,
+            &upstreams.pypi_simple,
+            &upstreams.pypi_files,
+        ];
+
+        let mut best_match: Option<(usize, Vec<reqwest::Url>)> = None;
+        let mut consider = |configured: &str| {
+            let endpoints = parse_url_list(configured);
+            let Some(primary) = endpoints
+                .first()
+                .and_then(|endpoint| reqwest::Url::parse(endpoint).ok())
+            else {
+                return;
+            };
+            let Some(suffix) = upstream_path_suffix(&primary, requested) else {
+                return;
+            };
+            let candidates = endpoints
+                .iter()
+                .filter_map(|endpoint| reqwest::Url::parse(endpoint).ok())
+                .map(|mut candidate| {
+                    let base_path = candidate.path().trim_end_matches('/');
+                    candidate.set_path(&format!("{base_path}{suffix}"));
+                    candidate.set_query(requested.query());
+                    candidate
+                })
+                .collect::<Vec<_>>();
+            let specificity = primary.path().len();
+            if best_match
+                .as_ref()
+                .is_none_or(|(current, _)| specificity > *current)
+            {
+                best_match = Some((specificity, candidates));
+            }
+        };
+
+        consider(&upstreams.maven);
+        for configured in groups {
+            consider(configured);
+        }
+        for configured in upstreams.additional_os.values() {
+            consider(configured);
+        }
+
+        best_match
+            .map(|(_, candidates)| candidates)
+            .filter(|candidates| !candidates.is_empty())
+            .unwrap_or_else(|| vec![requested.clone()])
     }
 
     fn upstream_url(&self, name: &str) -> Option<&str> {
         let upstreams = &self.upstreams;
-        if let Some(index) = name
-            .strip_prefix("maven_fallback_")
-            .and_then(|value| value.parse::<usize>().ok())
-            .and_then(|value| value.checked_sub(1))
-        {
-            return upstreams.maven_fallbacks.get(index).map(String::as_str);
-        }
         Some(match name {
             "github" => &upstreams.github,
             "github_raw" => &upstreams.github_raw,
@@ -701,6 +785,21 @@ impl Config {
             _ => return None,
         })
     }
+}
+
+fn upstream_path_suffix<'a>(
+    primary: &reqwest::Url,
+    requested: &'a reqwest::Url,
+) -> Option<&'a str> {
+    if primary.scheme() != requested.scheme()
+        || primary.host_str() != requested.host_str()
+        || primary.port_or_known_default() != requested.port_or_known_default()
+    {
+        return None;
+    }
+    let base_path = primary.path().trim_end_matches('/');
+    let suffix = requested.path().strip_prefix(base_path)?;
+    (suffix.is_empty() || suffix.starts_with('/')).then_some(suffix)
 }
 
 impl Default for Config {
@@ -807,7 +906,6 @@ impl Default for Upstreams {
             opam: default_opam_repository(),
             go_proxy: default_go_proxy(),
             maven: default_maven_repository(),
-            maven_fallbacks: default_maven_fallback_repositories(),
             rubygems: default_rubygems_repository(),
             rustup: default_rustup_repository(),
             nuget: default_nuget_repository(),
@@ -879,6 +977,7 @@ impl Default for QuotaConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            bidirectional_accounting: false,
             monthly_gb: default_quota_monthly_gb(),
             timezone: default_quota_timezone(),
             on_exceeded: default_quota_on_exceeded(),
@@ -1232,10 +1331,6 @@ fn default_maven_repository() -> String {
     "https://repo.maven.apache.org/maven2".to_string()
 }
 
-fn default_maven_fallback_repositories() -> Vec<String> {
-    vec!["https://jcenter.bintray.com".to_string()]
-}
-
 fn default_rubygems_repository() -> String {
     "https://rubygems.org".to_string()
 }
@@ -1441,13 +1536,24 @@ fn default_request_event_retention_days() -> u32 {
 }
 
 fn validate_http_url(field: &str, value: &str) -> anyhow::Result<()> {
-    let url = Url::parse(value).map_err(|error| anyhow::anyhow!("{field} is invalid: {error}"))?;
-    match url.scheme() {
-        "http" | "https" => {}
-        scheme => anyhow::bail!("{field} must use http or https, got {scheme}"),
+    let endpoints = value
+        .split(',')
+        .map(str::trim)
+        .filter(|endpoint| !endpoint.is_empty())
+        .collect::<Vec<_>>();
+    if endpoints.is_empty() {
+        anyhow::bail!("{field} must contain at least one URL");
     }
-    if url.host_str().is_none() {
-        anyhow::bail!("{field} must include a host");
+    for (index, endpoint) in endpoints.into_iter().enumerate() {
+        let url = Url::parse(endpoint)
+            .map_err(|error| anyhow::anyhow!("{field}[{index}] is invalid: {error}"))?;
+        match url.scheme() {
+            "http" | "https" => {}
+            scheme => anyhow::bail!("{field}[{index}] must use http or https, got {scheme}"),
+        }
+        if url.host_str().is_none() {
+            anyhow::bail!("{field}[{index}] must include a host");
+        }
     }
     Ok(())
 }
@@ -1719,6 +1825,13 @@ password = "proxy-password"
         assert!(config
             .upstream_auth_for(&reqwest::Url::parse("https://example.com/react").unwrap())
             .is_none());
+        config.upstreams.npm =
+            "https://registry.npmjs.org, https://npm-mirror.example/repository".to_string();
+        assert!(config
+            .upstream_auth_for(
+                &reqwest::Url::parse("https://npm-mirror.example/repository/react").unwrap()
+            )
+            .is_some());
         let rendered = serde_json::to_string(&config).unwrap();
         assert!(!rendered.contains("secret"));
         assert!(!rendered.contains("upstream_auth"));
@@ -1749,46 +1862,34 @@ password = "proxy-password"
     }
 
     #[test]
-    fn validates_ordered_maven_fallback_repositories() {
-        let config = Config::default();
-        assert_eq!(
-            config.upstreams.maven_fallbacks,
-            ["https://jcenter.bintray.com"]
-        );
+    fn validates_comma_separated_upstream_groups() {
+        let mut config = Config::default();
+        config.upstreams.npm =
+            "https://registry-one.example/npm, https://registry-two.example/npm".to_string();
         assert!(config.validate().is_ok());
 
-        let mut duplicate_primary = Config::default();
-        duplicate_primary.upstreams.maven_fallbacks =
-            vec!["https://repo.maven.apache.org/maven2/".to_string()];
-        assert!(duplicate_primary.validate().is_err());
-
-        let mut duplicate_fallback = Config::default();
-        duplicate_fallback.upstreams.maven_fallbacks = vec![
-            "https://repo.example/maven".to_string(),
-            "https://repo.example/maven/".to_string(),
-        ];
-        assert!(duplicate_fallback.validate().is_err());
-
-        let mut invalid = Config::default();
-        invalid.upstreams.maven_fallbacks = vec!["file:///tmp/maven".to_string()];
-        assert!(invalid.validate().is_err());
+        config.upstreams.npm =
+            "https://registry-one.example/npm,ftp://registry-two.example/npm".to_string();
+        assert!(config.validate().is_err());
     }
 
     #[test]
-    fn supports_credentials_for_numbered_maven_fallbacks() {
+    fn expands_upstream_candidates_in_configured_order() {
         let mut config = Config::default();
-        config.upstream_auth.insert(
-            "maven_fallback_1".to_string(),
-            UpstreamAuth {
-                username: Some("mirror".to_string()),
-                password: Some("secret".to_string()),
-                bearer_token: None,
-            },
+        config.upstreams.npm =
+            "https://one.example/npm, https://two.example/mirror/npm".to_string();
+        let requested = reqwest::Url::parse("https://one.example/npm/react?format=json").unwrap();
+        let candidates = config.upstream_candidates_for(&requested);
+        assert_eq!(
+            candidates
+                .iter()
+                .map(reqwest::Url::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "https://one.example/npm/react?format=json",
+                "https://two.example/mirror/npm/react?format=json"
+            ]
         );
-
-        assert!(config.validate().is_ok());
-        let fallback = reqwest::Url::parse(&config.upstreams.maven_fallbacks[0]).unwrap();
-        assert!(config.upstream_auth_for(&fallback).is_some());
     }
 
     #[test]

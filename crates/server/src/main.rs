@@ -4,13 +4,11 @@ mod email;
 mod oauth;
 mod observability;
 mod proxy;
-mod secrets;
 mod static_assets;
 
 use std::{
     collections::{HashMap, VecDeque},
     fs,
-    io::{self, BufRead},
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
@@ -20,7 +18,7 @@ use std::{
 use anyhow::Context;
 use axum::{
     body::Body,
-    extract::{connect_info::ConnectInfo, Path as AxumPath, Request, State},
+    extract::{connect_info::ConnectInfo, Path as AxumPath, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -31,7 +29,7 @@ use chrono::{Datelike, Local, Utc};
 use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
 use config::{Config, OutboundProxyConfig};
-use database::{Database, ProxyTrafficRecord};
+use database::{AdminUsernameChangeOutcome, Database, ProxyTrafficRecord};
 use mirrorproxy_catalog as catalog;
 use observability::Observability;
 use opentelemetry::trace::TracerProvider as _;
@@ -44,7 +42,6 @@ use proxy::{
     pypi, rubygems, rustup, texlive, winget, ProxyError,
 };
 use reqwest::{Client, ClientBuilder, NoProxy, Proxy, Url};
-use secrets::SecretCipher;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tracing::Instrument;
@@ -94,8 +91,8 @@ enum Command {
 
 #[derive(Subcommand, Debug)]
 enum AdminCommand {
-    /// Read a replacement password from stdin and revoke all sessions.
-    ResetPassword { username: String },
+    /// Generate a replacement password for the initial administrator and revoke its sessions.
+    ResetPassword,
 }
 
 #[derive(Subcommand, Debug)]
@@ -119,7 +116,6 @@ pub struct AppState {
     rate_limiter: Arc<RateLimiter>,
     admin_login_limiter: Arc<AdminLoginRateLimiter>,
     webauthn: Arc<RwLock<Option<Arc<Webauthn>>>>,
-    master_key: Option<Arc<SecretCipher>>,
     observability: Arc<Observability>,
 }
 
@@ -288,25 +284,14 @@ fn run_config_command(
 
 async fn run_admin_command(command: AdminCommand, config: &Config) -> anyhow::Result<()> {
     match command {
-        AdminCommand::ResetPassword { username } => {
-            let username = username.trim();
-            validate_admin_username(username)?;
-            eprint!("New password for {username}: ");
-            let mut password = String::new();
-            io::stdin()
-                .lock()
-                .read_line(&mut password)
-                .context("failed to read password from stdin")?;
-            let password = password.trim_end_matches(['\r', '\n']);
-            validate_admin_password(username, password)?;
+        AdminCommand::ResetPassword => {
             let (database, _) = Database::open(&config.database_path).await?;
-            if !database
-                .reset_admin_password("cli", username, password)
-                .await?
-            {
-                anyhow::bail!("administrator '{username}' does not exist");
-            }
-            println!("Reset password for administrator '{username}' and revoked all sessions.");
+            let Some(credentials) = database.reset_initial_admin_password("cli").await? else {
+                anyhow::bail!("the initial administrator no longer exists");
+            };
+            println!("ADMIN USERNAME: {}", credentials.username);
+            println!("NEW ADMIN PASSWORD: {}", credentials.password);
+            println!("All sessions for this administrator were revoked.");
         }
     }
     Ok(())
@@ -365,14 +350,12 @@ fn set_toml_value(document: &mut toml::Value, key: &str, value: &str) -> anyhow:
         ConfigValueKind::Bool => toml::Value::Boolean(value.parse()?),
         ConfigValueKind::U64 | ConfigValueKind::PositiveU64 => toml::Value::Integer(value.parse()?),
         ConfigValueKind::PositiveU32 => toml::Value::Integer(i64::from(value.parse::<u32>()?)),
-        ConfigValueKind::HttpUrl
-        | ConfigValueKind::OptionalHttpUrl
+        ConfigValueKind::OptionalHttpUrl
         | ConfigValueKind::ProxyUrl
         | ConfigValueKind::NonEmpty
         | ConfigValueKind::QuotaAction => toml::Value::String(value.to_string()),
-        ConfigValueKind::HttpUrlList
-        | ConfigValueKind::StringList
-        | ConfigValueKind::TrustedProxyList => toml::Value::Array(
+        ConfigValueKind::HttpUrlList => toml::Value::String(value.to_string()),
+        ConfigValueKind::StringList | ConfigValueKind::TrustedProxyList => toml::Value::Array(
             value
                 .split(',')
                 .map(str::trim)
@@ -444,7 +427,6 @@ struct ConfigSetSpec {
 #[derive(Clone, Copy)]
 enum ConfigValueKind {
     Bool,
-    HttpUrl,
     OptionalHttpUrl,
     HttpUrlList,
     ProxyUrl,
@@ -458,18 +440,11 @@ enum ConfigValueKind {
 }
 
 fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
-    if key == "upstreams.maven_fallbacks" {
-        return Some(ConfigSetSpec {
-            key: key.to_string(),
-            toml_path: key.to_string(),
-            value_kind: ConfigValueKind::HttpUrlList,
-        });
-    }
     if key.starts_with("upstreams.") && config_value(&Config::default(), key).is_some() {
         return Some(ConfigSetSpec {
             key: key.to_string(),
             toml_path: key.to_string(),
-            value_kind: ConfigValueKind::HttpUrl,
+            value_kind: ConfigValueKind::HttpUrlList,
         });
     }
 
@@ -538,6 +513,11 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             ConfigValueKind::PositiveU64,
         ),
         "quota.enabled" => ("quota.enabled", "quota.enabled", ConfigValueKind::Bool),
+        "quota.bidirectional_accounting" => (
+            "quota.bidirectional_accounting",
+            "quota.bidirectional_accounting",
+            ConfigValueKind::Bool,
+        ),
         "quota.monthly_gb" => ("quota.monthly_gb", "quota.monthly_gb", ConfigValueKind::U64),
         "quota.timezone" => (
             "quota.timezone",
@@ -573,15 +553,6 @@ fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
                 anyhow::bail!("{key} expects true or false");
             }
         }
-        ConfigValueKind::HttpUrl => {
-            reqwest::Url::parse(value)
-                .map_err(|error| anyhow::anyhow!("{key} is invalid: {error}"))
-                .and_then(|url| match url.scheme() {
-                    "http" | "https" if url.host_str().is_some() => Ok(()),
-                    "http" | "https" => anyhow::bail!("{key} must include a host"),
-                    scheme => anyhow::bail!("{key} must use http or https, got {scheme}"),
-                })?;
-        }
         ConfigValueKind::OptionalHttpUrl => {
             if !value.is_empty() {
                 reqwest::Url::parse(value)
@@ -594,12 +565,15 @@ fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
             }
         }
         ConfigValueKind::HttpUrlList => {
-            for (index, item) in value
+            let items = value
                 .split(',')
                 .map(str::trim)
                 .filter(|item| !item.is_empty())
-                .enumerate()
-            {
+                .collect::<Vec<_>>();
+            if items.is_empty() {
+                anyhow::bail!("{key} must contain at least one URL");
+            }
+            for (index, item) in items.into_iter().enumerate() {
                 reqwest::Url::parse(item)
                     .map_err(|error| anyhow::anyhow!("{key}[{index}] is invalid: {error}"))
                     .and_then(|url| match url.scheme() {
@@ -686,6 +660,7 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "cache.max_entry_mb" => Some(config.cache.max_entry_mb.to_string()),
         "cache.max_total_mb" => Some(config.cache.max_total_mb.to_string()),
         "quota.enabled" => Some(config.quota.enabled.to_string()),
+        "quota.bidirectional_accounting" => Some(config.quota.bidirectional_accounting.to_string()),
         "quota.monthly_gb" => Some(config.quota.monthly_gb.to_string()),
         "quota.timezone" => Some(config.quota.timezone.clone()),
         "quota.on_exceeded" => Some(config.quota.on_exceeded.clone()),
@@ -704,7 +679,6 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.opam" => Some(config.upstreams.opam.clone()),
         "upstreams.go_proxy" => Some(config.upstreams.go_proxy.clone()),
         "upstreams.maven" => Some(config.upstreams.maven.clone()),
-        "upstreams.maven_fallbacks" => Some(config.upstreams.maven_fallbacks.join(",")),
         "upstreams.rubygems" => Some(config.upstreams.rubygems.clone()),
         "upstreams.rustup" => Some(config.upstreams.rustup.clone()),
         "upstreams.nuget" => Some(config.upstreams.nuget.clone()),
@@ -762,6 +736,7 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
         "cache.max_entry_mb",
         "cache.max_total_mb",
         "quota.enabled",
+        "quota.bidirectional_accounting",
         "quota.monthly_gb",
         "quota.timezone",
         "quota.on_exceeded",
@@ -778,7 +753,6 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
         "upstreams.opam",
         "upstreams.go_proxy",
         "upstreams.maven",
-        "upstreams.maven_fallbacks",
         "upstreams.rubygems",
         "upstreams.rustup",
         "upstreams.nuget",
@@ -884,7 +858,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     };
     let (database, initial_admin) = Database::open(database_path).await?;
     let service_config = config.clone();
-    let mut config = database.load_or_seed_runtime_config(config).await?;
+    let mut config = database
+        .load_or_seed_runtime_config(service_config.clone())
+        .await?;
     // Secrets are not persisted to SQLite, so retain the service-owned values
     // after loading the mutable runtime configuration snapshot.
     config.upstream_auth = service_config.upstream_auth;
@@ -903,36 +879,29 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     }
     let observability = Arc::new(Observability::new()?);
     let webauthn = build_webauthn(&config)?;
-    let master_key = SecretCipher::from_environment()?.map(Arc::new);
 
     if let Some(credentials) = initial_admin {
-        if credentials.generated {
-            tracing::warn!(
-                "{}",
-                initial_admin_password_log(credentials.username, &credentials.password)
-            );
-        } else {
-            tracing::info!(
-                username = credentials.username,
-                "created initial MirrorProxy administrator with MIRRORPROXY_ADMIN_PASSWORD"
-            );
-        }
+        tracing::warn!(
+            "{}",
+            initial_admin_credentials_log(
+                &credentials.username,
+                &credentials.password,
+                credentials.password_generated,
+            )
+        );
     }
 
     let state = AppState {
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         webauthn: Arc::new(RwLock::new(webauthn)),
-        master_key: master_key.clone(),
         config: Arc::new(RwLock::new(config)),
         database: Arc::new(database),
         client,
         observability,
     };
 
-    if let Some(cipher) = master_key {
-        email::spawn_email_outbox_worker(state.database.clone(), cipher);
-    }
+    email::spawn_email_outbox_worker(state.database.clone());
 
     Ok(Router::new()
         .route("/healthz", get(healthz))
@@ -943,6 +912,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         .route("/api/admin/login", post(admin_login))
         .route("/api/admin/logout", post(admin_logout))
         .route("/api/admin/password", post(change_admin_password))
+        .route("/api/admin/username", post(change_admin_username))
         .route(
             "/api/admin/config",
             get(admin_config).put(update_admin_config),
@@ -983,21 +953,13 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             delete(delete_admin_passkey),
         )
         .route("/admin/api/password", post(change_admin_password))
+        .route("/admin/api/username", post(change_admin_username))
         .route(
             "/admin/api/config",
             get(admin_config).put(update_admin_config),
         )
         .route("/admin/api/stats", get(admin_stats))
         .route("/admin/api/audit-log", get(admin_audit_log))
-        .route("/admin/api/admins", get(list_admins).post(create_admin))
-        .route(
-            "/admin/api/admins/{username}/status",
-            post(update_admin_status),
-        )
-        .route(
-            "/admin/api/admins/{username}/password",
-            post(reset_admin_password),
-        )
         .route("/admin/api/users", get(list_users).post(create_user))
         .route("/admin/api/users/{id}", delete(delete_user))
         .route("/admin/api/users/{id}/status", post(update_user_status))
@@ -1392,9 +1354,18 @@ fn unknown_user_subdomain_response() -> Response {
         .into_response()
 }
 
-fn initial_admin_password_log(username: &str, password: &str) -> String {
+fn initial_admin_credentials_log(
+    username: &str,
+    password: &str,
+    password_generated: bool,
+) -> String {
+    let password_line = if password_generated {
+        format!("INITIAL ADMIN PASSWORD: {password}")
+    } else {
+        "INITIAL ADMIN PASSWORD: configured by MIRRORPROXY_ADMIN_PASSWORD (not shown)".to_string()
+    };
     format!(
-        "\nINITIAL ADMIN PASSWORD: {password}\nMIRRORPROXY_ADMIN_PASSWORD is empty or unset; generated a random password for username {username}.\nSave this password now; it will not be shown again."
+        "\nINITIAL ADMIN USERNAME: {username}\n{password_line}\nSave these credentials now; they will not be shown again."
     )
 }
 
@@ -1555,6 +1526,12 @@ async fn rate_limit_middleware(
     let target_code = proxy_target_for_path(&path);
     if let Some(target_code) = target_code {
         let (day, month) = quota_period(&config.quota.timezone);
+        let accounting_multiplier = if config.quota.bidirectional_accounting {
+            2
+        } else {
+            1
+        };
+        let reservation_bytes = QUOTA_RESERVATION_BYTES.saturating_mul(accounting_multiplier);
         let user_context = request.extensions().get::<UserRoutingContext>().cloned();
         let global_limit = config
             .quota
@@ -1572,12 +1549,12 @@ async fn rate_limit_middleware(
                     context.user_id,
                     global_limit,
                     default_user_limit,
-                    QUOTA_RESERVATION_BYTES,
+                    reservation_bytes,
                 )
                 .await
             {
                 Ok(database::HierarchicalReservationOutcome::Reserved { group_id }) => {
-                    (QUOTA_RESERVATION_BYTES, group_id)
+                    (reservation_bytes, group_id)
                 }
                 Ok(database::HierarchicalReservationOutcome::Exceeded { scope }) => {
                     if scope == "global" {
@@ -1593,10 +1570,10 @@ async fn rate_limit_middleware(
         } else if let Some(limit) = global_limit {
             match state
                 .database
-                .try_reserve_monthly_bytes(&month, limit, QUOTA_RESERVATION_BYTES)
+                .try_reserve_monthly_bytes(&month, limit, reservation_bytes)
                 .await
             {
-                Ok(true) => (QUOTA_RESERVATION_BYTES, None),
+                Ok(true) => (reservation_bytes, None),
                 Ok(false) => return quota_rejection(&state, &config, "global"),
                 Err(error) => {
                     tracing::error!(%error, "global quota reservation failed");
@@ -1617,6 +1594,7 @@ async fn rate_limit_middleware(
             method,
             path,
             reserved_bytes,
+            accounting_multiplier,
             user_context.map(|context| context.user_id),
             group_id,
             config.quota.request_event_retention_days,
@@ -1751,6 +1729,7 @@ fn track_proxy_response(
     method: String,
     path: String,
     reserved_bytes: u64,
+    accounting_multiplier: u64,
     user_id: Option<i64>,
     group_id: Option<i64>,
     request_event_retention_days: u32,
@@ -1820,7 +1799,7 @@ fn track_proxy_response(
                             method: &method,
                             path: &path,
                             status_code,
-                            response_bytes,
+                            response_bytes: response_bytes.saturating_mul(accounting_multiplier),
                             stream_error: true,
                             reserved_bytes,
                             user_id,
@@ -1869,7 +1848,7 @@ fn track_proxy_response(
                             method: &method,
                             path: &path,
                             status_code,
-                            response_bytes,
+                            response_bytes: response_bytes.saturating_mul(accounting_multiplier),
                             stream_error,
                             reserved_bytes,
                             user_id,
@@ -2002,6 +1981,7 @@ struct PublicConfig {
     enabled_proxies: Vec<String>,
     quota: PublicQuotaConfig,
     user_access: PublicUserAccessConfig,
+    registration: PublicRegistrationConfig,
 }
 
 #[derive(Serialize)]
@@ -2011,8 +1991,16 @@ struct PublicUserAccessConfig {
 }
 
 #[derive(Serialize)]
+struct PublicRegistrationConfig {
+    mode: String,
+    allowed_email_domains: Vec<String>,
+    email_login_enabled: bool,
+}
+
+#[derive(Serialize)]
 struct PublicQuotaConfig {
     enabled: bool,
+    bidirectional_accounting: bool,
     monthly_gb: u64,
     timezone: String,
     on_exceeded: String,
@@ -2020,11 +2008,20 @@ struct PublicQuotaConfig {
 
 async fn public_config(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let config = state.config();
+    let email_login_enabled = match state.database.smtp_settings().await {
+        Ok(Some(settings)) => settings.enabled,
+        Ok(None) => false,
+        Err(error) => {
+            tracing::warn!(%error, "failed to resolve public email login availability");
+            false
+        }
+    };
     Json(PublicConfig {
         public_base_url: state.public_base_url(&headers),
         enabled_proxies: config.enabled_proxies.clone(),
         quota: PublicQuotaConfig {
             enabled: config.quota.enabled,
+            bidirectional_accounting: config.quota.bidirectional_accounting,
             monthly_gb: config.quota.monthly_gb,
             timezone: config.quota.timezone.clone(),
             on_exceeded: config.quota.on_exceeded.clone(),
@@ -2032,6 +2029,11 @@ async fn public_config(State(state): State<AppState>, headers: HeaderMap) -> imp
         user_access: PublicUserAccessConfig {
             enabled: !config.user_access.base_domain.is_empty(),
             mode: config.user_access.mode,
+        },
+        registration: PublicRegistrationConfig {
+            mode: config.registration.mode,
+            allowed_email_domains: config.registration.allowed_email_domains,
+            email_login_enabled,
         },
     })
 }
@@ -2310,7 +2312,7 @@ async fn start_admin_passkey_registration(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Response {
-    let (identity, token) = match require_recent_admin(&headers, &state).await {
+    let (identity, token) = match require_admin_with_token(&headers, &state).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -2392,7 +2394,7 @@ async fn finish_admin_passkey_registration(
     State(state): State<AppState>,
     Json(request): Json<FinishAdminPasskeyRegistrationRequest>,
 ) -> Response {
-    let (identity, token) = match require_recent_admin(&headers, &state).await {
+    let (identity, token) = match require_admin_with_token(&headers, &state).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -2601,7 +2603,7 @@ async fn delete_admin_passkey(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<i64>,
 ) -> Response {
-    let (identity, _) = match require_recent_admin(&headers, &state).await {
+    let (identity, _) = match require_admin_with_token(&headers, &state).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -2657,7 +2659,7 @@ fn passkey_not_configured_response() -> Response {
     conflict_response("administrator passkey authentication is not configured")
 }
 
-async fn require_recent_admin(
+async fn require_admin_with_token(
     headers: &HeaderMap,
     state: &AppState,
 ) -> Result<(database::AdminIdentity, String), Response> {
@@ -2672,26 +2674,70 @@ async fn require_recent_admin(
             return Err(internal_error_response());
         }
     };
-    match state.database.is_recent_admin_session(&token).await {
-        Ok(true) => Ok((identity, token)),
-        Ok(false) => Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "recent administrator verification required"
-            })),
-        )
-            .into_response()),
-        Err(error) => {
-            tracing::error!(%error, "administrator recent verification query failed");
-            Err(internal_error_response())
-        }
-    }
+    Ok((identity, token))
 }
 
 #[derive(Deserialize)]
 struct AdminPasswordChangeRequest {
     current_password: String,
     new_password: String,
+}
+
+#[derive(Deserialize)]
+struct AdminUsernameChangeRequest {
+    current_password: String,
+    new_username: String,
+}
+
+async fn change_admin_username(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<AdminUsernameChangeRequest>,
+) -> Response {
+    let identity = match authenticated_admin(&headers, &state).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator authorization query failed");
+            return internal_error_response();
+        }
+    };
+    let new_username = request.new_username.trim();
+    if let Err(error) = validate_admin_username(new_username) {
+        return bad_request_response(error.to_string());
+    }
+    if new_username == identity.username {
+        return bad_request_response(
+            "new username must be different from the current username".to_string(),
+        );
+    }
+    match state
+        .database
+        .change_admin_username(&identity.username, &request.current_password, new_username)
+        .await
+    {
+        Ok(AdminUsernameChangeOutcome::Changed) => {
+            let mut config = state.config.write().expect("config lock poisoned");
+            if config.webauthn.break_glass_username == identity.username {
+                config.webauthn.break_glass_username = new_username.to_string();
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(AdminUsernameChangeOutcome::InvalidCredentials) => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "current password is incorrect" })),
+        )
+            .into_response(),
+        Ok(AdminUsernameChangeOutcome::UsernameExists) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "administrator username already exists" })),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator username update failed");
+            internal_error_response()
+        }
+    }
 }
 
 async fn change_admin_password(
@@ -2821,7 +2867,27 @@ async fn admin_stats(headers: HeaderMap, State(state): State<AppState>) -> Respo
     .into_response()
 }
 
-async fn admin_audit_log(headers: HeaderMap, State(state): State<AppState>) -> Response {
+#[derive(Deserialize)]
+struct AuditLogQuery {
+    #[serde(default = "default_page")]
+    page: u32,
+    #[serde(default = "default_page_size")]
+    per_page: u32,
+}
+
+fn default_page() -> u32 {
+    1
+}
+
+fn default_page_size() -> u32 {
+    20
+}
+
+async fn admin_audit_log(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Query(query): Query<AuditLogQuery>,
+) -> Response {
     match is_admin_authorized(&headers, &state).await {
         Ok(true) => {}
         Ok(false) => return unauthorized_response(),
@@ -2831,8 +2897,16 @@ async fn admin_audit_log(headers: HeaderMap, State(state): State<AppState>) -> R
         }
     }
 
-    match state.database.recent_audit_log(20).await {
-        Ok(entries) => Json(entries).into_response(),
+    let page = query.page.max(1);
+    let per_page = query.per_page.clamp(1, 50);
+    match state.database.audit_log_page(page, per_page).await {
+        Ok((items, total)) => Json(serde_json::json!({
+            "items": items,
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+        }))
+        .into_response(),
         Err(error) => {
             tracing::error!(%error, "failed to query audit log");
             internal_error_response()
@@ -2877,67 +2951,7 @@ async fn update_admin_config(
         )
             .into_response();
     }
-    if next_config.user_access != current.user_access
-        || next_config.registration != current.registration
-    {
-        if identity.role != "super_admin" {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "super administrator access required to change user access or registration policy"
-                })),
-            )
-                .into_response();
-        }
-        let Some(token) = admin_token(&headers) else {
-            return unauthorized_response();
-        };
-        match state.database.is_recent_admin_session(token).await {
-            Ok(true) => {}
-            Ok(false) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({
-                        "error": "recent administrator verification required"
-                    })),
-                )
-                    .into_response()
-            }
-            Err(error) => {
-                tracing::error!(%error, "administrator recent verification query failed");
-                return internal_error_response();
-            }
-        }
-    }
     let next_webauthn = if next_config.webauthn != current.webauthn {
-        if identity.role != "super_admin" {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "super administrator access required to change the passkey policy"
-                })),
-            )
-                .into_response();
-        }
-        let Some(token) = admin_token(&headers) else {
-            return unauthorized_response();
-        };
-        match state.database.is_recent_admin_session(token).await {
-            Ok(true) => {}
-            Ok(false) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({
-                        "error": "recent administrator verification required"
-                    })),
-                )
-                    .into_response()
-            }
-            Err(error) => {
-                tracing::error!(%error, "administrator recent verification query failed");
-                return internal_error_response();
-            }
-        }
         if next_config.webauthn.require_passkey {
             match state
                 .database
@@ -2991,6 +3005,7 @@ async fn update_admin_config(
     .into_response()
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 struct CreateAdminRequest {
     username: String,
@@ -2999,10 +3014,13 @@ struct CreateAdminRequest {
     role: String,
 }
 
+#[cfg(test)]
 fn default_admin_role() -> String {
     "admin".to_string()
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 async fn list_admins(headers: HeaderMap, State(state): State<AppState>) -> Response {
     let identity = match require_super_admin(&headers, &state).await {
         Ok(identity) => identity,
@@ -3020,12 +3038,13 @@ async fn list_admins(headers: HeaderMap, State(state): State<AppState>) -> Respo
     }
 }
 
+#[cfg(test)]
 async fn create_admin(
     headers: HeaderMap,
     State(state): State<AppState>,
     Json(request): Json<CreateAdminRequest>,
 ) -> Response {
-    let identity = match require_recent_super_admin(&headers, &state).await {
+    let identity = match require_super_admin(&headers, &state).await {
         Ok(identity) => identity,
         Err(response) => return response,
     };
@@ -3068,13 +3087,15 @@ struct AdminStatusRequest {
     disabled: bool,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 async fn update_admin_status(
     headers: HeaderMap,
     State(state): State<AppState>,
     AxumPath(username): AxumPath<String>,
     Json(request): Json<AdminStatusRequest>,
 ) -> Response {
-    let identity = match require_recent_super_admin(&headers, &state).await {
+    let identity = match require_super_admin(&headers, &state).await {
         Ok(identity) => identity,
         Err(response) => return response,
     };
@@ -3097,18 +3118,22 @@ async fn update_admin_status(
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 #[derive(Deserialize)]
 struct AdminPasswordResetRequest {
     new_password: String,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 async fn reset_admin_password(
     headers: HeaderMap,
     State(state): State<AppState>,
     AxumPath(username): AxumPath<String>,
     Json(request): Json<AdminPasswordResetRequest>,
 ) -> Response {
-    let identity = match require_recent_super_admin(&headers, &state).await {
+    let identity = match require_super_admin(&headers, &state).await {
         Ok(identity) => identity,
         Err(response) => return response,
     };
@@ -3224,7 +3249,7 @@ async fn delete_user(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<i64>,
 ) -> Response {
-    let identity = match require_recent_super_admin(&headers, &state).await {
+    let identity = match require_super_admin(&headers, &state).await {
         Ok(identity) => identity,
         Err(response) => return response,
     };
@@ -3264,7 +3289,7 @@ async fn admin_unlink_user_identity(
     State(state): State<AppState>,
     AxumPath((user_id, identity_id)): AxumPath<(i64, i64)>,
 ) -> Response {
-    let identity = match require_recent_super_admin(&headers, &state).await {
+    let identity = match require_super_admin(&headers, &state).await {
         Ok(identity) => identity,
         Err(response) => return response,
     };
@@ -3647,41 +3672,10 @@ async fn require_super_admin(
     state: &AppState,
 ) -> Result<database::AdminIdentity, Response> {
     match authenticated_admin(headers, state).await {
-        Ok(Some(identity)) if identity.role == "super_admin" => Ok(identity),
-        Ok(Some(_)) => Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "super administrator access required"
-            })),
-        )
-            .into_response()),
+        Ok(Some(identity)) => Ok(identity),
         Ok(None) => Err(unauthorized_response()),
         Err(error) => {
             tracing::error!(%error, "administrator authorization query failed");
-            Err(internal_error_response())
-        }
-    }
-}
-
-async fn require_recent_super_admin(
-    headers: &HeaderMap,
-    state: &AppState,
-) -> Result<database::AdminIdentity, Response> {
-    let identity = require_super_admin(headers, state).await?;
-    let Some(token) = admin_token(headers) else {
-        return Err(unauthorized_response());
-    };
-    match state.database.is_recent_admin_session(token).await {
-        Ok(true) => Ok(identity),
-        Ok(false) => Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "recent administrator verification required"
-            })),
-        )
-            .into_response()),
-        Err(error) => {
-            tracing::error!(%error, "administrator recent verification query failed");
             Err(internal_error_response())
         }
     }
@@ -4016,7 +4010,6 @@ mod tests {
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
-            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
         (state, credentials.unwrap())
@@ -4046,7 +4039,6 @@ mod tests {
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
-            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
         (state, user)
@@ -4076,21 +4068,35 @@ mod tests {
     }
 
     #[test]
-    fn generated_admin_password_log_starts_with_password_and_explains_fallback() {
-        let message = initial_admin_password_log("admin", "generated-password");
+    fn generated_admin_credentials_log_contains_username_and_password() {
+        let message = initial_admin_credentials_log("admin", "generated-password", true);
 
         let mut lines = message.lines();
         assert_eq!(lines.next(), Some(""));
+        assert_eq!(lines.next(), Some("INITIAL ADMIN USERNAME: admin"));
         assert_eq!(
             lines.next(),
             Some("INITIAL ADMIN PASSWORD: generated-password")
         );
-        assert_eq!(
-            lines.next(),
-            Some(
-                "MIRRORPROXY_ADMIN_PASSWORD is empty or unset; generated a random password for username admin."
-            )
-        );
+    }
+
+    #[test]
+    fn configured_admin_password_is_not_printed() {
+        let message = initial_admin_credentials_log("admin", "secret", false);
+        assert!(message.contains("INITIAL ADMIN USERNAME: admin"));
+        assert!(message.contains("configured by MIRRORPROXY_ADMIN_PASSWORD (not shown)"));
+        assert!(!message.contains("secret"));
+    }
+
+    #[test]
+    fn parses_admin_password_reset_command_without_a_username() {
+        let cli = Cli::try_parse_from(["mirrorproxy-server", "admin", "reset-password"]).unwrap();
+        let Some(Command::Admin {
+            command: AdminCommand::ResetPassword,
+        }) = cli.command
+        else {
+            panic!("password reset command was not parsed");
+        };
     }
 
     #[tokio::test]
@@ -4363,6 +4369,10 @@ mod tests {
         );
         assert_eq!(config_value(&config, "public_base_url").unwrap(), "");
         assert_eq!(config_value(&config, "quota.monthly_gb").unwrap(), "500");
+        assert_eq!(
+            config_value(&config, "quota.bidirectional_accounting").unwrap(),
+            "false"
+        );
         assert_eq!(config_value(&config, "cache.max_entry_mb").unwrap(), "8");
         assert_eq!(
             config_value(&config, "outbound_proxy.enabled").unwrap(),
@@ -4444,6 +4454,9 @@ mod tests {
             .any(|(key, value)| key == "quota.on_exceeded" && value == "stop_proxy"));
         assert!(entries
             .iter()
+            .any(|(key, value)| { key == "quota.bidirectional_accounting" && value == "false" }));
+        assert!(entries
+            .iter()
             .any(|(key, value)| key == "cache.directory" && value == "mirrorproxy-cache"));
         assert!(entries
             .iter()
@@ -4454,10 +4467,6 @@ mod tests {
                 && value == "https://files.pythonhosted.org"));
         assert!(entries.iter().any(|(key, value)| key == "upstreams.maven"
             && value == "https://repo.maven.apache.org/maven2"));
-        assert!(entries
-            .iter()
-            .any(|(key, value)| key == "upstreams.maven_fallbacks"
-                && value == "https://jcenter.bintray.com"));
         assert!(entries
             .iter()
             .any(|(key, value)| key == "upstreams.rubygems" && value == "https://rubygems.org"));
@@ -4503,13 +4512,13 @@ mod tests {
         .unwrap();
         assert_eq!(os_upstream.toml_path, "upstreams.additional_os.kali");
 
-        let maven_fallbacks = plan_config_set(
+        let maven = plan_config_set(
             &config,
-            "upstreams.maven_fallbacks",
+            "upstreams.maven",
             "https://first.example/maven, https://second.example/maven",
         )
         .unwrap();
-        assert_eq!(maven_fallbacks.current_value, "https://jcenter.bintray.com");
+        assert_eq!(maven.current_value, "https://repo.maven.apache.org/maven2");
 
         let outbound_proxy =
             plan_config_set(&config, "outbound_proxy.url", "socks5h://127.0.0.1:1080").unwrap();
@@ -4523,17 +4532,18 @@ mod tests {
         assert!(plan_config_set(&config, "missing.key", "value").is_err());
         assert!(plan_config_set(&config, "public_base_url", "file:///tmp").is_err());
         assert!(plan_config_set(&config, "quota.enabled", "yes").is_err());
+        assert!(plan_config_set(&config, "quota.bidirectional_accounting", "true").is_ok());
         assert!(plan_config_set(&config, "cache.max_entry_mb", "0").is_err());
         assert!(plan_config_set(&config, "quota.on_exceeded", "drop").is_err());
         assert!(plan_config_set(&config, "timeout.request_secs", "0").is_err());
         assert!(plan_config_set(&config, "quota.monthly_gb", "0").is_ok());
         assert!(plan_config_set(
             &config,
-            "upstreams.maven_fallbacks",
+            "upstreams.maven",
             "https://repo.example/maven,ftp://invalid.example/maven",
         )
         .is_err());
-        assert!(plan_config_set(&config, "upstreams.maven_fallbacks", "").is_ok());
+        assert!(plan_config_set(&config, "upstreams.maven", "").is_err());
         assert!(plan_config_set(&config, "outbound_proxy.enabled", "true").is_err());
         assert!(plan_config_set(&config, "outbound_proxy.url", "ftp://proxy.example:21").is_err());
     }
@@ -4602,9 +4612,9 @@ on_exceeded = "stop_proxy"
     }
 
     #[test]
-    fn persist_config_set_writes_maven_fallbacks_as_a_toml_array() {
+    fn persist_config_set_keeps_upstream_groups_as_comma_separated_strings() {
         let directory = std::env::temp_dir().join(format!(
-            "mirrorproxy-maven-fallback-config-test-{}",
+            "mirrorproxy-upstream-group-config-test-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&directory);
@@ -4612,26 +4622,21 @@ on_exceeded = "stop_proxy"
         let config_path = directory.join("config.toml");
         fs::write(
             &config_path,
-            "[upstreams]\nmaven = \"https://repo.maven.apache.org/maven2\"\n",
+            "[upstreams]\nnpm = \"https://registry.npmjs.org\"\n",
         )
         .unwrap();
 
+        let value = "https://one.example/npm, https://two.example/npm";
         let change = plan_config_set(
             &Config::load(Some(&config_path)).unwrap(),
-            "upstreams.maven_fallbacks",
-            "https://first.example/maven,https://second.example/maven",
+            "upstreams.npm",
+            value,
         )
         .unwrap();
         persist_config_set(&config_path, &change).unwrap();
 
         let updated = Config::load(Some(&config_path)).unwrap();
-        assert_eq!(
-            updated.upstreams.maven_fallbacks,
-            [
-                "https://first.example/maven",
-                "https://second.example/maven"
-            ]
-        );
+        assert_eq!(updated.upstreams.npm, value);
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -4812,6 +4817,8 @@ on_exceeded = "stop_proxy"
             .unwrap()
             .iter()
             .any(|proxy| proxy == "npm"));
+        assert_eq!(value["registration"]["mode"], "invite_only");
+        assert_eq!(value["registration"]["email_login_enabled"], false);
         assert!(value["enabled_proxies"]
             .as_array()
             .unwrap()
@@ -4883,11 +4890,10 @@ on_exceeded = "stop_proxy"
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
-            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
@@ -4947,11 +4953,10 @@ on_exceeded = "stop_proxy"
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
-            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
@@ -4985,15 +4990,22 @@ on_exceeded = "stop_proxy"
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
-            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
 
-        let unauthenticated = admin_audit_log(HeaderMap::new(), State(state.clone())).await;
+        let unauthenticated = admin_audit_log(
+            HeaderMap::new(),
+            State(state.clone()),
+            Query(AuditLogQuery {
+                page: 1,
+                per_page: 20,
+            }),
+        )
+        .await;
         assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
 
         let session = database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
@@ -5002,11 +5014,19 @@ on_exceeded = "stop_proxy"
             header::AUTHORIZATION,
             format!("Bearer {}", session.token).parse().unwrap(),
         );
-        let response = admin_audit_log(headers, State(state)).await;
+        let response = admin_audit_log(
+            headers,
+            State(state),
+            Query(AuditLogQuery {
+                page: 1,
+                per_page: 20,
+            }),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(value
+        assert!(value["items"]
             .as_array()
             .unwrap()
             .iter()
@@ -5024,11 +5044,10 @@ on_exceeded = "stop_proxy"
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
-            master_key: None,
             observability: Arc::new(Observability::new().unwrap()),
         };
         let session = database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
@@ -5038,6 +5057,7 @@ on_exceeded = "stop_proxy"
             format!("Bearer {}", session.token).parse().unwrap(),
         );
 
+        let username = credentials.username.clone();
         let response = change_admin_password(
             headers,
             State(state),
@@ -5050,10 +5070,52 @@ on_exceeded = "stop_proxy"
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(!database.authorize(&session.token).await.unwrap());
         assert!(database
-            .login("admin", "new-password-for-admin")
+            .login(&username, "new-password-for-admin")
             .await
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn admin_username_change_renames_account_and_revokes_current_session() {
+        let (state, credentials) = admin_test_state().await;
+        let database = state.database.clone();
+        let session = database
+            .login(&credentials.username, &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {}", session.token).parse().unwrap(),
+        );
+
+        let response = change_admin_username(
+            headers,
+            State(state.clone()),
+            Json(AdminUsernameChangeRequest {
+                current_password: credentials.password.clone(),
+                new_username: "renamed-admin".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(!database.authorize(&session.token).await.unwrap());
+        assert!(database
+            .login("admin", &credentials.password)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(database
+            .login("renamed-admin", &credentials.password)
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            state.config.read().unwrap().webauthn.break_glass_username,
+            "renamed-admin"
+        );
     }
 
     #[tokio::test]
@@ -5063,7 +5125,7 @@ on_exceeded = "stop_proxy"
             State(state.clone()),
             ConnectInfo("127.0.0.1:41000".parse().unwrap()),
             Json(AdminLoginRequest {
-                username: "admin".to_string(),
+                username: credentials.username.clone(),
                 password: credentials.password,
             }),
         )
@@ -5088,7 +5150,7 @@ on_exceeded = "stop_proxy"
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["username"], "admin");
+        assert_eq!(value["username"], credentials.username);
         assert_eq!(value["role"], "super_admin");
     }
 
@@ -5106,13 +5168,13 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn administrator_login_is_limited_by_username_and_source() {
-        let (state, _) = admin_test_state().await;
+        let (state, credentials) = admin_test_state().await;
         for attempt in 0..5 {
             let response = admin_cookie_login(
                 State(state.clone()),
                 ConnectInfo("192.0.2.10:41000".parse().unwrap()),
                 Json(AdminLoginRequest {
-                    username: "admin".to_string(),
+                    username: credentials.username.clone(),
                     password: "wrong-password".to_string(),
                 }),
             )
@@ -5127,7 +5189,7 @@ on_exceeded = "stop_proxy"
             State(state),
             ConnectInfo("192.0.2.10:41001".parse().unwrap()),
             Json(AdminLoginRequest {
-                username: "admin".to_string(),
+                username: credentials.username,
                 password: "still-wrong".to_string(),
             }),
         )
@@ -5144,7 +5206,7 @@ on_exceeded = "stop_proxy"
                 State(state.clone()),
                 ConnectInfo(format!("192.0.2.11:{port}").parse().unwrap()),
                 Json(AdminLoginRequest {
-                    username: "admin".to_string(),
+                    username: credentials.username.clone(),
                     password: credentials.password.clone(),
                 }),
             )
@@ -5166,19 +5228,19 @@ on_exceeded = "stop_proxy"
             State(state.clone()),
             ConnectInfo("192.0.2.12:41000".parse().unwrap()),
             Json(AdminLoginRequest {
-                username: "admin".to_string(),
+                username: credentials.username.clone(),
                 password: credentials.password.clone(),
             }),
         )
         .await;
         assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
 
-        state.config.write().unwrap().webauthn.break_glass_username = "admin".to_string();
+        state.config.write().unwrap().webauthn.break_glass_username = credentials.username.clone();
         let recovery = admin_cookie_login(
             State(state),
             ConnectInfo("192.0.2.12:41001".parse().unwrap()),
             Json(AdminLoginRequest {
-                username: "admin".to_string(),
+                username: credentials.username,
                 password: credentials.password,
             }),
         )
@@ -5191,7 +5253,7 @@ on_exceeded = "stop_proxy"
         let (mut state, credentials) = admin_test_state().await;
         let session = state
             .database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
@@ -5226,7 +5288,7 @@ on_exceeded = "stop_proxy"
         let (state, credentials) = admin_test_state().await;
         let session = state
             .database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
@@ -5261,8 +5323,6 @@ on_exceeded = "stop_proxy"
     #[tokio::test]
     async fn passwordless_email_login_creates_user_and_host_only_session() {
         let (mut state, _) = admin_test_state().await;
-        let cipher = Arc::new(SecretCipher::from_key([9_u8; 32]));
-        state.master_key = Some(cipher.clone());
         let config = Config {
             public_base_url: "https://mirror.example.com".to_string(),
             registration: config::RegistrationConfig {
@@ -5282,7 +5342,7 @@ on_exceeded = "stop_proxy"
                     port: 587,
                     security: "starttls".to_string(),
                     username: None,
-                    encrypted_password: None,
+                    password: None,
                     from_name: "MirrorProxy".to_string(),
                     from_address: "mirror@example.com".to_string(),
                 },
@@ -5291,6 +5351,7 @@ on_exceeded = "stop_proxy"
             .await
             .unwrap();
         let response = email::request_email_login(
+            HeaderMap::new(),
             State(state.clone()),
             ConnectInfo("192.0.2.30:42000".parse().unwrap()),
             Json(email::RequestEmailLogin {
@@ -5301,13 +5362,7 @@ on_exceeded = "stop_proxy"
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let queued = state.database.pending_outbox(1).await.unwrap().remove(0);
-        assert!(!queued.encrypted_body.contains("person+tag@example.com"));
-        let body = String::from_utf8(
-            cipher
-                .decrypt("email-outbox", &queued.encrypted_body)
-                .unwrap(),
-        )
-        .unwrap();
+        let body = queued.body;
         assert!(body.contains("email=person%2Btag%40example.com"));
         let code = body
             .split("code is ")
@@ -5344,8 +5399,6 @@ on_exceeded = "stop_proxy"
     #[tokio::test]
     async fn invitation_login_is_bound_to_the_invited_email() {
         let (mut state, _) = admin_test_state().await;
-        let cipher = Arc::new(SecretCipher::from_key([10_u8; 32]));
-        state.master_key = Some(cipher);
         let config = Config {
             public_base_url: "https://mirror.example.com".to_string(),
             registration: config::RegistrationConfig {
@@ -5365,7 +5418,7 @@ on_exceeded = "stop_proxy"
                     port: 587,
                     security: "starttls".to_string(),
                     username: None,
-                    encrypted_password: None,
+                    password: None,
                     from_name: "MirrorProxy".to_string(),
                     from_address: "mirror@example.com".to_string(),
                 },
@@ -5373,7 +5426,7 @@ on_exceeded = "stop_proxy"
             )
             .await
             .unwrap();
-        state
+        let invitation_id = state
             .database
             .create_email_invitation(
                 "admin",
@@ -5386,6 +5439,7 @@ on_exceeded = "stop_proxy"
             .unwrap();
 
         let response = email::request_email_login(
+            HeaderMap::new(),
             State(state.clone()),
             ConnectInfo("192.0.2.31:42000".parse().unwrap()),
             Json(email::RequestEmailLogin {
@@ -5397,17 +5451,105 @@ on_exceeded = "stop_proxy"
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         assert!(state.database.pending_outbox(10).await.unwrap().is_empty());
 
-        let response = email::request_email_login(
+        let response = email::verify_email_login(
             State(state.clone()),
-            ConnectInfo("192.0.2.32:42000".parse().unwrap()),
-            Json(email::RequestEmailLogin {
+            Json(email::VerifyEmailLogin {
                 email: "invited@example.com".to_string(),
-                invitation_token: Some("invitation-token".to_string()),
+                code: None,
+                token: Some("invitation-token".to_string()),
             }),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        assert_eq!(state.database.pending_outbox(10).await.unwrap().len(), 1);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key(header::SET_COOKIE));
+        let user = state
+            .database
+            .user_by_email("invited@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(user.display_name, "Invited User");
+        let invitation = state
+            .database
+            .email_invitation(invitation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(invitation.status, "accepted");
+
+        let repeated = email::verify_email_login(
+            State(state),
+            Json(email::VerifyEmailLogin {
+                email: "invited@example.com".to_string(),
+                code: None,
+                token: Some("invitation-token".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(repeated.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn invitation_uses_request_origin_when_public_url_is_empty() {
+        let (mut state, credentials) = admin_test_state().await;
+        let mut config = Config::default();
+        config.public_base_url.clear();
+        state.config = Arc::new(RwLock::new(config));
+        state
+            .database
+            .save_smtp_settings(
+                "admin",
+                &database::SmtpSettings {
+                    enabled: true,
+                    host: "smtp.example.com".to_string(),
+                    port: 587,
+                    security: "starttls".to_string(),
+                    username: None,
+                    password: None,
+                    from_name: "MirrorProxy".to_string(),
+                    from_address: "mirror@example.com".to_string(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        let session = state
+            .database
+            .login(&credentials.username, &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:3000"));
+        headers.insert(
+            header::COOKIE,
+            format!("{ADMIN_SESSION_COOKIE}={}", session.token)
+                .parse()
+                .unwrap(),
+        );
+
+        let response = email::create_invitation(
+            headers,
+            State(state.clone()),
+            Json(email::CreateInvitationRequest {
+                email: "local@example.com".to_string(),
+                display_name: "Local User".to_string(),
+                expires_in_hours: 72,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let queued = state.database.pending_outbox(1).await.unwrap().remove(0);
+        assert!(queued
+            .body
+            .contains("http://127.0.0.1:3000/login?email=local%40example.com&token="));
+        let html = queued
+            .html_body
+            .expect("invitation email should include HTML");
+        assert!(html.contains(
+            "<a href=\"http://127.0.0.1:3000/login?email=local%40example.com&amp;token="
+        ));
+        assert!(html.contains("This one-time invitation expires at"));
     }
 
     #[tokio::test]
@@ -5415,7 +5557,7 @@ on_exceeded = "stop_proxy"
         let (state, credentials) = admin_test_state().await;
         let session = state
             .database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
@@ -5452,7 +5594,7 @@ on_exceeded = "stop_proxy"
         state.webauthn = Arc::new(RwLock::new(webauthn));
         let session = state
             .database
-            .login("admin", &credentials.password)
+            .login(&credentials.username, &credentials.password)
             .await
             .unwrap()
             .unwrap();
@@ -5475,7 +5617,7 @@ on_exceeded = "stop_proxy"
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(stored.0, "admin");
+        assert_eq!(stored.0, credentials.username);
         serde_json::from_str::<PasskeyRegistration>(&stored.1).unwrap();
         assert!(state
             .database
@@ -5513,6 +5655,7 @@ on_exceeded = "stop_proxy"
             "GET".to_string(),
             "/npm/react".to_string(),
             0,
+            1,
             None,
             None,
             30,
@@ -5534,6 +5677,43 @@ on_exceeded = "stop_proxy"
         assert!(String::from_utf8(metrics)
             .unwrap()
             .contains("mirrorproxy_proxy_response_bytes_total{status=\"200\",target=\"npm\"} 5"));
+    }
+
+    #[tokio::test]
+    async fn bidirectional_accounting_records_twice_the_streamed_body_bytes() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from("hello"))
+            .unwrap();
+        let response = track_proxy_response(
+            response,
+            Arc::new(database.clone()),
+            Arc::new(Observability::new().unwrap()),
+            "2026-07-10".to_string(),
+            "2026-07".to_string(),
+            "npm",
+            "GET".to_string(),
+            "/npm/react".to_string(),
+            0,
+            2,
+            None,
+            None,
+            30,
+        );
+
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            "hello"
+        );
+        assert_eq!(
+            database
+                .traffic_overview("2026-07")
+                .await
+                .unwrap()
+                .response_bytes,
+            10
+        );
     }
 
     #[test]

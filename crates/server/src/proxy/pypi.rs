@@ -74,7 +74,7 @@ async fn proxy_simple_path(
         format!("/{clean_path}")
     };
     let url = upstream_url(&config.upstreams.pypi_simple, &upstream_path, query)?;
-    let response = state.client.get(url).send().await?;
+    let response = proxy::get_with_fallback(&state, url).await?;
     let status = response.status();
     let content_type = response
         .headers()
@@ -113,7 +113,8 @@ async fn proxy_simple_path(
 }
 
 fn upstream_url(base: &str, path: &str, query: Option<&str>) -> Result<reqwest::Url, ProxyError> {
-    let mut url = reqwest::Url::parse(base).map_err(|_| ProxyError::InvalidUrl)?;
+    let mut url =
+        reqwest::Url::parse(proxy::select_upstream(base)?).map_err(|_| ProxyError::InvalidUrl)?;
     let base_path = url.path().trim_end_matches('/');
     url.set_path(&format!("{base_path}/{}", path.trim_start_matches('/')));
     url.set_query(query);

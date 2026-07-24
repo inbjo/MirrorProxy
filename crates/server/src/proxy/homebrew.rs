@@ -1,5 +1,5 @@
 use super::ProxyError;
-use crate::AppState;
+use crate::{proxy as proxy_utils, AppState};
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -46,7 +46,8 @@ pub async fn proxy(
     }
 
     let mut upstream =
-        reqwest::Url::parse(&config.upstreams.homebrew).map_err(|_| ProxyError::InvalidUrl)?;
+        reqwest::Url::parse(proxy_utils::select_upstream(&config.upstreams.homebrew)?)
+            .map_err(|_| ProxyError::InvalidUrl)?;
     let base_path = upstream.path().trim_end_matches('/');
     upstream.set_path(&format!("{base_path}/{path}"));
     upstream.set_query(request.uri().query());

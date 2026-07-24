@@ -45,7 +45,8 @@ fn sanitize(path: &str) -> Result<String, ProxyError> {
     Ok(path.to_string())
 }
 fn repository_url(base: &str, path: &str, query: Option<&str>) -> Result<reqwest::Url, ProxyError> {
-    let mut url = reqwest::Url::parse(base).map_err(|_| ProxyError::InvalidUrl)?;
+    let mut url =
+        reqwest::Url::parse(proxy::select_upstream(base)?).map_err(|_| ProxyError::InvalidUrl)?;
     let b = url.path().trim_end_matches('/');
     url.set_path(&format!("{b}/{path}"));
     url.set_query(query);

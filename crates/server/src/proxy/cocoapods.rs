@@ -39,8 +39,8 @@ pub async fn proxy(
     {
         return Err(ProxyError::InvalidUrl);
     }
-    let mut url =
-        reqwest::Url::parse(&config.upstreams.cocoapods).map_err(|_| ProxyError::InvalidUrl)?;
+    let mut url = reqwest::Url::parse(proxy::select_upstream(&config.upstreams.cocoapods)?)
+        .map_err(|_| ProxyError::InvalidUrl)?;
     let base = url.path().trim_end_matches('/');
     url.set_path(&format!("{base}/{path}"));
     url.set_query(request.uri().query());

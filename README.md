@@ -94,8 +94,8 @@ services:
       MIRRORPROXY_PUBLIC_BASE_URL: ${MIRRORPROXY_PUBLIC_BASE_URL:-}
       MIRRORPROXY_TRUSTED_PROXIES: ${MIRRORPROXY_TRUSTED_PROXIES:-127.0.0.1,::1}
       MIRRORPROXY_QUOTA_TIMEZONE: ${MIRRORPROXY_QUOTA_TIMEZONE:-local}
+      MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING: ${MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING:-false}
       MIRRORPROXY_ADMIN_PASSWORD: ${MIRRORPROXY_ADMIN_PASSWORD:-}
-      MIRRORPROXY_MAVEN_FALLBACKS: ${MIRRORPROXY_MAVEN_FALLBACKS-https://jcenter.bintray.com}
       MIRRORPROXY_OUTBOUND_PROXY_ENABLED: ${MIRRORPROXY_OUTBOUND_PROXY_ENABLED:-false}
       MIRRORPROXY_OUTBOUND_PROXY_URL: ${MIRRORPROXY_OUTBOUND_PROXY_URL:-}
       MIRRORPROXY_OUTBOUND_PROXY_USERNAME: ${MIRRORPROXY_OUTBOUND_PROXY_USERNAME:-}
@@ -132,7 +132,6 @@ MIRRORPROXY_TRUSTED_PROXIES=127.0.0.1,::1
 # Optional: uncomment to set the initial admin password yourself.
 # MIRRORPROXY_ADMIN_PASSWORD=replace-with-a-strong-password
 # Optional: comma-separated Maven fallback repositories; empty disables fallback.
-# MIRRORPROXY_MAVEN_FALLBACKS=https://jcenter.bintray.com
 # Optional: route every mirror-upstream request through one HTTP or SOCKS5 proxy.
 # MIRRORPROXY_OUTBOUND_PROXY_ENABLED=true
 # MIRRORPROXY_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:1080
@@ -150,10 +149,11 @@ curl http://127.0.0.1:3000/healthz
 ```
 
 When the SQLite database is initialized for the first time, an unset or empty
-`MIRRORPROXY_ADMIN_PASSWORD` makes MirrorProxy generate a random `admin`
-password and print it prominently in the startup log. Set the variable to a
-non-empty value to use that password instead; manually configured passwords are
-not printed. The variable does not reset the password in an existing database.
+`MIRRORPROXY_ADMIN_PASSWORD` makes MirrorProxy use the fixed initial administrator
+username `admin` and generate a random password, which is printed prominently in
+the startup log. Set the variable to a non-empty value to use that password
+instead; the username is still printed, while the manually configured password is not. The variable
+does not reset credentials in an existing database.
 Keep the named `mirrorproxy-data` volume when upgrading. To run without
 Compose:
 
@@ -342,21 +342,15 @@ mvn dependency:resolve
 ```
 
 The Maven adapter streams Maven2 repository paths, including POMs, metadata,
-artifacts, checksums, and signatures. A client still configures only the single
-`/maven/` endpoint; MirrorProxy tries the primary `upstreams.maven` repository
-first and advances through `upstreams.maven_fallbacks` only for an explicit
-HTTP 404. Authentication failures, rate limits, server errors, and transport
-errors are not hidden by fallback. The default order is Maven Central followed
-by the read-only JCenter repository. Set an empty list to disable fallback:
+artifacts, checksums, and signatures. Like every other adapter, `upstreams.maven`
+accepts an ordered comma-separated endpoint list. MirrorProxy advances to the
+next endpoint after any response other than HTTP 200, returning the last
+response if no endpoint succeeds. Transport errors are returned immediately:
 
 ```toml
 [upstreams]
-maven = "https://repo.maven.apache.org/maven2"
-maven_fallbacks = ["https://jcenter.bintray.com"]
+maven = "https://repo.maven.apache.org/maven2, https://maven.example/repository"
 ```
-
-For containers, set the ordered fallback list as comma-separated URLs with
-`MIRRORPROXY_MAVEN_FALLBACKS`; an empty value disables fallback.
 
 ## RubyGems Proxy
 
@@ -705,6 +699,7 @@ public_base_url = "https://mirror.example.com"
 enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "julia", "luarocks", "clojars", "cocoapods", "pub", "anaconda", "texlive", "winget", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
 [upstreams]
+# String upstream fields try comma-separated endpoints in order until HTTP 200.
 github = "https://github.com"
 github_raw = "https://raw.githubusercontent.com"
 packagist = "https://repo.packagist.org"
@@ -717,8 +712,6 @@ nvm = "https://nodejs.org/dist"
 opam = "https://opam.ocaml.org"
 go_proxy = "https://proxy.golang.org"
 maven = "https://repo.maven.apache.org/maven2"
-# Tried in order only when the primary repository returns HTTP 404.
-maven_fallbacks = ["https://jcenter.bintray.com"]
 rubygems = "https://rubygems.org"
 rustup = "https://static.rust-lang.org"
 nuget = "https://api.nuget.org"
@@ -795,10 +788,10 @@ MirrorProxy validates a non-empty `public_base_url`, all upstream URLs, enabled 
 
 Optional disk caching is disabled by default. When enabled, it stores only successful public GET responses with an explicit `Content-Length` no larger than `cache.max_entry_mb`; `cache.max_total_mb` bounds disk usage and evicts least-recently-used entries. Requests carrying `Authorization`, `Cookie`, or `Range` bypass the cache. Large or unknown-length responses stay streamed and are never buffered for caching.
 
-On the first startup, MirrorProxy creates its SQLite database and prints a one-time
-random password for the `admin` account in the local startup log. When
-`MIRRORPROXY_ADMIN_PASSWORD` has a value, it uses that value instead. Open
-`/admin` and sign in with the username and password. The independent admin portal
+On the first startup, MirrorProxy creates its SQLite database with the administrator
+username `admin` and prints its one-time random password in the local startup log.
+When `MIRRORPROXY_ADMIN_PASSWORD` has a value, it uses that password without printing
+it. Open `/admin` and sign in with the username and password. The independent admin portal
 uses an `HttpOnly`, `Secure`, `SameSite=Strict` cookie scoped to `/admin`; deploy
 it behind HTTPS. Passwords are stored only as Argon2id hashes, and successful and
 failed sign-ins are audited. Repeated failures are rate-limited and temporarily
@@ -806,11 +799,15 @@ lock the administrator account.
 
 Super administrators can create and disable additional `admin` or `super_admin`
 accounts. MirrorProxy refuses to disable the last active super administrator.
-Disabling an account, changing its password, or resetting its password revokes
-its sessions. For local break-glass recovery, pass a new password on stdin:
+Disabling an account, changing its username or password, or resetting its password
+revokes its sessions. Administrators can change their own username in the security
+page; this also removes passkeys registered to that account. For local break-glass
+recovery, the command below finds the original administrator even if its username
+was changed, generates a new random password, unlocks it, and prints its current
+username and new password:
 
 ```bash
-mirrorproxy-server --config config.toml admin reset-password admin
+mirrorproxy-server --config config.toml admin reset-password
 ```
 
 The new cookie APIs live under `/admin/api/*`. The former `/api/admin/*` Bearer
@@ -846,16 +843,7 @@ original Host forwarding, and trusted proxy settings, then set
 rejects the required mode until this explicit deployment-readiness confirmation
 is present.
 
-Email invitations and passwordless sign-in require a persistent 32-byte master
-key encoded as unpadded base64url. Generate it once, store it with the deployment
-secrets, and back it up together with SQLite:
-
-```bash
-openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
-```
-
 ```dotenv
-MIRRORPROXY_MASTER_KEY=replace-with-the-generated-value
 MIRRORPROXY_REGISTRATION_MODE=invite_only
 MIRRORPROXY_ALLOWED_EMAIL_DOMAINS=example.com,subsidiary.example.com
 MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES=10
@@ -864,7 +852,7 @@ MIRRORPROXY_DEFAULT_USER_MONTHLY_GB=100
 
 Configure SMTP and invitations from `/admin`. STARTTLS, SMTPS, authenticated,
 and unauthenticated SMTP are supported. SMTP passwords and queued message bodies
-are encrypted with XChaCha20-Poly1305; API responses never return the password.
+are stored directly in SQLite; API responses never return the password.
 The SQLite outbox retries failed delivery with bounded exponential backoff.
 Verification codes and magic links expire after ten minutes by default, are
 stored only as hashes, allow at most five code failures, and can be consumed
@@ -889,8 +877,8 @@ access-token hash when supplied. Automatic linking and registration require an
 email explicitly verified by the provider, the corresponding provider switch,
 and the global registration policy. Existing users may link and unlink providers
 from `/account`; MirrorProxy prevents removal of the final external identity when
-email sign-in is unavailable. OAuth client secrets are encrypted with the same
-persistent `MIRRORPROXY_MASTER_KEY` and are never returned through APIs, logs, or
+email sign-in is unavailable. OAuth client secrets are stored directly in SQLite
+and are never returned through APIs, logs, or
 audit entries. OAuth/OIDC control-plane requests connect directly, do not inherit
 the global mirror upstream proxy, and never follow redirects automatically.
 
@@ -942,6 +930,9 @@ targets. It requires the administrator session cookie.
 least 12 characters. A successful change revokes every administrator session,
 including the one that made the request.
 
+`POST /admin/api/username` accepts `current_password` and `new_username`. A
+successful change revokes all sessions and registered passkeys for that account.
+
 Optional global rate limiting can be enabled with:
 
 ```toml
@@ -962,6 +953,7 @@ the web console, and management APIs are not counted or blocked.
 ```toml
 [quota]
 enabled = true
+bidirectional_accounting = false # true counts each streamed byte twice
 monthly_gb = 500
 timezone = "Asia/Taipei" # or "local"
 on_exceeded = "stop_proxy" # use "throttle" for HTTP 429 instead
@@ -971,6 +963,12 @@ Once the sent-body total reaches the monthly limit, new proxy requests receive
 `503` (`stop_proxy`) or `429` (`throttle`) while the public and management
 surfaces stay available. A new calendar month in the configured timezone starts
 with a fresh quota automatically.
+
+Set `bidirectional_accounting = true` (or
+`MIRRORPROXY_QUOTA_BIDIRECTIONAL_ACCOUNTING=true`) when the VPS provider charges
+both inbound upstream traffic and outbound client traffic. MirrorProxy then
+records 1 GiB streamed to a client as 2 GiB of billed usage for global, group,
+and user quotas; HTTP traffic metrics continue to report actual body bytes.
 
 ## Observability
 
