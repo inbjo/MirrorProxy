@@ -155,7 +155,7 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await expect.poll(() => savedConfig?.public_base_url).toBe('https://updated.example')
   await expect(page.getByText('These fields apply after restart: listen_addr')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Advanced settings' }).click()
+  await page.getByRole('button', { name: 'Advanced', exact: true }).click()
   await page.getByLabel('Enable mirror upstream proxy').check()
   await page.getByLabel('Proxy URL').fill('socks5h://proxy.example:1080')
   await page.getByLabel('Username (optional)').fill('proxy-user')
