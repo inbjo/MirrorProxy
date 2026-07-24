@@ -848,7 +848,11 @@ p {
 .admin-login-intro { grid-area: intro; }
 .admin-username-field { grid-area: username; }
 .admin-password-field { grid-area: password; }
-.admin-login-actions { grid-area: actions; }
+.admin-login-actions { display: flex; grid-area: actions; gap: 9px; align-items: center; flex-wrap: wrap; }
+.admin-login-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: 8px; font-size: 14px; font-weight: 750; white-space: nowrap; }
+.admin-login-actions .passkey-login-button { border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 7%, var(--panel-strong)); }
+.admin-login-actions .passkey-login-button:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, var(--panel-strong)); }
+.admin-login-actions button:disabled { cursor: wait; opacity: .55; transform: none; }
 .admin-login-error { grid-area: feedback; margin: 0; }
 
 .login-card h3,

@@ -203,15 +203,27 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
   let registeredCredential: Record<string, unknown> | undefined
   let authenticatedCredential: Record<string, unknown> | undefined
   let registered = false
+  let passkeyConfigSaved = false
+  let savedConfig = { ...adminConfig, webauthn: { ...adminConfig.webauthn, enabled: false, rp_id: 'localhost', rp_origin: 'https://localhost' } }
   await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
   await page.route('**/admin/api/auth/passkey/options', route => route.fulfill({ json: { enabled: true, require_passkey: false } }))
   await page.route('**/admin/api/auth/login', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
-  await page.route('**/admin/api/config', route => route.fulfill({ json: { ...adminConfig, webauthn: { ...adminConfig.webauthn, enabled: true, rp_id: 'localhost', rp_origin: 'https://localhost' } } }))
+  await page.route('**/admin/api/config', async route => {
+    if (route.request().method() === 'PUT') {
+      savedConfig = route.request().postDataJSON() as typeof savedConfig
+      passkeyConfigSaved = savedConfig.webauthn.enabled
+      await route.fulfill({ json: { config: savedConfig, restart_required: [] } })
+      return
+    }
+    await route.fulfill({ json: savedConfig })
+  })
   await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
   await page.route('**/admin/api/audit-log*', route => route.fulfill({ json: { items: [], page: 1, per_page: 20, total: 0 } }))
   await page.route('**/admin/api/admins', route => route.fulfill({ json: [] }))
   await page.route('**/admin/api/auth/passkeys', route => route.fulfill({ json: registered ? [{ id: 1, name: 'Test platform key', created_at: 1784592000, last_used_at: null }] : [] }))
-  await page.route('**/admin/api/auth/passkeys/register/start', route => route.fulfill({ json: {
+  await page.route('**/admin/api/auth/passkeys/register/start', route => {
+    expect(passkeyConfigSaved).toBe(true)
+    return route.fulfill({ json: {
     challenge_id: 'server-state-id',
     options: { publicKey: {
       rp: { id: 'localhost', name: 'MirrorProxy' },
@@ -222,7 +234,8 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
       authenticatorSelection: { userVerification: 'required' },
       attestation: 'none',
     } },
-  } }))
+    } })
+  })
   await page.route('**/admin/api/auth/passkeys/register/finish', async route => {
     const payload = route.request().postDataJSON() as { credential: Record<string, unknown> }
     registeredCredential = payload.credential; registered = true
@@ -249,8 +262,10 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await page.getByRole('button', { name: 'Administrators & security' }).click()
+  await page.getByLabel('Enable administrator passkeys').check()
   await page.getByLabel('Passkey name').fill('Test platform key')
   await page.getByRole('button', { name: 'Register passkey' }).click()
+  await expect.poll(() => passkeyConfigSaved).toBe(true)
   await expect.poll(() => registeredCredential?.type).toBe('public-key')
   await expect(page.getByText('Test platform key')).toBeVisible()
   await page.reload()

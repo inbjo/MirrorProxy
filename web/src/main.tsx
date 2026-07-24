@@ -1142,8 +1142,8 @@ function AdminConsole({ locale }: { locale: Locale }) {
     setIdentity(null); setToken(null); setDraft(null); setStats(null); setAuditLog([]); setAuditTotal(0); setRestartRequired([]); setNotice(null)
   }
 
-  const save = async () => {
-    if (!token || !draft) return
+  const save = async (): Promise<boolean> => {
+    if (!token || !draft) return false
     setSaving(true); setError(null); setNotice(null)
     try {
       const response = await fetch('/admin/api/config', {
@@ -1153,15 +1153,17 @@ function AdminConsole({ locale }: { locale: Locale }) {
         let reason = ''
         try { reason = ((await response.json()) as { error?: string }).error ?? '' } catch { /* non-JSON response */ }
         setNotice({ tone: 'error', title: text.saveErrorTitle, message: adminConfigErrorMessage(reason, response.status, locale, text.saveError) })
-        return
+        return false
       }
       const result = await response.json() as { config: AdminConfig; restart_required: string[] }
       setDraft(result.config); setRestartRequired(result.restart_required)
       setPasskeyEnabled(result.config.webauthn.enabled && 'credentials' in navigator)
       setNotice({ tone: 'success', title: text.saveSuccessTitle, message: text.saveSuccess })
       load(token).catch(() => undefined)
+      return true
     } catch {
       setNotice({ tone: 'error', title: text.saveErrorTitle, message: locale === 'zh' ? '无法连接本地 MirrorProxy 服务，请确认服务仍在运行后重试。' : 'Could not reach the local MirrorProxy service. Check that it is still running and try again.' })
+      return false
     } finally {
       setSaving(false)
     }
@@ -1200,6 +1202,8 @@ function AdminConsole({ locale }: { locale: Locale }) {
   const registerPasskey = async (event: React.FormEvent) => {
     event.preventDefault(); setPasskeyBusy(true); setError(null)
     try {
+      const saved = await save()
+      if (!saved) return
       const start = await fetch('/admin/api/auth/passkeys/register/start', { method: 'POST' })
       if (!start.ok) throw new Error('passkey start failed')
       const challenge = await start.json() as { challenge_id: string; options: { publicKey: Record<string, any> } }
@@ -1265,7 +1269,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
     <section className="admin-console" aria-label={text.title}>
       {notice ? <div className={`admin-toast admin-toast-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} aria-live="polite"><span className="admin-toast-icon">{notice.tone === 'error' ? <CircleAlert size={19} /> : <CheckCircle2 size={19} />}</span><span className="admin-toast-copy"><strong>{notice.title}</strong><span>{notice.message}</span></span><button type="button" onClick={() => setNotice(null)} aria-label={text.closeNotice}><X size={16} /></button></div> : null}
       <div className="console-head"><div><span className="console-kicker"><ShieldCheck size={15} /> ADMIN</span><h2>{text.title}</h2></div>{token ? <button className="secondary-button compact-button console-logout" onClick={signOut}><LogOut size={15} /> {text.signOut}</button> : null}</div>
-      {!token ? <form className="login-card admin-login-card" onSubmit={signIn}><div className="admin-login-intro"><h3>{text.login}</h3><p>{text.passwordHint}</p></div><label className="admin-username-field">{text.username}<input autoFocus required autoComplete="username webauthn" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="admin-password-field">{text.password}<input required={!passkeyEnabled} autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error ? <p className="form-error admin-login-error">{error}</p> : null}<div className="login-actions admin-login-actions"><button className="primary-button" type="submit"><LogIn size={16} /> {text.signIn}</button>{passkeyEnabled ? <button disabled={passkeyBusy || !username.trim()} type="button" onClick={signInWithPasskey}><KeyRound size={16} /> {text.usePasskey}</button> : null}</div></form> : null}
+      {!token ? <form className="login-card admin-login-card" onSubmit={signIn}><div className="admin-login-intro"><h3>{text.login}</h3><p>{text.passwordHint}</p></div><label className="admin-username-field">{text.username}<input autoFocus required autoComplete="username webauthn" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="admin-password-field">{text.password}<input required={!passkeyEnabled} autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error ? <p className="form-error admin-login-error">{error}</p> : null}<div className="login-actions admin-login-actions"><button className="primary-button password-login-button" type="submit"><LogIn size={17} /> {text.signIn}</button>{passkeyEnabled ? <button className="secondary-button passkey-login-button" disabled={passkeyBusy || !username.trim()} type="button" onClick={signInWithPasskey}><KeyRound size={17} /> {text.usePasskey}</button> : null}</div></form> : null}
       {token && draft && stats ? <div className="console-workspace">
         <nav className="admin-tabs" aria-label={text.title}>{tabs.map((tab) => <button aria-current={activeTab === tab.id ? 'page' : undefined} className={activeTab === tab.id ? 'active' : ''} key={tab.id} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>)}</nav>
         <div className="admin-tab-toolbar"><div><h3>{activeTabCopy.label}</h3><p>{activeTabCopy.hint}</p></div><div className="console-actions">{activeTab === 'overview' || activeTab === 'audit' ? <button onClick={() => (activeTab === 'audit' ? loadAudit(auditPage) : load(token)).catch(() => setError(text.saveError))}>{text.refresh}</button> : null}{activeTab === 'access' || activeTab === 'advanced' || activeTab === 'security' ? <button className="primary-button" disabled={saving} onClick={save}><Save size={16} /> {saving ? text.saving : text.save}</button> : null}</div></div>
