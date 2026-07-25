@@ -127,6 +127,7 @@ test('copies a generated proxy command', async ({ page }) => {
 
 test('signs in and saves an updated runtime configuration', async ({ page }) => {
   let savedConfig: typeof adminConfig | undefined
+  let persistedConfig: typeof adminConfig | undefined
   await page.route('**/admin/api/auth/session', route => route.fulfill({ status: 401, json: { error: 'unauthorized' } }))
   await page.route('**/admin/api/auth/login', async route => {
     expect(route.request().postDataJSON()).toEqual({ username: 'admin', password: 'correct-password' })
@@ -138,10 +139,11 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await page.route('**/admin/api/config', async route => {
     if (route.request().method() === 'PUT') {
       savedConfig = route.request().postDataJSON() as typeof adminConfig
-      await route.fulfill({ json: { config: { ...savedConfig, outbound_proxy: { ...savedConfig.outbound_proxy, password: null, has_password: Boolean(savedConfig.outbound_proxy.password) } }, restart_required: ['listen_addr'] } })
+      persistedConfig = { ...savedConfig, outbound_proxy: { ...savedConfig.outbound_proxy, password: null, has_password: Boolean(savedConfig.outbound_proxy.password) } }
+      await route.fulfill({ json: { config: persistedConfig, restart_required: ['listen_addr'] } })
       return
     }
-    await route.fulfill({ json: savedConfig ?? adminConfig })
+    await route.fulfill({ json: persistedConfig ?? adminConfig })
   })
 
   await page.goto('/admin')
