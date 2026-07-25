@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -327,6 +328,29 @@ pub struct AuditLogEntry {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceEndpointHealthRecord {
+    pub position: u32,
+    pub endpoint: String,
+    pub status: String,
+    pub http_status: Option<u16>,
+    pub latency_ms: Option<u64>,
+    pub checked_at: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceHealthRecord {
+    pub target_code: String,
+    pub adapter: String,
+    pub status: String,
+    pub http_status: Option<u16>,
+    pub latency_ms: Option<u64>,
+    pub checked_at: i64,
+    pub error: Option<String>,
+    pub endpoints: Vec<SourceEndpointHealthRecord>,
+}
+
 impl Database {
     pub async fn open(
         database_path: &str,
@@ -373,6 +397,91 @@ impl Database {
         self.ensure_plaintext_secret_columns().await?;
         self.ensure_email_outbox_columns().await?;
         Ok(())
+    }
+
+    pub async fn replace_source_health(
+        &self,
+        records: &[SourceHealthRecord],
+    ) -> anyhow::Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("DELETE FROM source_health")
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("DELETE FROM source_endpoint_health")
+            .execute(&mut *transaction)
+            .await?;
+        for record in records {
+            sqlx::query(
+                "INSERT INTO source_health (target_code, adapter, status, http_status, latency_ms, checked_at, error) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(target_code) DO UPDATE SET adapter = excluded.adapter, status = excluded.status, http_status = excluded.http_status, latency_ms = excluded.latency_ms, checked_at = excluded.checked_at, error = excluded.error",
+            )
+            .bind(&record.target_code)
+            .bind(&record.adapter)
+            .bind(&record.status)
+            .bind(record.http_status.map(i64::from))
+            .bind(record.latency_ms.map(|value| value.min(i64::MAX as u64) as i64))
+            .bind(record.checked_at)
+            .bind(&record.error)
+            .execute(&mut *transaction)
+            .await?;
+            for endpoint in &record.endpoints {
+                sqlx::query(
+                    "INSERT INTO source_endpoint_health (target_code, position, endpoint, status, http_status, latency_ms, checked_at, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&record.target_code)
+                .bind(i64::from(endpoint.position))
+                .bind(&endpoint.endpoint)
+                .bind(&endpoint.status)
+                .bind(endpoint.http_status.map(i64::from))
+                .bind(endpoint.latency_ms.map(|value| value.min(i64::MAX as u64) as i64))
+                .bind(endpoint.checked_at)
+                .bind(&endpoint.error)
+                .execute(&mut *transaction)
+                .await?;
+            }
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn source_health(&self) -> anyhow::Result<Vec<SourceHealthRecord>> {
+        let mut endpoints = BTreeMap::<String, Vec<SourceEndpointHealthRecord>>::new();
+        for row in sqlx::query("SELECT target_code, position, endpoint, status, http_status, latency_ms, checked_at, error FROM source_endpoint_health ORDER BY target_code, position")
+            .fetch_all(&self.pool)
+            .await?
+        {
+            endpoints.entry(row.try_get("target_code")?).or_default().push(SourceEndpointHealthRecord {
+                position: row.try_get::<i64, _>("position").ok().and_then(|value| u32::try_from(value).ok()).unwrap_or_default(),
+                endpoint: row.try_get("endpoint")?,
+                status: row.try_get("status")?,
+                http_status: row.try_get::<Option<i64>, _>("http_status")?.and_then(|value| u16::try_from(value).ok()),
+                latency_ms: row.try_get::<Option<i64>, _>("latency_ms")?.and_then(|value| u64::try_from(value).ok()),
+                checked_at: row.try_get("checked_at")?,
+                error: row.try_get("error")?,
+            });
+        }
+        sqlx::query("SELECT target_code, adapter, status, http_status, latency_ms, checked_at, error FROM source_health ORDER BY target_code")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| {
+                let target_code: String = row.try_get("target_code")?;
+                Ok(SourceHealthRecord {
+                    endpoints: endpoints.remove(&target_code).unwrap_or_default(),
+                    target_code,
+                    adapter: row.try_get("adapter")?,
+                    status: row.try_get("status")?,
+                    http_status: row
+                        .try_get::<Option<i64>, _>("http_status")?
+                        .and_then(|value| u16::try_from(value).ok()),
+                    latency_ms: row
+                        .try_get::<Option<i64>, _>("latency_ms")?
+                        .and_then(|value| u64::try_from(value).ok()),
+                    checked_at: row.try_get("checked_at")?,
+                    error: row.try_get("error")?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()
+            .map_err(Into::into)
     }
 
     async fn ensure_email_outbox_columns(&self) -> anyhow::Result<()> {
@@ -2960,6 +3069,8 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS traffic_monthly (month TEXT PRIMARY KEY, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, quota_exceeded INTEGER NOT NULL DEFAULT 0)",
     "CREATE TABLE IF NOT EXISTS request_events (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, target_code TEXT, method TEXT NOT NULL, path TEXT NOT NULL, status_code INTEGER NOT NULL, response_bytes INTEGER NOT NULL DEFAULT 0)",
     "CREATE TABLE IF NOT EXISTS config_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, username TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS source_health (target_code TEXT PRIMARY KEY, adapter TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER, latency_ms INTEGER, checked_at INTEGER NOT NULL, error TEXT)",
+    "CREATE TABLE IF NOT EXISTS source_endpoint_health (target_code TEXT NOT NULL, position INTEGER NOT NULL, endpoint TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER, latency_ms INTEGER, checked_at INTEGER NOT NULL, error TEXT, PRIMARY KEY(target_code, position))",
     "CREATE INDEX IF NOT EXISTS admin_sessions_expires_at_idx ON admin_sessions(expires_at)",
     "CREATE INDEX IF NOT EXISTS admin_passkeys_username_idx ON admin_passkeys(username)",
     "CREATE INDEX IF NOT EXISTS admin_webauthn_challenges_expires_at_idx ON admin_webauthn_challenges(expires_at)",
@@ -4086,6 +4197,43 @@ mod tests {
                 .await
                 .unwrap();
         assert!(deleted_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn persists_latest_source_health_by_target() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        database
+            .replace_source_health(&[SourceHealthRecord {
+                target_code: "maven".to_string(),
+                adapter: "maven".to_string(),
+                status: "unhealthy".to_string(),
+                http_status: Some(403),
+                latency_ms: Some(512),
+                checked_at: 1_721_880_000,
+                error: Some("HTTP 403".to_string()),
+                endpoints: vec![SourceEndpointHealthRecord {
+                    position: 0,
+                    endpoint: "https://repo.example/maven2".to_string(),
+                    status: "unhealthy".to_string(),
+                    http_status: Some(403),
+                    latency_ms: Some(512),
+                    checked_at: 1_721_880_000,
+                    error: Some("HTTP 403".to_string()),
+                }],
+            }])
+            .await
+            .unwrap();
+
+        let records = database.source_health().await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].target_code, "maven");
+        assert_eq!(records[0].http_status, Some(403));
+        assert_eq!(records[0].latency_ms, Some(512));
+        assert_eq!(records[0].endpoints.len(), 1);
+        assert_eq!(
+            records[0].endpoints[0].endpoint,
+            "https://repo.example/maven2"
+        );
     }
 
     fn test_auth_provider(slug: &str, client_secret: &str) -> AuthProvider {

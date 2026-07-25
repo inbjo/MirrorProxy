@@ -1328,7 +1328,7 @@ fn default_go_proxy() -> String {
 }
 
 fn default_maven_repository() -> String {
-    "https://repo.maven.apache.org/maven2".to_string()
+    "https://maven-central.storage-download.googleapis.com/maven2".to_string()
 }
 
 fn default_rubygems_repository() -> String {
@@ -1419,7 +1419,7 @@ fn default_ubuntu_repository() -> String {
     "https://archive.ubuntu.com/ubuntu".to_string()
 }
 fn default_fedora_repository() -> String {
-    "https://download.fedoraproject.org/pub/fedora/linux".to_string()
+    "https://mirrors.xmission.com/fedora/linux".to_string()
 }
 fn default_archlinux_repository() -> String {
     "https://geo.mirror.pkgbuild.com".to_string()
@@ -1439,7 +1439,7 @@ fn default_freebsd_repository() -> String {
 
 fn default_os_repositories() -> BTreeMap<String, String> {
     BTreeMap::from([
-        ("kali".to_string(), "https://http.kali.org/kali".to_string()),
+        ("kali".to_string(), "https://kali.download/kali".to_string()),
         (
             "rocky".to_string(),
             "https://dl.rockylinux.org/pub/rocky".to_string(),

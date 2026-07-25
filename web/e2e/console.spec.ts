@@ -331,7 +331,7 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
 })
 
-test('signs in by email and rotates the accounting-only routing address', async ({ page }) => {
+test('signs in by email and rotates the dedicated routing address', async ({ page }) => {
   let signedIn = false
   let linked = true
   let verified: Record<string, unknown> | undefined

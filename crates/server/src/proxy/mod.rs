@@ -155,7 +155,14 @@ async fn forward_request(
         if let Some(body) = body.take() {
             request = request.body(body);
         }
-        let upstream = request.send().await?;
+        let upstream = match request.send().await {
+            Ok(response) => response,
+            Err(error) if index + 1 < candidates.len() => {
+                tracing::warn!(upstream = %candidate, %error, next_upstream = %candidates[index + 1], "upstream request failed; trying the next configured endpoint");
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         let status = upstream.status();
         if status != StatusCode::OK && index + 1 < candidates.len() {
             tracing::info!(upstream = %candidate, status = %status, next_upstream = %candidates[index + 1], "upstream did not return 200; trying the next configured endpoint");
@@ -189,7 +196,7 @@ pub async fn get_with_fallback(
     let client = state.client();
     let candidates = config.upstream_candidates_for(&url);
     for (index, candidate) in candidates.iter().enumerate() {
-        let response = upstream_request(
+        let response = match upstream_request(
             &client,
             reqwest::Method::GET,
             candidate.clone(),
@@ -197,7 +204,15 @@ pub async fn get_with_fallback(
             &config,
         )
         .send()
-        .await?;
+        .await
+        {
+            Ok(response) => response,
+            Err(error) if index + 1 < candidates.len() => {
+                tracing::warn!(upstream = %candidate, %error, next_upstream = %candidates[index + 1], "upstream request failed; trying the next configured endpoint");
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         if response.status() != StatusCode::OK && index + 1 < candidates.len() {
             tracing::info!(upstream = %candidate, status = %response.status(), next_upstream = %candidates[index + 1], "upstream did not return 200; trying the next configured endpoint");
             continue;
@@ -241,6 +256,17 @@ fn upstream_request(
     }
 
     request
+}
+
+pub(crate) async fn probe_endpoint(
+    state: &AppState,
+    method: reqwest::Method,
+    url: Url,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let config = state.config();
+    upstream_request(&state.client(), method, url, &HeaderMap::new(), &config)
+        .send()
+        .await
 }
 
 fn cacheable_request(method: Method, headers: &HeaderMap) -> bool {

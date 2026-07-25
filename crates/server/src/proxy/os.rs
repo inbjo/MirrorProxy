@@ -84,7 +84,7 @@ mod tests {
         );
         assert_eq!(
             repository_for_target(&upstreams, "kali").unwrap(),
-            "https://http.kali.org/kali"
+            "https://kali.download/kali"
         );
         assert_eq!(
             repository_for_target(&upstreams, "ros").unwrap(),

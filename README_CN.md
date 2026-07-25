@@ -17,7 +17,7 @@ MirrorProxy 是一个基于 Rust 的自部署镜像代理平台。服务端 `mir
 
 - 部署：[快速开始](#快速开始) · [Docker 部署](#docker-部署) · [二进制部署](#二进制部署) · [反向代理与通配符域名](#反向代理部署)
 - 常用镜像：[GitHub](#github-代理) · [Docker / OCI](#docker--oci-代理) · [npm](#npm--yarn--pnpm-代理) · [Go](#go-模块代理) · [Maven](#maven-central-代理) · [PyPI](#pip--pypi-代理) · [操作系统软件源](#os-静态目录代理)
-- 管理：[服务配置](#配置) · [流量与配额](#流量统计与月度配额) · [可观测性](#可观测性) · [安全说明](#安全说明)
+- 管理：[镜像健康](#镜像健康检测) · [服务配置](#配置) · [流量与配额](#流量统计与月度配额) · [可观测性](#可观测性) · [安全说明](#安全说明)
 - 客户端与开发：[一键安装客户端](#一键安装客户端) · [本机改源 CLI](#本机改源-cli) · [开发与验证](#开发)
 
 ## 功能
@@ -26,7 +26,11 @@ MirrorProxy 是一个基于 Rust 的自部署镜像代理平台。服务端 `mir
 - `/healthz` 健康检查
 - `/api/config` 运行时公开配置
 - `/api/sources` 镜像源目录
-- SQLite 持久化设置、管理员会话、审计日志、流量统计、月度配额、限流和容量受控的磁盘缓存
+- `/api/source-health` 自动检测每个上游地址，管理后台支持手动检测并展示地址级状态
+- SQLite 持久化运行时设置、管理员和用户会话、审计日志、流量统计、分层配额、限流和容量受控的磁盘缓存
+- 邮箱无密码登录、SMTP 邀请、OAuth2/OpenID Connect 身份提供方、身份绑定和可配置注册策略
+- 用户专属 Sqids 子域名、用户与计费组用量、原子配额预留和用户自助更换路由地址
+- 多管理员角色、会话管理、密码找回和可选的 WebAuthn Passkey 强制认证
 - Windows/macOS/Linux 独立客户端，支持本机改源、精确回滚和 GitHub HTTPS Git URL 重写
 - GitHub 代理：仓库页面、raw 文件、release 文件、archive、Composer 常见 GitHub dist 地址
 - `/composer` Composer 镜像代理
@@ -60,6 +64,7 @@ MirrorProxy 是一个基于 Rust 的自部署镜像代理平台。服务端 `mir
 - `/pypi/simple` pip/PyPI 代理
 - 上游响应流式转发，并过滤 hop-by-hop headers
 - 可选的单一全局 HTTP/HTTPS/SOCKS5/SOCKS5H 代理，覆盖所有镜像上游请求
+- 支持英文逗号分隔的有序上游组，并在 HTTP 或传输错误时自动故障切换
 - 默认拒绝不支持的绝对 URL 代理目标，避免开放代理风险
 
 ## 快速开始
@@ -407,12 +412,12 @@ mvn dependency:resolve
 
 Maven adapter 会流式转发 Maven2 路径，包括 POM、metadata、artifact、checksum 和
 签名文件。与其他 adapter 一样，`upstreams.maven` 接受英文逗号分隔的有序地址列表。
-MirrorProxy 在当前地址返回非 HTTP 200 状态时尝试下一个地址；如果没有地址成功，
-返回最后一个地址的响应。网络连接错误会立即返回：
+MirrorProxy 在当前地址返回非 HTTP 200 状态或发生连接、DNS、超时时尝试下一个地址；
+如果没有地址成功，则返回最后一次响应或错误：
 
 ```toml
 [upstreams]
-maven = "https://repo.maven.apache.org/maven2, https://maven.example/repository"
+maven = "https://maven-central.storage-download.googleapis.com/maven2, https://maven.example/repository"
 ```
 
 ## RubyGems 代理
@@ -624,6 +629,23 @@ pip install requests
 
 MirrorProxy 会代理 PyPI Simple API HTML，并将 files.pythonhosted.org 链接重写到 `/pypi/files`。
 
+## 镜像健康检测
+
+MirrorProxy 会在服务启动后自动检测所有已启用代理目标，此后每 15 分钟检测一次。
+英文逗号分隔的每个上游地址都会使用代表性的包或元数据路径独立请求，因此单个故障
+地址不会被同组中的健康备用地址掩盖。
+
+- `GET /api/source-health` 为公开页面提供不包含敏感诊断信息的状态。
+- `GET /admin/api/source-health` 为管理员提供包含错误详情的状态。
+- `POST /admin/api/source-health` 立即触发一次完整检测。
+- 目标状态分为 `healthy`、部分地址故障的 `degraded`、`unhealthy` 和 `disabled`；
+  公开镜像目录与管理后台展示同一份最新持久化结果。
+- OCI Registry 返回带有效 Bearer challenge 的 `401 Unauthorized` 时，视为可达的正常
+  鉴权握手，而不是故障。
+
+健康检测流量不计入用户配额。实际代理请求仍按配置顺序使用上游；在可安全重试时，
+非 HTTP 200 响应、连接错误、DNS 错误或超时都会切换到下一个地址。
+
 ## 配置
 
 可以通过 CLI 查看或安全修改指定的 TOML 配置文件。`set` 会先创建同目录
@@ -748,7 +770,8 @@ public_base_url = "https://mirror.example.com"
 enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "julia", "luarocks", "clojars", "cocoapods", "pub", "anaconda", "texlive", "winget", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
 [upstreams]
-# 字符串上游字段按顺序尝试英文逗号分隔的地址，直到返回 HTTP 200。
+# 字符串上游字段按顺序尝试英文逗号分隔的地址，直到返回 HTTP 200；
+# 连接失败、DNS 错误和超时也会继续尝试下一个地址。
 github = "https://github.com"
 github_raw = "https://raw.githubusercontent.com"
 packagist = "https://repo.packagist.org"
@@ -760,7 +783,7 @@ npm = "https://registry.npmjs.org"
 nvm = "https://nodejs.org/dist"
 opam = "https://opam.ocaml.org"
 go_proxy = "https://proxy.golang.org"
-maven = "https://repo.maven.apache.org/maven2"
+maven = "https://maven-central.storage-download.googleapis.com/maven2"
 rubygems = "https://rubygems.org"
 rustup = "https://static.rust-lang.org"
 nuget = "https://api.nuget.org"
@@ -785,7 +808,7 @@ openwrt = "https://downloads.openwrt.org"
 termux = "https://packages.termux.dev/apt/termux-main"
 debian = "https://deb.debian.org/debian"
 ubuntu = "https://archive.ubuntu.com/ubuntu"
-fedora = "https://download.fedoraproject.org/pub/fedora/linux"
+fedora = "https://mirrors.xmission.com/fedora/linux"
 archlinux = "https://geo.mirror.pkgbuild.com"
 opensuse = "https://download.opensuse.org"
 void = "https://repo-default.voidlinux.org"
@@ -881,7 +904,7 @@ mirrorproxy-server --config config.toml admin reset-password
 新的 Cookie API 位于 `/admin/api/*`。旧 `/api/admin/*` Bearer API 暂时保留用于迁移
 兼容，但 Web 管理后台已不再使用。
 
-可选的 `accounting_only` 用户子域名功能会为每个用户生成随机正整数，再使用 Sqids 和
+可选的用户子域名路由功能会为每个用户生成随机正整数，再使用 Sqids 和
 仅含小写字母、数字的 DNS 字符表编码；默认最短 12 位，不直接编码数据库自增 ID。启用
 前需要配置主域名、通配符 DNS 和通配符 TLS 证书：
 
@@ -895,7 +918,7 @@ MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
 ```
 
 `public` 模式保留主域名包代理，同时识别用户子域名；`subdomain_required` 会拒绝主域名
-上的包代理请求。子域名不校验 Token，知道地址的人都能消耗对应用户流量，因此用户发现
+上的包代理请求。子域名根据 Host 确定流量归属，不校验每次请求的 Token；知道地址的人都能消耗对应用户流量，因此用户发现
 泄漏后可在冷却期结束后更换，管理员可立即代为更换。旧子域名、未知子域名和已禁用用户
 统一失败；用户子域名不能访问 `/admin`、`/login`、`/account` 等控制入口。只有可信
 反向代理提供的 `X-Forwarded-Host` 会参与归属判断。
@@ -920,7 +943,7 @@ MIRRORPROXY_DEFAULT_USER_MONTHLY_GB=100
 
 注册默认是 `invite_only`；`domain_allowlist` 允许指定企业域名的已验证邮箱，`open`
 允许任意已验证邮箱，`disabled` 只允许已有用户登录。普通用户在 `/login` 登录，在
-`/account` 查看或更换自己的 `accounting_only` 子域名。
+`/account` 查看或更换自己的专属地址。
 
 超级管理员还可以在 `/admin` 配置 OAuth2 或 OpenID Connect 登录。内置 GitHub、GitLab、
 Gitee、Google、Microsoft、Keycloak 和 Authentik 模板，也可以填写通用 OAuth2 端点或
@@ -1065,9 +1088,15 @@ cargo test
 完整本地检查：
 
 ```bash
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cd web
+npm ci
+npm test -- --run
+npm run build
+cd ..
+./build.sh
 ```
 
 在 Windows PowerShell 运行本地 smoke test：
@@ -1133,15 +1162,16 @@ OS 测试不只刷新索引，还至少下载一个真实包，例如 Debian/Ubu
 
 ## 路线图
 
-v1.0 已包含多生态与操作系统仓库 adapter、SQLite 管理与流量统计、全站月度配额、
-限流、容量受控的磁盘缓存、原生客户端发布、内嵌 Web 控制台、有明确分级的原生客户端
-与公网协议 smoke 矩阵，以及 Docker 部署支持。
+v1.1 已包含多生态与操作系统仓库 adapter、地址级镜像健康检测、SQLite 管理员与用户
+身份体系、邮箱和外部身份提供方登录、用户子域名路由、全局/计费组/用户分层配额、
+Prometheus/OpenTelemetry 可观测性、限流、容量受控的磁盘缓存、原生客户端发布、
+内嵌 Web 控制台与 Docker 部署支持。完整变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 v1.x 后续计划：
 
 - 保证每次带版本标签的发布都生成可验证的 Docker Hub 多架构镜像签名、SBOM 和
   provenance 证明。
-- 增加按用户或子域名归属流量及独立配额的能力。
+- 增加可配置的健康检测周期、重试策略和通知集成。
 - 持续维护 Linux、Windows、macOS、Nix、Homebrew、Rustup 和较少使用语言生态的
   原生客户端 smoke。
 - 持续维护 Prometheus/OpenTelemetry 指标、结构化请求追踪和不记录凭据的告警

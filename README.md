@@ -17,7 +17,7 @@ The project uses an adapter-based proxy core and already ships adapters for GitH
 
 - Deployment: [Quick Start](#quick-start) · [Docker](#docker-deployment) · [Binary](#binary-deployment) · [Reverse proxy and wildcard domains](#reverse-proxy-deployment)
 - Popular mirrors: [GitHub](#github-proxy) · [Docker / OCI](#docker--oci-proxy) · [npm](#npm--yarn--pnpm-proxy) · [Go](#go-module-proxy) · [Maven](#maven-central-proxy) · [PyPI](#pip--pypi-proxy) · [OS repositories](#os-static-repository-proxy)
-- Administration: [Service configuration](#configuration) · [Traffic and quotas](#traffic-accounting-and-monthly-quota) · [Observability](#observability) · [Security](#security-notes)
+- Administration: [Mirror health](#mirror-health-monitoring) · [Service configuration](#configuration) · [Traffic and quotas](#traffic-accounting-and-monthly-quota) · [Observability](#observability) · [Security](#security-notes)
 - Client and development: [Install the client](#install-the-client) · [Local source CLI](#local-source-cli) · [Development and verification](#development)
 
 ## Features
@@ -26,7 +26,11 @@ The project uses an adapter-based proxy core and already ships adapters for GitH
 - Health endpoint at `/healthz`
 - Runtime public config endpoint at `/api/config`
 - Source catalog endpoint at `/api/sources`
-- SQLite-backed settings, administrator sessions, audit log, traffic accounting, monthly quota, rate limiting, and bounded disk cache
+- Automatic per-upstream mirror health checks at `/api/source-health`, with manual checks and endpoint-level status in the admin console
+- SQLite-backed runtime settings, administrator and user sessions, audit log, traffic accounting, hierarchical quotas, rate limiting, and bounded disk cache
+- Passwordless email sign-in, SMTP invitations, OAuth2/OpenID Connect identity providers, linked identities, and configurable registration policies
+- Dedicated user subdomains with Sqids routing IDs, per-user and billing-group usage, atomic quota reservations, and self-service route rotation
+- Multi-administrator roles, session management, password recovery, and optional WebAuthn passkey enforcement
 - Standalone Windows/macOS/Linux client with source editing, exact rollback, and GitHub HTTPS Git URL rewriting
 - GitHub proxy for repository pages, raw files, release assets, archives, and Composer GitHub dist URLs
 - Composer proxy at `/composer`
@@ -60,6 +64,7 @@ The project uses an adapter-based proxy core and already ships adapters for GitH
 - pip/PyPI proxy at `/pypi/simple`
 - Streamed upstream responses with hop-by-hop header filtering
 - Optional single global HTTP/HTTPS/SOCKS5/SOCKS5H proxy for all mirror-upstream requests
+- Ordered comma-separated upstream groups with HTTP and transport-error failover
 - Safe defaults that reject unsupported absolute proxy targets
 
 ## Quick Start
@@ -427,7 +432,7 @@ response if no endpoint succeeds. Transport errors are returned immediately:
 
 ```toml
 [upstreams]
-maven = "https://repo.maven.apache.org/maven2, https://maven.example/repository"
+maven = "https://maven-central.storage-download.googleapis.com/maven2, https://maven.example/repository"
 ```
 
 ## RubyGems Proxy
@@ -639,6 +644,27 @@ pip install requests
 
 MirrorProxy proxies PyPI Simple API HTML and rewrites files.pythonhosted.org links back through `/pypi/files`.
 
+## Mirror Health Monitoring
+
+MirrorProxy checks every enabled proxy target automatically after startup and
+every 15 minutes. Each comma-separated upstream endpoint is requested directly
+with a representative package or metadata path, so one broken endpoint cannot
+be hidden behind a healthy fallback.
+
+- `GET /api/source-health` exposes credential-safe status for the public portal.
+- `GET /admin/api/source-health` includes diagnostic errors for administrators.
+- `POST /admin/api/source-health` starts an immediate full check.
+- Target states are `healthy`, `degraded` (some endpoints failed), `unhealthy`,
+  or `disabled`; the public source catalog and admin console use the same latest
+  persisted result.
+- OCI registry `401 Unauthorized` responses with a valid Bearer challenge are
+  treated as reachable authentication handshakes rather than failures.
+
+Health checks do not count toward traffic quotas. Runtime proxy requests still
+use configured endpoint order: any non-200 response, connection error, DNS
+failure, or timeout advances to the next endpoint when the request is safe to
+retry.
+
 ## Configuration
 
 Inspect or safely update an explicit TOML configuration file from the CLI. `set`
@@ -777,7 +803,8 @@ public_base_url = "https://mirror.example.com"
 enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "julia", "luarocks", "clojars", "cocoapods", "pub", "anaconda", "texlive", "winget", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
 [upstreams]
-# String upstream fields try comma-separated endpoints in order until HTTP 200.
+# String upstream fields try comma-separated endpoints in order until HTTP 200;
+# connection failures, DNS errors, and timeouts also advance to the next endpoint.
 github = "https://github.com"
 github_raw = "https://raw.githubusercontent.com"
 packagist = "https://repo.packagist.org"
@@ -789,7 +816,7 @@ npm = "https://registry.npmjs.org"
 nvm = "https://nodejs.org/dist"
 opam = "https://opam.ocaml.org"
 go_proxy = "https://proxy.golang.org"
-maven = "https://repo.maven.apache.org/maven2"
+maven = "https://maven-central.storage-download.googleapis.com/maven2"
 rubygems = "https://rubygems.org"
 rustup = "https://static.rust-lang.org"
 nuget = "https://api.nuget.org"
@@ -814,7 +841,7 @@ openwrt = "https://downloads.openwrt.org"
 termux = "https://packages.termux.dev/apt/termux-main"
 debian = "https://deb.debian.org/debian"
 ubuntu = "https://archive.ubuntu.com/ubuntu"
-fedora = "https://download.fedoraproject.org/pub/fedora/linux"
+fedora = "https://mirrors.xmission.com/fedora/linux"
 archlinux = "https://geo.mirror.pkgbuild.com"
 opensuse = "https://download.opensuse.org"
 void = "https://repo-default.voidlinux.org"
@@ -920,7 +947,7 @@ The new cookie APIs live under `/admin/api/*`. The former `/api/admin/*` Bearer
 APIs remain available for migration compatibility but are no longer used by the
 web portal.
 
-Optional accounting-only user subdomains assign every user a random numeric
+Optional user subdomain routing assigns every user a random numeric
 value encoded with Sqids (lowercase DNS alphabet, 12 characters minimum by
 default). The numeric value is random rather than a database ID. Configure the
 main domain, wildcard DNS, and wildcard TLS certificate before enabling it:
@@ -936,9 +963,10 @@ MIRRORPROXY_ROUTING_ROTATION_COOLDOWN_HOURS=24
 
 `public` keeps package proxy paths available on the main domain while also
 recognizing assigned user subdomains. `subdomain_required` rejects package
-proxy traffic on the main domain. User subdomains use `accounting_only`: anyone
-who knows the address can consume its traffic, so a user may rotate a suspected
-leak after the cooldown and an administrator may rotate it immediately. Old
+proxy traffic on the main domain. User subdomains identify accounting ownership
+from the Host rather than a per-request token: anyone who knows the address can
+consume its traffic, so a user may rotate a suspected leak after the cooldown
+and an administrator may rotate it immediately. Old
 routing IDs and IDs belonging to disabled users fail uniformly. Control paths
 such as `/admin`, `/login`, and `/account` are unavailable on user subdomains.
 Only trusted reverse proxies may supply `X-Forwarded-Host`.
@@ -968,7 +996,7 @@ once. Sending is limited per address, source IP, and instance.
 Registration defaults to `invite_only`. `domain_allowlist` accepts verified
 addresses from configured domains, `open` accepts any verified address, and
 `disabled` only permits existing users to sign in. Ordinary users sign in at
-`/login` and manage or rotate their accounting-only address at `/account`.
+`/login` and manage or rotate their dedicated address at `/account`.
 
 A super administrator can also configure OAuth2 and OpenID Connect sign-in from
 `/admin`. Templates are included for GitHub, GitLab, Gitee, Google, Microsoft,
@@ -1134,9 +1162,15 @@ cargo test
 Run the full local check:
 
 ```bash
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cd web
+npm ci
+npm test -- --run
+npm run build
+cd ..
+./build.sh
 ```
 
 GitHub Actions runs formatting, clippy, Rust tests, the frontend production build, browser end-to-end tests, and native client tests on Linux, Windows, and macOS. Tagging `v*` builds three-platform client artifacts plus Linux server artifacts and publishes a GitHub release with per-artifact checksums and `SHA256SUMS`.
@@ -1207,17 +1241,18 @@ uses the candidate binary for the source-change regression.
 
 ## Roadmap
 
-Version 1.0 already includes the multi-ecosystem and OS repository adapters,
-SQLite-backed administration and traffic accounting, global monthly quota,
-rate limiting, bounded disk caching, native client releases, the embedded web
-console, documented native-client and public-protocol smoke matrices, and
-Docker deployment support.
+Version 1.1 includes the multi-ecosystem and OS repository adapters, per-endpoint
+mirror health monitoring, SQLite-backed administrator and user identity flows,
+email and external-provider sign-in, user subdomain routing, hierarchical
+global/group/user quotas, Prometheus/OpenTelemetry observability, rate limiting,
+bounded disk caching, native client releases, the embedded web console, and
+Docker deployment support. See [CHANGELOG.md](CHANGELOG.md) for release details.
 
 Planned v1.x work:
 
 - Keep signed multi-architecture Docker Hub images with SBOM and provenance
   attestations verifiable as part of every tagged release.
-- Add per-user or per-subdomain traffic ownership and independent quotas.
+- Add configurable health-check intervals, retry policies, and notification integrations.
 - Keep native-client smoke coverage current across Linux, Windows, macOS, Nix,
   Homebrew, Rustup, and less common language ecosystems.
 - Keep Prometheus/OpenTelemetry metrics, structured request tracing, and

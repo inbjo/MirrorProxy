@@ -4,6 +4,7 @@ mod email;
 mod oauth;
 mod observability;
 mod proxy;
+mod source_health;
 mod static_assets;
 
 use std::{
@@ -921,6 +922,9 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     };
 
     email::spawn_email_outbox_worker(state.database.clone());
+    if !cfg!(test) {
+        source_health::spawn_worker(state.clone());
+    }
 
     Ok(Router::new()
         .route("/healthz", get(healthz))
@@ -938,6 +942,10 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         )
         .route("/api/admin/stats", get(admin_stats))
         .route("/api/admin/audit-log", get(admin_audit_log))
+        .route(
+            "/api/admin/source-health",
+            get(admin_source_health).post(run_source_health_check),
+        )
         .route("/admin/api/auth/login", post(admin_cookie_login))
         .route("/admin/api/auth/logout", post(admin_cookie_logout))
         .route("/admin/api/auth/session", get(admin_session))
@@ -979,6 +987,10 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         )
         .route("/admin/api/stats", get(admin_stats))
         .route("/admin/api/audit-log", get(admin_audit_log))
+        .route(
+            "/admin/api/source-health",
+            get(admin_source_health).post(run_source_health_check),
+        )
         .route("/admin/api/users", get(list_users).post(create_user))
         .route("/admin/api/users/{id}", delete(delete_user))
         .route("/admin/api/users/{id}/status", post(update_user_status))
@@ -1054,6 +1066,7 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             delete(oauth::unlink_identity),
         )
         .route("/api/account/usage", get(user_usage))
+        .route("/api/source-health", get(public_source_health))
         .route(
             "/api/account/routing-id/rotate",
             post(user_rotate_routing_id),
@@ -1961,6 +1974,57 @@ async fn healthz() -> impl IntoResponse {
         "status": "ok",
         "service": "mirrorproxy"
     }))
+}
+
+async fn public_source_health(State(state): State<AppState>) -> Response {
+    match source_health::report(&state, false).await {
+        Ok(report) => Json(report).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to load public source health status");
+            internal_error_response()
+        }
+    }
+}
+
+async fn admin_source_health(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => match source_health::report(&state, true).await {
+            Ok(report) => Json(report).into_response(),
+            Err(error) => {
+                tracing::error!(%error, "failed to load administrator source health status");
+                internal_error_response()
+            }
+        },
+        Ok(false) => unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator source health authorization failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn run_source_health_check(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => {}
+        Ok(false) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator source health authorization failed");
+            return internal_error_response();
+        }
+    }
+    if source_health::is_running() {
+        return conflict_response("source health check is already running");
+    }
+    match source_health::run(state.clone()).await {
+        Ok(report) => Json(report).into_response(),
+        Err(error) if error.to_string().contains("already running") => {
+            conflict_response("source health check is already running")
+        }
+        Err(error) => {
+            tracing::error!(%error, "manual source health check failed");
+            internal_error_response()
+        }
+    }
 }
 
 async fn version() -> impl IntoResponse {
@@ -4449,11 +4513,11 @@ mod tests {
         );
         assert_eq!(
             config_value(&config, "upstreams.additional_os.kali").unwrap(),
-            "https://http.kali.org/kali"
+            "https://kali.download/kali"
         );
         assert_eq!(
             config_value(&config, "upstreams.maven").unwrap(),
-            "https://repo.maven.apache.org/maven2"
+            "https://maven-central.storage-download.googleapis.com/maven2"
         );
         assert_eq!(
             config_value(&config, "upstreams.rubygems").unwrap(),
@@ -4519,7 +4583,7 @@ mod tests {
             .any(|(key, value)| key == "upstreams.pypi_files"
                 && value == "https://files.pythonhosted.org"));
         assert!(entries.iter().any(|(key, value)| key == "upstreams.maven"
-            && value == "https://repo.maven.apache.org/maven2"));
+            && value == "https://maven-central.storage-download.googleapis.com/maven2"));
         assert!(entries
             .iter()
             .any(|(key, value)| key == "upstreams.rubygems" && value == "https://rubygems.org"));
@@ -4538,7 +4602,7 @@ mod tests {
         assert!(entries
             .iter()
             .any(|(key, value)| key == "upstreams.additional_os.kali"
-                && value == "https://http.kali.org/kali"));
+                && value == "https://kali.download/kali"));
     }
 
     #[test]
@@ -4571,7 +4635,10 @@ mod tests {
             "https://first.example/maven, https://second.example/maven",
         )
         .unwrap();
-        assert_eq!(maven.current_value, "https://repo.maven.apache.org/maven2");
+        assert_eq!(
+            maven.current_value,
+            "https://maven-central.storage-download.googleapis.com/maven2"
+        );
 
         let outbound_proxy =
             plan_config_set(&config, "outbound_proxy.url", "socks5h://127.0.0.1:1080").unwrap();
@@ -5996,6 +6063,28 @@ on_exceeded = "stop_proxy"
                     .as_str()
                     .unwrap()
                     .contains("[source.crates-io]")));
+    }
+
+    #[tokio::test]
+    async fn exposes_unknown_source_health_before_the_first_check() {
+        let app = build_router(Config::default()).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/source-health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["total"], 59);
+        assert_eq!(value["unknown"], 59);
+        assert_eq!(value["unhealthy"], 0);
+        assert_eq!(value["items"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]

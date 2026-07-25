@@ -95,13 +95,13 @@ mod tests {
     fn preserves_maven2_upstream_base_path() {
         assert_eq!(
             repository_url(
-                "https://repo.maven.apache.org/maven2",
+                "https://maven-central.storage-download.googleapis.com/maven2",
                 "org/slf4j/slf4j-api/maven-metadata.xml",
                 Some("a=1"),
             )
             .unwrap()
             .as_str(),
-            "https://repo.maven.apache.org/maven2/org/slf4j/slf4j-api/maven-metadata.xml?a=1"
+            "https://maven-central.storage-download.googleapis.com/maven2/org/slf4j/slf4j-api/maven-metadata.xml?a=1"
         );
     }
 
@@ -218,6 +218,41 @@ mod tests {
         assert_eq!(primary_requests.lock().unwrap().len(), 1);
         assert_eq!(fallback_requests.lock().unwrap().len(), 1);
         primary_task.abort();
+        fallback_task.abort();
+    }
+
+    #[tokio::test]
+    async fn tries_the_next_upstream_after_a_connection_error() {
+        let unused_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unavailable = format!(
+            "http://{}/repository",
+            unused_listener.local_addr().unwrap()
+        );
+        drop(unused_listener);
+        let (fallback, fallback_requests, fallback_task) =
+            spawn_upstream(StatusCode::OK, "fallback artifact").await;
+        let state = test_state(Config {
+            upstreams: crate::config::Upstreams {
+                maven: format!("{unavailable},{fallback}"),
+                ..crate::config::Upstreams::default()
+            },
+            ..Config::default()
+        })
+        .await;
+
+        let response = proxy(
+            State(state),
+            Path("org/example/demo/1.0/demo-1.0.jar".to_string()),
+            Request::builder()
+                .uri("/maven/org/example/demo/1.0/demo-1.0.jar")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(fallback_requests.lock().unwrap().len(), 1);
         fallback_task.abort();
     }
 

@@ -17,6 +17,7 @@ import {
   Mail,
   Moon,
   PackageOpen,
+  RefreshCw,
   LogIn,
   LogOut,
   KeyRound,
@@ -157,6 +158,36 @@ type SourceTemplate = {
   template: string
   requires_sudo: boolean
 }
+type SourceEndpointHealthItem = {
+  position: number
+  endpoint: string
+  status: 'healthy' | 'unhealthy'
+  http_status: number | null
+  latency_ms: number | null
+  checked_at: number
+  error: string | null
+}
+type SourceHealthItem = {
+  target_code: string
+  adapter: string
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'disabled'
+  http_status: number | null
+  latency_ms: number | null
+  checked_at: number
+  error: string | null
+  endpoints: SourceEndpointHealthItem[]
+}
+type SourceHealthReport = {
+  running: boolean
+  total: number
+  healthy: number
+  degraded: number
+  unhealthy: number
+  disabled: number
+  unknown: number
+  last_checked_at: number | null
+  items: SourceHealthItem[]
+}
 
 const copy = async (value: string) => {
   try {
@@ -256,6 +287,12 @@ const messages = {
     sourceSearch: 'Search sources',
     sourceSearchPlaceholder: 'Search by name, type, or alias',
     sourceNoResults: 'No sources match the current filters.',
+    sourceHealthy: 'Available',
+    sourceDegraded: 'Partially available',
+    sourceUnhealthy: 'Unavailable',
+    sourceDisabled: 'Disabled',
+    sourceUnknown: 'Not checked',
+    upstreamStatus: 'Configured upstreams',
     mirrorproxyAddress: 'MirrorProxy address',
     mirrorproxyAddressHint: 'Use this endpoint when your client accepts a mirror URL directly.',
     mirrorproxyCli: 'MirrorProxy CLI setup',
@@ -342,6 +379,12 @@ const messages = {
     sourceSearch: '搜索镜像源',
     sourceSearchPlaceholder: '按名称、类型或别名搜索',
     sourceNoResults: '没有符合当前筛选条件的镜像源。',
+    sourceHealthy: '可用',
+    sourceDegraded: '部分可用',
+    sourceUnhealthy: '不可用',
+    sourceDisabled: '未启用',
+    sourceUnknown: '未检测',
+    upstreamStatus: '已配置上游',
     mirrorproxyAddress: 'MirrorProxy 地址',
     mirrorproxyAddressHint: '客户端可直接填写镜像 URL 时，使用此地址。',
     mirrorproxyCli: 'MirrorProxy CLI 配置',
@@ -571,6 +614,7 @@ function PublicApp() {
     },
   })
   const [catalog, setCatalog] = React.useState<SourceCatalog | null>(null)
+  const [sourceHealth, setSourceHealth] = React.useState<SourceHealthReport | null>(null)
   const [publicProfile, setPublicProfile] = React.useState<UserProfile | null>(null)
   const [copied, setCopied] = React.useState<string | null>(null)
   const t = messages[locale]
@@ -596,6 +640,17 @@ function PublicApp() {
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('source catalog unavailable')))
       .then((value: SourceCatalog) => setCatalog(value))
       .catch(() => undefined)
+  }, [])
+
+  React.useEffect(() => {
+    let active = true
+    const loadHealth = () => fetch('/api/source-health')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('source health unavailable')))
+      .then((value: SourceHealthReport) => { if (active) setSourceHealth(value) })
+      .catch(() => undefined)
+    loadHealth()
+    const interval = window.setInterval(loadHealth, 60_000)
+    return () => { active = false; window.clearInterval(interval) }
   }, [])
 
   React.useEffect(() => {
@@ -666,7 +721,7 @@ function PublicApp() {
         </div>
       </header>
 
-      <AccelerationWorkbench baseUrl={baseUrl} config={config} catalog={catalog} labels={t} onCopy={copyCommand} copied={copied} />
+      <AccelerationWorkbench baseUrl={baseUrl} config={config} catalog={catalog} health={sourceHealth} labels={t} onCopy={copyCommand} copied={copied} />
 
       <SiteFooter />
 
@@ -795,7 +850,7 @@ function PublicApp() {
   )
 }
 
-function AccelerationWorkbench({ baseUrl, config, catalog, labels, onCopy, copied }: { baseUrl: string; config: PublicConfig; catalog: SourceCatalog | null; labels: Record<string, string>; onCopy: (id: string, value: string) => void; copied: string | null }) {
+function AccelerationWorkbench({ baseUrl, config, catalog, health, labels, onCopy, copied }: { baseUrl: string; config: PublicConfig; catalog: SourceCatalog | null; health: SourceHealthReport | null; labels: Record<string, string>; onCopy: (id: string, value: string) => void; copied: string | null }) {
   const [githubInput, setGithubInput] = React.useState('')
   const [dockerInput, setDockerInput] = React.useState('')
   const [selectedTarget, setSelectedTarget] = React.useState<SourceTarget | null>(null)
@@ -822,6 +877,12 @@ function AccelerationWorkbench({ baseUrl, config, catalog, labels, onCopy, copie
     setShowAllSources(true)
     setSelectedCategories({ lang: false, os: false, repo: false })
   }
+  const healthByTarget = React.useMemo(() => new Map(health?.items.map((item) => [item.target_code, item]) ?? []), [health])
+  const sourceHealthLabel = (target: SourceTarget) => {
+    if (!target.supported_modes.includes('proxy')) return null
+    const status = healthByTarget.get(target.code)?.status ?? 'unknown'
+    return { status, label: labels[`source${status[0].toUpperCase()}${status.slice(1)}`] ?? labels.sourceUnknown }
+  }
   return <section className="accelerator-shell">
     <div className="accelerator-hero">
       <div><span className="eyebrow">MIRRORPROXY / ACCELERATION DESK</span><h1>{labels.accelerationTitle}</h1><p>{labels.subtitle}</p></div>
@@ -841,9 +902,12 @@ function AccelerationWorkbench({ baseUrl, config, catalog, labels, onCopy, copie
         </div>
         <label className="source-search"><Search size={16} /><span className="sr-only">{labels.sourceSearch}</span><input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder={labels.sourceSearchPlaceholder} type="search" /></label>
       </div>
-      {filteredTargets.length ? <div className="source-card-grid">{filteredTargets.map((item) => <button className={item.code === selectedTarget?.code ? 'source-tile selected' : 'source-tile'} onClick={() => setSelectedTarget(item)} key={item.code}>{sourceCategoryIcon(item.category)}<span><strong>{item.name}</strong><small>{sourceCategoryLabel(item.category, labels)}</small></span><em>{item.supported_modes.includes('proxy') ? labels.proxyReady : labels.configOnly}</em></button>)}</div> : <p className="source-no-results">{labels.sourceNoResults}</p>}
+      {filteredTargets.length ? <div className="source-card-grid">{filteredTargets.map((item) => {
+        const sourceState = sourceHealthLabel(item)
+        return <button className={`${item.code === selectedTarget?.code ? 'source-tile selected' : 'source-tile'}${sourceState?.status === 'unhealthy' ? ' source-tile-unhealthy' : ''}${sourceState?.status === 'degraded' ? ' source-tile-degraded' : ''}`} onClick={() => setSelectedTarget(item)} key={item.code}>{sourceCategoryIcon(item.category)}<span><strong>{item.name}</strong><small>{sourceCategoryLabel(item.category, labels)}</small></span><span className="source-tile-meta"><em>{item.supported_modes.includes('proxy') ? labels.proxyReady : labels.configOnly}</em>{sourceState ? <small className={`source-health-badge source-health-${sourceState.status}`}><i />{sourceState.label}</small> : null}</span></button>
+      })}</div> : <p className="source-no-results">{labels.sourceNoResults}</p>}
     </div> : null}
-    {selectedTarget && catalog ? <SourceConfigModal target={selectedTarget} baseUrl={baseUrl} catalog={catalog} labels={labels} copied={copied} onCopy={onCopy} onClose={() => setSelectedTarget(null)} /> : null}
+    {selectedTarget && catalog ? <SourceConfigModal target={selectedTarget} health={healthByTarget.get(selectedTarget.code)} baseUrl={baseUrl} catalog={catalog} labels={labels} copied={copied} onCopy={onCopy} onClose={() => setSelectedTarget(null)} /> : null}
   </section>
 }
 
@@ -882,7 +946,7 @@ function LinkConverter({ title, icon, hint, value, onChange, output, outputLabel
   return <section className="link-converter"><div className="converter-title">{icon}<div><h2>{title}</h2><p>{hint}</p></div></div><div className="converter-input"><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><button disabled={!output} onClick={onCopy}>{copied ? copiedLabel : copyLabel}</button></div>{output ? <div className="converter-output"><span>{outputLabel}</span><code>{output}</code></div> : null}</section>
 }
 
-function SourceConfigModal({ target, baseUrl, catalog, labels, copied, onCopy, onClose }: { target: SourceTarget; baseUrl: string; catalog: SourceCatalog; labels: Record<string, string>; copied: string | null; onCopy: (id: string, value: string) => void; onClose: () => void }) {
+function SourceConfigModal({ target, health, baseUrl, catalog, labels, copied, onCopy, onClose }: { target: SourceTarget; health?: SourceHealthItem; baseUrl: string; catalog: SourceCatalog; labels: Record<string, string>; copied: string | null; onCopy: (id: string, value: string) => void; onClose: () => void }) {
   const source = catalog.sources.find((item) => item.target_code === target.code && item.provider_code === 'mirrorproxy')
   const template = catalog.templates.find((item) => item.target_code === target.code)
   const proxyUrl = source ? `${baseUrl}${source.repo_url.startsWith('/') ? source.repo_url : `/${source.repo_url}`}` : ''
@@ -894,6 +958,7 @@ function SourceConfigModal({ target, baseUrl, catalog, labels, copied, onCopy, o
       <button className="config-modal-close" onClick={onClose} aria-label={labels.closeConfig}><X size={18} /></button>
       <span className="eyebrow">CONFIGURE / {target.code.toUpperCase()}</span><h2>{target.name}</h2>
       <p>{source ? labels.sourceAvailable : labels.sourceUnavailable}</p>
+      {health?.endpoints.length ? <section className="public-upstream-health"><div><strong>{labels.upstreamStatus ?? 'Upstream status'}</strong><span className={`source-health-badge source-health-${health.status}`}><i />{labels[`source${health.status[0].toUpperCase()}${health.status.slice(1)}`]}</span></div><div className="public-upstream-list">{health.endpoints.map((endpoint) => <div className={`public-upstream-row ${endpoint.status}`} key={`${endpoint.position}-${endpoint.endpoint}`}><i /><code>{endpoint.endpoint}</code><span>HTTP {endpoint.http_status ?? '—'} · {endpoint.latency_ms === null ? '—' : `${endpoint.latency_ms} ms`}</span></div>)}</div></section> : null}
       {source ? <ConfigOption title={labels.mirrorproxyAddress} description={labels.mirrorproxyAddressHint} value={proxyUrl} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-url'} onCopy={() => onCopy('source-url', proxyUrl)} /> : null}
       {source ? <ConfigOption title={labels.mirrorproxyCli} description={labels.mirrorproxyCliHint} value={mirrorproxyCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-cli'} onCopy={() => onCopy('source-cli', mirrorproxyCommand)} /> : null}
       <ConfigOption title={labels.manualSetup} description={target.category === 'os' ? labels.manualSystemSetupHint : labels.manualSetupHint} value={manualCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-manual'} onCopy={() => onCopy('source-manual', manualCommand)} />
@@ -1063,8 +1128,8 @@ function AdminConsole({ locale }: { locale: Locale }) {
         administrators: '管理员账号', createAdministrator: '创建管理员', role: '角色', disable: '禁用', enable: '启用', adminCreateError: '管理员创建失败。',
         passkeys: 'Passkey', usePasskey: '使用 Passkey 登录', addPasskey: '登记 Passkey', passkeyName: 'Passkey 名称', deletePasskey: '删除', passkeyError: 'Passkey 操作失败。', webauthnEnabled: '启用管理员 Passkey', webauthnRpId: 'RP ID（主域名）', webauthnOrigin: 'RP Origin（HTTPS）', webauthnName: 'RP 名称', requirePasskey: '除应急账号外强制使用 Passkey', breakGlass: '应急管理员账号',
         generator: 'CLI 改源命令', target: '目标', mirror: '镜像站', scope: '作用域', distribution: '发行版代号', ready: '可直接执行', guidance: '当前仅生成配置指引', copyCommand: '复制命令', copiedCommand: '已复制',
-        tabOverview: '概览', tabAccess: '访问与配额', tabUsers: '用户与分组', tabProviders: '第三方登录', tabEmail: '邮件与邀请', tabSecurity: '管理员与安全', tabAdvanced: '高级设置', tabAudit: '审计日志',
-        overviewHint: '查看当前月份的代理流量和请求状态。', accessHint: '设置谁可以使用服务、子域名规则和流量上限。', usersHint: '管理用户、计费组、个人配额和使用状态。', providersHint: '配置 GitHub、Google 或企业 OIDC 等登录方式。', emailHint: '配置发件服务器，并邀请用户加入。', securityHint: '管理后台账号、Passkey、登录会话和密码。', advancedHint: '低频服务参数。如果不确定，请保持默认值。', auditHint: '查看最近的管理和安全操作。',
+        tabOverview: '概览', tabHealth: '镜像检测', tabAccess: '访问与配额', tabUsers: '用户与分组', tabProviders: '第三方登录', tabEmail: '邮件与邀请', tabSecurity: '管理员与安全', tabAdvanced: '高级设置', tabAudit: '审计日志',
+        overviewHint: '查看当前月份的代理流量和请求状态。', healthHint: '检测全部公网代理路径，快速定位不可用的镜像源。', accessHint: '设置谁可以使用服务、子域名规则和流量上限。', usersHint: '管理用户、计费组、个人配额和使用状态。', providersHint: '配置 GitHub、Google 或企业 OIDC 等登录方式。', emailHint: '配置发件服务器，并邀请用户加入。', securityHint: '管理后台账号、Passkey、登录会话和密码。', advancedHint: '低频服务参数。如果不确定，请保持默认值。', auditHint: '查看最近的管理和安全操作。',
         serviceAccess: '服务准入', trafficQuota: '流量配额', subdomainRouting: '用户子域名', advancedWarning: '这些选项直接影响代理请求和上游连接，错误配置可能导致服务不可用。', showUpstreams: '编辑上游地址', upstreamHint: '上游字段可填多个 HTTP(S) 地址，用英文逗号分隔；服务会按顺序请求，直到返回 200。', auditLog: '审计日志', noAudit: '暂无审记录。', defaultUserQuota: '默认单用户上限（GB）', bidirectionalAccounting: '双向计费', unlimited: '不限量', requestLabel: '次请求', errorLabel: '个错误', runtimeState: '当前运行地址',
       }
     : {
@@ -1079,8 +1144,8 @@ function AdminConsole({ locale }: { locale: Locale }) {
         administrators: 'Administrators', createAdministrator: 'Create administrator', role: 'Role', disable: 'Disable', enable: 'Enable', adminCreateError: 'Administrator creation failed.',
         passkeys: 'Passkeys', usePasskey: 'Sign in with a passkey', addPasskey: 'Register passkey', passkeyName: 'Passkey name', deletePasskey: 'Delete', passkeyError: 'Passkey operation failed.', webauthnEnabled: 'Enable administrator passkeys', webauthnRpId: 'RP ID (primary domain)', webauthnOrigin: 'RP origin (HTTPS)', webauthnName: 'RP name', requirePasskey: 'Require passkeys except break-glass account', breakGlass: 'Break-glass administrator',
         generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', distribution: 'Distribution codename', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied', auditLog: 'Audit log', noAudit: 'No audit entries yet.',
-        tabOverview: 'Overview', tabAccess: 'Access & quotas', tabUsers: 'Users & groups', tabProviders: 'Identity providers', tabEmail: 'Email & invitations', tabSecurity: 'Administrators & security', tabAdvanced: 'Advanced', tabAudit: 'Audit log',
-        overviewHint: 'Review proxy traffic and request health for the current month.', accessHint: 'Control who can use the service, user subdomains, and traffic limits.', usersHint: 'Manage users, billing groups, individual quotas, and account status.', providersHint: 'Configure GitHub, Google, or an enterprise OpenID Connect provider.', emailHint: 'Configure outbound email and invite people to the service.', securityHint: 'Manage administrator accounts, passkeys, sessions, and passwords.', advancedHint: 'Low-frequency service settings. Keep the defaults unless you know they need to change.', auditHint: 'Review recent administrative and security operations.',
+        tabOverview: 'Overview', tabHealth: 'Mirror health', tabAccess: 'Access & quotas', tabUsers: 'Users & groups', tabProviders: 'Identity providers', tabEmail: 'Email & invitations', tabSecurity: 'Administrators & security', tabAdvanced: 'Advanced', tabAudit: 'Audit log',
+        overviewHint: 'Review proxy traffic and request health for the current month.', healthHint: 'Probe every public proxy path and identify unavailable mirrors.', accessHint: 'Control who can use the service, user subdomains, and traffic limits.', usersHint: 'Manage users, billing groups, individual quotas, and account status.', providersHint: 'Configure GitHub, Google, or an enterprise OpenID Connect provider.', emailHint: 'Configure outbound email and invite people to the service.', securityHint: 'Manage administrator accounts, passkeys, sessions, and passwords.', advancedHint: 'Low-frequency service settings. Keep the defaults unless you know they need to change.', auditHint: 'Review recent administrative and security operations.',
         serviceAccess: 'Service access', trafficQuota: 'Traffic quota', subdomainRouting: 'User subdomains', advancedWarning: 'These settings directly affect proxy requests and upstream connectivity. Incorrect values can make the service unavailable.', showUpstreams: 'Edit upstream endpoints', upstreamHint: 'Upstream fields accept comma-separated HTTP(S) endpoints. Requests try them in order until one returns 200.', defaultUserQuota: 'Default per-user limit (GB)', bidirectionalAccounting: 'Bidirectional billing', unlimited: 'Unlimited', requestLabel: 'requests', errorLabel: 'errors', runtimeState: 'Listening on',
       }
   const [token, setToken] = React.useState<string | null>(null)
@@ -1089,6 +1154,8 @@ function AdminConsole({ locale }: { locale: Locale }) {
   const [password, setPassword] = React.useState('')
   const [draft, setDraft] = React.useState<AdminConfig | null>(null)
   const [stats, setStats] = React.useState<AdminStats | null>(null)
+  const [sourceHealth, setSourceHealth] = React.useState<SourceHealthReport | null>(null)
+  const [sourceHealthBusy, setSourceHealthBusy] = React.useState(false)
   const [auditLog, setAuditLog] = React.useState<AuditLogEntry[]>([])
   const [auditPage, setAuditPage] = React.useState(1)
   const [auditTotal, setAuditTotal] = React.useState(0)
@@ -1106,7 +1173,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
   const [passkeys, setPasskeys] = React.useState<AdminPasskey[]>([])
   const [passkeyName, setPasskeyName] = React.useState('')
   const [passkeyBusy, setPasskeyBusy] = React.useState(false)
-  const [activeTab, setActiveTab] = React.useState<'overview' | 'access' | 'users' | 'providers' | 'email' | 'security' | 'advanced' | 'audit'>('overview')
+  const [activeTab, setActiveTab] = React.useState<'overview' | 'health' | 'access' | 'users' | 'providers' | 'email' | 'security' | 'advanced' | 'audit'>('overview')
 
   React.useEffect(() => {
     if (!notice) return
@@ -1147,6 +1214,12 @@ function AdminConsole({ locale }: { locale: Locale }) {
     setAuditTotal(value.total)
   }, [])
 
+  const loadSourceHealth = React.useCallback(async () => {
+    const response = await fetch('/admin/api/source-health')
+    if (!response.ok) throw new Error('source health unavailable')
+    setSourceHealth(await response.json() as SourceHealthReport)
+  }, [])
+
   const loadPasskeys = React.useCallback(async () => {
     const response = await fetch('/admin/api/auth/passkeys')
     if (!response.ok) throw new Error('passkey list unavailable')
@@ -1160,7 +1233,14 @@ function AdminConsole({ locale }: { locale: Locale }) {
       setError(text.badLogin)
     })
     loadPasskeys().catch(() => undefined)
-  }, [load, loadPasskeys, text.badLogin, token])
+    loadSourceHealth().catch(() => undefined)
+  }, [load, loadPasskeys, loadSourceHealth, text.badLogin, token])
+
+  React.useEffect(() => {
+    if (!token) return
+    const interval = window.setInterval(() => loadSourceHealth().catch(() => undefined), 30_000)
+    return () => window.clearInterval(interval)
+  }, [loadSourceHealth, token])
 
   React.useEffect(() => {
     if (!token) return
@@ -1220,7 +1300,24 @@ function AdminConsole({ locale }: { locale: Locale }) {
   const signOut = async (requireConfirmation = true) => {
     if (requireConfirmation && !window.confirm(locale === 'zh' ? '确定退出管理员后台吗？' : 'Sign out of the administrator console?')) return
     if (token) await fetch('/admin/api/auth/logout', { method: 'POST' }).catch(() => undefined)
-    setIdentity(null); setToken(null); setDraft(null); setStats(null); setAuditLog([]); setAuditTotal(0); setRestartRequired([]); setNotice(null)
+    setIdentity(null); setToken(null); setDraft(null); setStats(null); setSourceHealth(null); setAuditLog([]); setAuditTotal(0); setRestartRequired([]); setNotice(null)
+  }
+
+  const runSourceHealth = async () => {
+    setSourceHealthBusy(true); setError(null)
+    try {
+      const response = await fetch('/admin/api/source-health', { method: 'POST' })
+      if (!response.ok) throw new Error(response.status === 409 ? 'already running' : 'check failed')
+      setSourceHealth(await response.json() as SourceHealthReport)
+    } catch (reason) {
+      if (reason instanceof Error && reason.message === 'already running') {
+        await loadSourceHealth().catch(() => undefined)
+      } else {
+        setError(locale === 'zh' ? '镜像源检测失败，请检查公开地址和服务网络。' : 'Mirror health check failed. Verify the public URL and service network.')
+      }
+    } finally {
+      setSourceHealthBusy(false)
+    }
   }
 
   const save = async (): Promise<boolean> => {
@@ -1337,6 +1434,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
 
   const tabs = [
     { id: 'overview', label: text.tabOverview, hint: text.overviewHint },
+    { id: 'health', label: text.tabHealth, hint: text.healthHint },
     { id: 'access', label: text.tabAccess, hint: text.accessHint },
     { id: 'users', label: text.tabUsers, hint: text.usersHint },
     { id: 'providers', label: text.tabProviders, hint: text.providersHint },
@@ -1354,13 +1452,14 @@ function AdminConsole({ locale }: { locale: Locale }) {
       {!token ? <form className="login-card admin-login-card" onSubmit={signIn}><div className="admin-login-intro"><h3>{text.login}</h3><p>{text.passwordHint}</p></div><label className="admin-username-field">{text.username}<input autoFocus required autoComplete="username webauthn" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="admin-password-field">{text.password}<input required={!passkeyEnabled} autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error ? <p className="form-error admin-login-error">{error}</p> : null}<div className="login-actions admin-login-actions"><button className="primary-button password-login-button" type="submit"><LogIn size={17} /> {text.signIn}</button>{passkeyEnabled ? <button className="secondary-button passkey-login-button" disabled={passkeyBusy || !username.trim()} type="button" onClick={signInWithPasskey}><KeyRound size={17} /> {text.usePasskey}</button> : null}</div></form> : null}
       {token && draft && stats ? <div className="console-workspace">
         <nav className="admin-tabs" aria-label={text.title}>{tabs.map((tab) => <button aria-current={activeTab === tab.id ? 'page' : undefined} className={activeTab === tab.id ? 'active' : ''} key={tab.id} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>)}</nav>
-        <div className="admin-tab-toolbar"><div><h3>{activeTabCopy.label}</h3><p>{activeTabCopy.hint}</p></div><div className="console-actions">{activeTab === 'overview' || activeTab === 'audit' ? <button onClick={() => (activeTab === 'audit' ? loadAudit(auditPage) : load(token)).catch(() => setError(text.saveError))}>{text.refresh}</button> : null}{activeTab === 'access' || activeTab === 'advanced' || activeTab === 'security' ? <button className="primary-button" disabled={saving} onClick={save}><Save size={16} /> {saving ? text.saving : text.save}</button> : null}</div></div>
+        <div className="admin-tab-toolbar"><div><h3>{activeTabCopy.label}</h3><p>{activeTabCopy.hint}</p></div><div className="console-actions">{activeTab === 'overview' || activeTab === 'audit' ? <button onClick={() => (activeTab === 'audit' ? loadAudit(auditPage) : load(token)).catch(() => setError(text.saveError))}>{text.refresh}</button> : null}{activeTab === 'health' ? <button className="primary-button" disabled={sourceHealthBusy || sourceHealth?.running} onClick={runSourceHealth}><RefreshCw className={sourceHealthBusy || sourceHealth?.running ? 'spin' : ''} size={16} /> {locale === 'zh' ? (sourceHealthBusy || sourceHealth?.running ? '检测中…' : '立即检测') : (sourceHealthBusy || sourceHealth?.running ? 'Checking…' : 'Run check')}</button> : null}{activeTab === 'access' || activeTab === 'advanced' || activeTab === 'security' ? <button className="primary-button" disabled={saving} onClick={save}><Save size={16} /> {saving ? text.saving : text.save}</button> : null}</div></div>
         {error ? <p className="form-error admin-global-message">{error}</p> : null}{restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
         {activeTab === 'overview' ? <section className="admin-tab-panel console-overview"><div className="console-section-head"><div><h3>{text.overview}</h3><p>{stats.month} · {stats.quota.timezone}</p></div></div>
           {stats.quota.exceeded ? <div className="quota-alert"><ChartNoAxesCombined size={18} /> {text.quotaStopped}</div> : null}
           <div className="console-metrics"><ConsoleMetric label={draft.quota.bidirectional_accounting ? text.billed : text.sent} value={byteLabel(stats.response_bytes)} /><ConsoleMetric label={text.remaining} value={stats.quota.enabled ? byteLabel(stats.quota.remaining_bytes) : '∞'} /><ConsoleMetric label={text.requests} value={stats.request_count.toLocaleString()} /><ConsoleMetric label={text.errors} value={stats.error_count.toLocaleString()} /></div>
           <div className="stats-columns"><div><h4>{text.top}</h4>{stats.targets.length ? stats.targets.map((target) => <div className="stat-row" key={target.target_code}><span>{target.target_code}</span><strong>{byteLabel(target.response_bytes)}</strong><small>{target.request_count} {text.requestLabel}</small></div>) : <p className="empty-stat">{text.noData}</p>}</div><div><h4>{text.daily}</h4>{stats.daily.slice(-8).map((day) => <div className="stat-row" key={`${day.day}-${day.target_code}`}><span>{day.day.slice(5)} · {day.target_code}</span><strong>{byteLabel(day.response_bytes)}</strong><small>{day.error_count} {text.errorLabel}</small></div>)}</div></div>
         </section> : null}
+        {activeTab === 'health' ? <AdminSourceHealthPanel report={sourceHealth} locale={locale} /> : null}
         {activeTab === 'access' ? <section className="admin-tab-panel settings-stack">
           <div className="settings-card"><div className="settings-card-head"><h4>{text.serviceAccess}</h4><p>{text.accessHint}</p></div><div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label>{text.registrationMode}<select value={draft.registration.mode} onChange={(event) => updateRegistration('mode', event.target.value)}><option value="invite_only">{locale === 'zh' ? '仅邀请用户' : 'Invitation only'}</option><option value="domain_allowlist">{locale === 'zh' ? '仅允许指定邮箱域名' : 'Allowed email domains'}</option><option value="open">{locale === 'zh' ? '开放注册' : 'Open registration'}</option><option value="disabled">{locale === 'zh' ? '禁止新用户' : 'New users disabled'}</option></select></label><label className="wide-field">{text.allowedDomains}<input placeholder="example.com, subsidiary.example.com" value={draft.registration.allowed_email_domains.join(', ')} onChange={(event) => updateRegistration('allowed_email_domains', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /><small>{locale === 'zh' ? '仅“指定邮箱域名”模式需要填写，多个域名用逗号分隔。' : 'Only required for the allowed-domain mode. Separate multiple domains with commas.'}</small></label><label>{text.emailTtl}<input min="1" max="60" type="number" value={draft.registration.email_token_ttl_minutes} onChange={(event) => updateRegistration('email_token_ttl_minutes', Number(event.target.value))} /></label></div></div>
           <div className="settings-card"><div className="settings-card-head"><h4>{text.subdomainRouting}</h4><p>{locale === 'zh' ? '默认保留主域名代理。只有企业内部强制计费时才需要强制用户子域名。' : 'Keep main-domain proxying by default. Require user subdomains only for controlled internal deployments.'}</p></div><div className="config-fields"><label>{text.baseDomain}<input placeholder="mirror.example.com" value={draft.user_access.base_domain} onChange={(event) => updateUserAccess('base_domain', event.target.value)} /></label><label>{text.accessMode}<select value={draft.user_access.mode} onChange={(event) => updateUserAccess('mode', event.target.value)}><option value="public">{locale === 'zh' ? '公开模式（推荐）' : 'Public (recommended)'}</option><option value="subdomain_required">{locale === 'zh' ? '强制用户子域名' : 'Require user subdomains'}</option></select></label>{draft.user_access.mode === 'subdomain_required' ? <div className="infrastructure-readiness wide-field"><label className="toggle-field"><input type="checkbox" checked={draft.user_access.infrastructure_ready} onChange={(event) => updateUserAccess('infrastructure_ready', event.target.checked)} />{text.infrastructureReady}</label><p>{locale === 'zh' ? '这是保存前的安全确认，不会自动配置基础设施。请确保 *.主域名 已解析到本服务、TLS 证书覆盖通配符域名，并且反向代理保留客户端请求的原始 Host。' : 'This is a safety acknowledgement, not automatic provisioning. Ensure *.base-domain resolves to this service, TLS covers the wildcard domain, and the reverse proxy preserves the original Host header.'}</p></div> : <div className="infrastructure-readiness infrastructure-readiness-passive wide-field"><CheckCircle2 size={17} /><p>{locale === 'zh' ? '公开模式只使用公开地址，不需要通配符 DNS、通配符证书或用户子域名配置。' : 'Public mode only uses the public URL; wildcard DNS, wildcard certificates, and user subdomains are not required.'}</p></div>}</div></div>
@@ -1771,6 +1870,24 @@ function Pagination({ page, total, pageSize, locale, onChange }: { page: number;
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
   if (total <= pageSize) return null
   return <nav className="pagination" aria-label={locale === 'zh' ? '分页' : 'Pagination'}><span>{locale === 'zh' ? `第 ${page} / ${pageCount} 页，共 ${total} 条` : `Page ${page} of ${pageCount} · ${total} items`}</span><div><button disabled={page <= 1} onClick={() => onChange(page - 1)}>{locale === 'zh' ? '上一页' : 'Previous'}</button><button disabled={page >= pageCount} onClick={() => onChange(page + 1)}>{locale === 'zh' ? '下一页' : 'Next'}</button></div></nav>
+}
+
+function AdminSourceHealthPanel({ report, locale }: { report: SourceHealthReport | null; locale: Locale }) {
+  const labels = locale === 'zh'
+    ? { healthy: '可用', degraded: '部分异常', unhealthy: '不可用', disabled: '未启用', unknown: '未检测', source: '镜像源', adapter: '适配器', result: '检测结果', latency: '耗时', checked: '检测时间', upstreams: '个上游', empty: '尚无检测结果，点击“立即检测”开始检查全部镜像源。', auto: '系统每 15 分钟逐个检测所有已配置上游；前台状态会同步更新。' }
+    : { healthy: 'Available', degraded: 'Degraded', unhealthy: 'Unavailable', disabled: 'Disabled', unknown: 'Not checked', source: 'Source', adapter: 'Adapter', result: 'Result', latency: 'Latency', checked: 'Checked', upstreams: 'upstreams', empty: 'No results yet. Run a check to probe every configured upstream.', auto: 'Every configured upstream is checked individually every 15 minutes; the public catalog follows the latest result.' }
+  const items = React.useMemo(() => [...(report?.items ?? [])].sort((left, right) => {
+    const rank: Record<string, number> = { unhealthy: 0, degraded: 1, healthy: 2, disabled: 3 }
+    return (rank[left.status] ?? 3) - (rank[right.status] ?? 3) || left.target_code.localeCompare(right.target_code)
+  }), [report])
+  const checkedAt = report?.last_checked_at ? new Date(report.last_checked_at * 1000).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US') : labels.unknown
+  return <section className="admin-tab-panel source-health-panel">
+    <div className="source-health-summary">
+      <div className="source-health-summary-copy"><span className="console-kicker"><CheckCircle2 size={15} /> HEALTH MATRIX</span><h3>{locale === 'zh' ? '镜像可用性' : 'Mirror availability'}</h3><p>{labels.auto}</p><small>{labels.checked}: {checkedAt}</small></div>
+      <div className="source-health-counts"><div className="healthy"><span>{labels.healthy}</span><strong>{report?.healthy ?? 0}</strong></div><div className="degraded"><span>{labels.degraded}</span><strong>{report?.degraded ?? 0}</strong></div><div className="unhealthy"><span>{labels.unhealthy}</span><strong>{report?.unhealthy ?? 0}</strong></div><div><span>{labels.disabled}</span><strong>{report?.disabled ?? 0}</strong></div><div><span>{labels.unknown}</span><strong>{report?.unknown ?? report?.total ?? 59}</strong></div></div>
+    </div>
+    {items.length ? <div className="source-health-table-wrap"><table className="source-health-table"><thead><tr><th>{labels.source}</th><th>{labels.adapter}</th><th>{labels.result}</th><th>{labels.latency}</th><th>{labels.checked}</th></tr></thead><tbody>{items.map((item) => <tr className={item.status} key={item.target_code}><td><strong>{item.target_code}</strong>{item.error ? <small>{item.error}</small> : null}{item.endpoints.length ? <details className="source-endpoint-details"><summary>{item.endpoints.length} {labels.upstreams}</summary><div>{item.endpoints.map((endpoint) => <article className={endpoint.status} key={`${endpoint.position}-${endpoint.endpoint}`}><span className={`source-health-badge source-health-${endpoint.status}`}><i />{labels[endpoint.status]}</span><code>{endpoint.endpoint}</code><small>HTTP {endpoint.http_status ?? '—'} · {endpoint.latency_ms === null ? '—' : `${endpoint.latency_ms} ms`}{endpoint.error ? ` · ${endpoint.error}` : ''}</small></article>)}</div></details> : null}</td><td><code>{item.adapter}</code></td><td><span className={`source-health-badge source-health-${item.status}`}><i />{labels[item.status]}</span></td><td>{item.latency_ms === null ? '—' : `${item.latency_ms} ms`}</td><td>{new Date(item.checked_at * 1000).toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US')}</td></tr>)}</tbody></table></div> : <div className="source-health-empty"><Database size={24} /><p>{labels.empty}</p></div>}
+  </section>
 }
 
 function ConsoleMetric({ label, value }: { label: string; value: string }) { return <div className="console-metric"><small>{label}</small><strong>{value}</strong></div> }

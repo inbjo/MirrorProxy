@@ -48,6 +48,24 @@ describe('App preferences', () => {
     expect(container.querySelector<HTMLAnchorElement>('.account-entry')?.getAttribute('href')).toBe('/login')
   })
 
+  it('shows degraded mirror health and individual upstreams in the public source catalog', async () => {
+    const json = (value: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(value), { status }))
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      if (input === '/api/public-config') return json({ public_base_url: 'https://mirror.example', enabled_proxies: ['maven'], quota: { enabled: false, bidirectional_accounting: false, monthly_gb: 0, timezone: 'UTC', on_exceeded: 'stop_proxy' } })
+      if (input === '/api/sources') return json({ providers: [], targets: [{ code: 'maven', name: 'Apache Maven', category: 'repo', aliases: [], supported_modes: ['proxy'], default_scope: 'user' }], sources: [{ target_code: 'maven', provider_code: 'mirrorproxy', repo_url: '/maven/', speed_url: null, capability: 'proxy' }], templates: [] })
+      if (input === '/api/source-health') return json({ running: false, total: 59, healthy: 58, degraded: 1, unhealthy: 0, disabled: 0, unknown: 0, last_checked_at: 1_721_880_000, items: [{ target_code: 'maven', adapter: 'maven', status: 'degraded', http_status: null, latency_ms: 512, checked_at: 1_721_880_000, error: null, endpoints: [{ position: 0, endpoint: 'https://bad.example/maven2', status: 'unhealthy', http_status: 403, latency_ms: 512, checked_at: 1_721_880_000, error: null }, { position: 1, endpoint: 'https://good.example/maven2', status: 'healthy', http_status: 200, latency_ms: 80, checked_at: 1_721_880_000, error: null }] }] })
+      return json({ error: 'not found' }, 404)
+    }))
+
+    const { container } = render(<App />)
+    expect(await screen.findByText('Apache Maven')).toBeTruthy()
+    expect(await screen.findByText('Partially available')).toBeTruthy()
+    expect(container.querySelector('.source-tile-degraded')).toBeTruthy()
+    fireEvent.click(screen.getByText('Apache Maven'))
+    expect(await screen.findByText('https://bad.example/maven2')).toBeTruthy()
+    expect(await screen.findByText('https://good.example/maven2')).toBeTruthy()
+  })
+
   it('uses the signed-in user dedicated domain for homepage mirror addresses', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const json = (value: unknown) => Promise.resolve(new Response(JSON.stringify(value), { status: 200 }))
@@ -145,6 +163,7 @@ describe('App preferences', () => {
       if (input === '/admin/api/config' && init?.method === 'PUT') return json({ error: 'public_base_url must use HTTPS and exactly match user_access.base_domain' }, 400)
       if (input === '/admin/api/config') return json({ public_base_url: 'http://selfhost.com', trusted_proxies: ['127.0.0.1'], enabled_proxies: ['os'], quota: { enabled: false, bidirectional_accounting: false, monthly_gb: 500, timezone: 'local', on_exceeded: 'stop_proxy', request_event_retention_days: 30 }, forward_client_authorization: false, database_path: 'test.sqlite', listen_addr: '127.0.0.1:3000', upstreams: { debian: 'https://deb.debian.org/debian', maven: 'https://one.example/maven, https://two.example/maven', additional_os: { kali: 'https://http.kali.org/kali' } }, timeout: { request_secs: 60 }, rate_limit: { enabled: false, requests_per_minute: 600 }, cache: { enabled: false, directory: 'cache', max_entry_mb: 8 } })
       if (input === '/admin/api/stats') return json({ month: '2026-07', request_count: 0, response_bytes: 0, error_count: 0, quota: { enabled: false, monthly_limit_bytes: null, remaining_bytes: null, exceeded: false, timezone: 'local', on_exceeded: 'stop_proxy' }, daily: [], targets: [] })
+      if (input === '/admin/api/source-health') return json({ running: false, total: 59, healthy: 0, unhealthy: 0, disabled: 0, unknown: 59, last_checked_at: null, items: [] })
       if (input.startsWith('/admin/api/audit-log')) return json({ items: [], page: 1, per_page: 20, total: 0 })
       if (input === '/admin/api/smtp') return json({ enabled: true, host: 'smtp.example.com', port: 587, security: 'starttls', username: 'mailer@example.com', has_password: false, from_name: 'MirrorProxy', from_address: 'mailer@example.com' })
       if (input === '/admin/api/invitations') return json([])
