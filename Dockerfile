@@ -14,12 +14,13 @@ FROM ${BASE_IMAGE_REGISTRY}/rust:${RUST_VERSION} AS server-build
 WORKDIR /app
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=unknown
+ARG TARGETPLATFORM
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY --from=web-build /app/web/dist web/dist
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
+RUN --mount=type=cache,id=mirrorproxy-cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=mirrorproxy-cargo-git-${TARGETPLATFORM},target=/usr/local/cargo/git \
+    --mount=type=cache,id=mirrorproxy-target-${TARGETPLATFORM},target=/app/target \
     GIT_COMMIT="${GIT_COMMIT}" BUILD_TIME="${BUILD_TIME}" \
     cargo build --locked --release --package mirrorproxy-server --bin mirrorproxy-server && \
     install -D -m 0755 target/release/mirrorproxy-server /out/mirrorproxy-server
