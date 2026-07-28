@@ -50,7 +50,6 @@ mirrorproxy reset npm
 等系统配置；它需要正常的管理员权限，APT 类目标还可能需要 `--distribution`。先用
 `mirrorproxy get <target>` 和 `--dry-run` 检查，再执行系统范围写入。
 
-客户端不会替你安装 MirrorProxy 服务，也不会上传账号、令牌或原始配置。更多发布渠道与
-范围见[客户端分发与包管理器](Distribution-zh-CN)。
+客户端不会替你安装 MirrorProxy 服务，也不会上传账号、令牌或原始配置。
 
 [English](Client)

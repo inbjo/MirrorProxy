@@ -31,6 +31,46 @@ For a binary service, prefer a non-root account with systemd
 `CAP_NET_BIND_SERVICE`. The container is non-root by default; use internal ports
 3000/3443 and map host ports 80/443 instead of adding unnecessary capability.
 
+## Linux systemd (binary release)
+
+After unpacking the server archive, create a dedicated account and durable
+directories. The configuration and data directory should be readable/writable by
+the service account as appropriate:
+
+```bash
+sudo useradd --system --home-dir /var/lib/mirrorproxy --shell /usr/sbin/nologin mirrorproxy
+sudo install -d -o mirrorproxy -g mirrorproxy /opt/mirrorproxy /etc/mirrorproxy /var/lib/mirrorproxy
+sudo install -m 0755 mirrorproxy-server /opt/mirrorproxy/mirrorproxy-server
+sudo cp -a geoip /var/lib/mirrorproxy/
+sudo chown -R mirrorproxy:mirrorproxy /var/lib/mirrorproxy
+sudo install -m 0640 -o root -g mirrorproxy config.example.toml /etc/mirrorproxy/config.toml
+```
+
+`mirrorproxy-server install` generates the unit from an explicit configuration
+path. For the reverse-proxy mode:
+
+```bash
+sudo /opt/mirrorproxy/mirrorproxy-server --config /etc/mirrorproxy/config.toml install \
+  --working-directory /var/lib/mirrorproxy --enable --start
+```
+
+For native HTTPS on ports 80/443, add `--privileged-ports`:
+
+```bash
+sudo /opt/mirrorproxy/mirrorproxy-server --config /etc/mirrorproxy/config.toml install \
+  --working-directory /var/lib/mirrorproxy --privileged-ports --enable --start
+```
+
+The default path is `/etc/systemd/system/mirrorproxy.service`. Override it with
+`--unit-path`, `--service-user`, `--binary-path`, or `--working-directory`; add
+`--dry-run` to print the unit without writing. Without `--enable`/`--start`, the
+command only installs the unit and prints the required `systemctl` command.
+
+```bash
+systemctl status mirrorproxy
+journalctl -u mirrorproxy -f
+```
+
 ## Docker operating notes
 
 - Persist `/data`; the image keeps its database, cache, and writable GeoIP there.

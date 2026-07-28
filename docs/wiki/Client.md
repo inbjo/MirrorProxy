@@ -50,7 +50,4 @@ administrator rights and APT-like targets may require `--distribution`. Check
 `get` and `--dry-run` before writing. The client never uploads credentials or
 original configuration.
 
-See [Client distribution](Distribution) for supported and proposed package-manager
-channels.
-
 [简体中文](Client-zh-CN)

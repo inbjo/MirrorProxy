@@ -26,7 +26,6 @@ bash scripts/smoke-clients.sh
 
 OS-client and Docker smoke tests are narrower environment checks. Passing
 language-ecosystem smoke must not be described as validation for every OS
-repository. The active roadmap is `docs/plan.md` and `docs/next.md`; distribution
-strategy is documented in [Client distribution](Distribution).
+repository. The active roadmap is `docs/plan.md` and `docs/next.md`.
 
 [简体中文](Development-and-Roadmap-zh-CN)

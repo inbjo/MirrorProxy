@@ -28,7 +28,6 @@ production cutover.
 - [Deployment](Deployment)
 - [Proxy Adapters](Proxy-Adapters)
 - [Client](Client)
-- [Client distribution](Distribution)
 - [Administration](Administration)
 - [GeoIP and IP Access](GeoIP-and-IP-Access-Control)
 - [ACME Certificates](ACME-Certificates)

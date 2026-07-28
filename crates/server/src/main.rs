@@ -15,6 +15,7 @@ use std::{
     fs,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
+    process::Command as ProcessCommand,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, RwLock,
@@ -85,6 +86,33 @@ struct Cli {
 enum Command {
     /// Start the HTTP mirror proxy service.
     Serve,
+    /// Install a systemd unit for this server binary (Linux only).
+    Install {
+        /// systemd unit file to create.
+        #[arg(long, default_value = "/etc/systemd/system/mirrorproxy.service")]
+        unit_path: PathBuf,
+        /// Unix account used by the systemd service.
+        #[arg(long, default_value = "mirrorproxy")]
+        service_user: String,
+        /// Working directory for relative paths in the TOML configuration.
+        #[arg(long)]
+        working_directory: Option<PathBuf>,
+        /// Server executable to place in ExecStart (defaults to this executable).
+        #[arg(long)]
+        binary_path: Option<PathBuf>,
+        /// Allow the service account to bind ports below 1024, such as 80 and 443.
+        #[arg(long)]
+        privileged_ports: bool,
+        /// Run systemctl enable after writing the unit.
+        #[arg(long)]
+        enable: bool,
+        /// Run systemctl start after writing the unit.
+        #[arg(long)]
+        start: bool,
+        /// Print the unit and planned systemctl operations without writing files.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Inspect the effective runtime configuration.
     Config {
         #[command(subcommand)]
@@ -241,6 +269,28 @@ async fn main() -> anyhow::Result<()> {
             let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
             return run_admin_command(command, &config).await;
         }
+        Some(Command::Install {
+            unit_path,
+            service_user,
+            working_directory,
+            binary_path,
+            privileged_ports,
+            enable,
+            start,
+            dry_run,
+        }) => {
+            return run_install_command(
+                cli.config.as_deref(),
+                &unit_path,
+                &service_user,
+                working_directory.as_deref(),
+                binary_path.as_deref(),
+                privileged_ports,
+                enable,
+                start,
+                dry_run,
+            );
+        }
         Some(Command::Serve) | None => {}
     }
 
@@ -251,6 +301,150 @@ async fn main() -> anyhow::Result<()> {
     } else {
         serve_http(application).await
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_install_command(
+    config_path: Option<&Path>,
+    unit_path: &Path,
+    service_user: &str,
+    working_directory: Option<&Path>,
+    binary_path: Option<&Path>,
+    privileged_ports: bool,
+    enable: bool,
+    start: bool,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    if !cfg!(target_os = "linux") {
+        anyhow::bail!("systemd installation is only supported on Linux");
+    }
+    let config_path = config_path.ok_or_else(|| {
+        anyhow::anyhow!(
+            "install requires --config <PATH>; refusing to create a unit for an implicit config"
+        )
+    })?;
+    let config_path = fs::canonicalize(config_path)
+        .with_context(|| format!("failed to resolve config file {}", config_path.display()))?;
+    let binary_path = match binary_path {
+        Some(path) => fs::canonicalize(path)
+            .with_context(|| format!("failed to resolve server binary {}", path.display()))?,
+        None => std::env::current_exe().context("failed to resolve current server binary")?,
+    };
+    let working_directory = match working_directory {
+        Some(path) => fs::canonicalize(path)
+            .with_context(|| format!("failed to resolve working directory {}", path.display()))?,
+        None => config_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("config file has no parent directory"))?
+            .to_path_buf(),
+    };
+    let unit = render_systemd_unit(
+        &binary_path,
+        &config_path,
+        &working_directory,
+        service_user,
+        privileged_ports,
+    )?;
+    let unit_name = systemd_unit_name(unit_path)?;
+
+    if dry_run {
+        println!("unit_path: {}", unit_path.display());
+        println!("{unit}");
+        if enable || start {
+            println!("would run: systemctl daemon-reload");
+        }
+        if enable {
+            println!("would run: systemctl enable {unit_name}");
+        }
+        if start {
+            println!("would run: systemctl start {unit_name}");
+        }
+        return Ok(());
+    }
+
+    let parent = unit_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("unit path has no parent directory"))?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create unit directory {}", parent.display()))?;
+    let temporary = unit_path.with_extension("service.tmp");
+    fs::write(&temporary, unit)
+        .with_context(|| format!("failed to write temporary unit {}", temporary.display()))?;
+    fs::rename(&temporary, unit_path)
+        .with_context(|| format!("failed to install unit {}", unit_path.display()))?;
+    println!("Installed systemd unit: {}", unit_path.display());
+
+    if enable || start {
+        run_systemctl(["daemon-reload"])?;
+    }
+    if enable {
+        run_systemctl(["enable", unit_name.as_str()])?;
+    }
+    if start {
+        run_systemctl(["start", unit_name.as_str()])?;
+    }
+    if !enable && !start {
+        println!("Run: systemctl daemon-reload && systemctl enable --now {unit_name}");
+    }
+    Ok(())
+}
+
+fn systemd_unit_name(unit_path: &Path) -> anyhow::Result<String> {
+    let name = unit_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| anyhow::anyhow!("unit path must end with a UTF-8 .service file name"))?;
+    if !name.ends_with(".service") {
+        anyhow::bail!("unit path must end with .service");
+    }
+    systemd_text(name)
+}
+
+fn render_systemd_unit(
+    binary_path: &Path,
+    config_path: &Path,
+    working_directory: &Path,
+    service_user: &str,
+    privileged_ports: bool,
+) -> anyhow::Result<String> {
+    let binary = systemd_value(binary_path)?;
+    let config = systemd_value(config_path)?;
+    let working_directory = systemd_value(working_directory)?;
+    let service_user = systemd_text(service_user)?;
+    let capabilities = if privileged_ports {
+        "AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n"
+    } else {
+        "CapabilityBoundingSet=\n"
+    };
+    Ok(format!(
+        "# Managed by mirrorproxy-server install; edit through the install command.\n[Unit]\nDescription=MirrorProxy mirror proxy\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser={service_user}\nGroup={service_user}\nWorkingDirectory={working_directory}\nExecStart={binary} --config {config} serve\nRestart=on-failure\nRestartSec=5\nEnvironment=RUST_LOG=info\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nProtectSystem=full\nReadWritePaths={working_directory}\n{capabilities}\n[Install]\nWantedBy=multi-user.target\n"
+    ))
+}
+
+fn systemd_value(path: &Path) -> anyhow::Result<String> {
+    systemd_text(&path.display().to_string())
+}
+
+fn systemd_text(value: &str) -> anyhow::Result<String> {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|character| character.is_whitespace() || character == '\n')
+    {
+        anyhow::bail!("systemd install paths and service user cannot contain whitespace")
+    }
+    Ok(value.to_string())
+}
+
+fn run_systemctl<const N: usize>(arguments: [&str; N]) -> anyhow::Result<()> {
+    let status = ProcessCommand::new("systemctl")
+        .args(arguments)
+        .status()
+        .context("failed to execute systemctl; install systemd or use --dry-run")?;
+    if !status.success() {
+        anyhow::bail!("systemctl command failed with status {status}");
+    }
+    Ok(())
 }
 
 struct BuiltApplication {
@@ -5186,6 +5380,32 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[test]
+    fn systemd_unit_uses_explicit_paths_and_optional_low_port_capability() {
+        let unit = render_systemd_unit(
+            Path::new("/opt/mirrorproxy/mirrorproxy-server"),
+            Path::new("/etc/mirrorproxy/config.toml"),
+            Path::new("/var/lib/mirrorproxy"),
+            "mirrorproxy",
+            true,
+        )
+        .unwrap();
+
+        assert!(unit.contains("User=mirrorproxy"));
+        assert!(unit.contains("WorkingDirectory=/var/lib/mirrorproxy"));
+        assert!(unit.contains(
+            "ExecStart=/opt/mirrorproxy/mirrorproxy-server --config /etc/mirrorproxy/config.toml serve"
+        ));
+        assert!(unit.contains("AmbientCapabilities=CAP_NET_BIND_SERVICE"));
+        assert!(unit.contains("ReadWritePaths=/var/lib/mirrorproxy"));
+        assert!(systemd_text("contains space").is_err());
+        assert_eq!(
+            systemd_unit_name(Path::new("/etc/systemd/system/mirrorproxy-alt.service")).unwrap(),
+            "mirrorproxy-alt.service"
+        );
+        assert!(systemd_unit_name(Path::new("/tmp/mirrorproxy.unit")).is_err());
+    }
 
     async fn admin_test_state() -> (AppState, database::InitialAdminCredentials) {
         let (database, credentials) = Database::open(":memory:").await.unwrap();
