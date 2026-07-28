@@ -22,15 +22,18 @@ jobs:
       - uses: actions/checkout@v5
       - name: Publish canonical Wiki pages
         env:
-          # GITHUB_TOKEN works for a repository Wiki after it has been
-          # initialized. Set WIKI_TOKEN to a fine-grained PAT with repository
-          # Contents read/write if an organization policy restricts the
-          # GitHub Actions app from writing the Wiki repository.
-          GH_TOKEN: ${{ secrets.WIKI_TOKEN || github.token }}
+          # The Actions GitHub App token cannot access the repository's
+          # separate .wiki.git remote. WIKI_TOKEN must be a repository-scoped
+          # PAT with Contents read/write access.
+          GH_TOKEN: ${{ secrets.WIKI_TOKEN }}
         run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error title=WIKI_TOKEN is required::Create a fine-grained PAT for this repository with Contents read/write, save it as the WIKI_TOKEN Actions secret, then rerun this workflow."
+            exit 1
+          fi
           wiki_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
           if ! git clone "$wiki_url" wiki-repository; then
-            echo "::error title=GitHub Wiki is not initialized::Open the repository Wiki in GitHub and create the first Home page once. GitHub creates the .wiki.git repository only after that initial page exists; then rerun this workflow."
+            echo "::error title=Wiki clone failed::Verify that WIKI_TOKEN belongs to an account with write access to this repository and has Contents read/write permission."
             exit 1
           fi
           find wiki-repository -maxdepth 1 -type f -name '*.md' -delete
