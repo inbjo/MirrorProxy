@@ -22,6 +22,7 @@ ip2region 数据库保证 IP 定位快速且不向第三方发送请求。
 - [Docker、二进制和反向代理部署](https://github.com/inbjo/MirrorProxy/wiki/Deployment-zh-CN)
 - [支持的代理适配器](https://github.com/inbjo/MirrorProxy/wiki/Proxy-Adapters-zh-CN)
 - [独立客户端与本机改源](https://github.com/inbjo/MirrorProxy/wiki/Client-zh-CN)
+- [客户端分发与安装](https://github.com/inbjo/MirrorProxy/wiki/Distribution-zh-CN)
 - [后台、身份认证、配额和可观测性](https://github.com/inbjo/MirrorProxy/wiki/Administration-zh-CN)
 - [GeoIP、地域流量与 IP 访问控制](https://github.com/inbjo/MirrorProxy/wiki/GeoIP-and-IP-Access-Control-zh-CN)
 - [ACME 自动证书（HTTP-01 与 DNS-01）](https://github.com/inbjo/MirrorProxy/wiki/ACME-Certificates-zh-CN)

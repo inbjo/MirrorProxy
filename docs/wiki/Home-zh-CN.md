@@ -25,6 +25,7 @@ MirrorProxy 是一个自部署的 Rust 镜像代理平台，由三个可独立�
 - [部署](Deployment-zh-CN)
 - [代理适配器](Proxy-Adapters-zh-CN)
 - [客户端](Client-zh-CN)
+- [客户端分发](Distribution-zh-CN)
 - [后台管理](Administration-zh-CN)
 - [GeoIP 与 IP 访问控制](GeoIP-and-IP-Access-Control-zh-CN)
 - [ACME 自动证书](ACME-Certificates-zh-CN)
