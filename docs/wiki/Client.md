@@ -1,12 +1,56 @@
 # Standalone Client
 
-Download the `mirrorproxy-client-*` archive for Windows, macOS, or Linux. The
-client can inspect, set, reset, and list sources for common package managers,
-preserves exact rollback state, and supports GitHub HTTPS URL rewriting.
+`mirrorproxy` is an independent binary: it neither connects to nor manages the
+server database. It uses the shared catalog to write local source configuration
+and preserves previous content for exact reset. Stable releases include Linux
+x86_64/arm64, macOS Intel/Apple Silicon, and Windows x64 assets with checksums.
 
-Use `mirrorproxy sources --help` for source-management commands and always pass
-`--base-url https://your-mirror.example` when selecting the MirrorProxy
-provider. System-level source changes require the platform's normal elevated
-permissions; preview generated commands in the web portal before applying.
+## Install
 
-[中文](Client-zh-CN)
+Linux/macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh | sh
+mirrorproxy --version
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
+mirrorproxy --version
+```
+
+The scripts verify the Release checksum. Set `MIRRORPROXY_VERSION` or
+`MIRRORPROXY_INSTALL_DIR` to pin a version or change the destination.
+
+## Common commands
+
+```bash
+# `sources` is optional, similar to chsrc.
+mirrorproxy list
+mirrorproxy list --category lang
+mirrorproxy mirrors
+mirrorproxy get npm --base-url https://mirror.example.com
+mirrorproxy set npm --base-url https://mirror.example.com
+mirrorproxy reset npm
+```
+
+`set` defaults to user scope and refuses to overwrite a non-empty configuration;
+use `--force` only after review. `--dry-run` previews changes. The `mirrorproxy`
+provider requires `--base-url` in `http(s)://host[:port]` form, without a package
+repository path.
+
+## Scope and safety
+
+User scope covers npm, pip, Cargo, Go, Composer, and other supported targets.
+System scope is directly supported on Linux and changes APT, DNF, pacman, apk,
+zypper, xbps, Portage, and related system configurations; it needs normal
+administrator rights and APT-like targets may require `--distribution`. Check
+`get` and `--dry-run` before writing. The client never uploads credentials or
+original configuration.
+
+See [Client distribution](Distribution) for supported and proposed package-manager
+channels.
+
+[简体中文](Client-zh-CN)

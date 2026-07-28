@@ -1,21 +1,37 @@
 # GeoIP and IP Access Control
 
-MirrorProxy uses the offline ip2region XDB v3 databases for IPv4 and IPv6.
-Release archives and container images include pinned database snapshots. The
-admin console shows each database's path, size, timestamp and SHA-256, supports
-non-persistent single-IP lookups, and lets a super administrator perform an
-atomic manual update. Missing or corrupt databases degrade locations to
-`Unknown` without stopping proxy traffic or access rules.
+MirrorProxy uses offline ip2region XDB v3 files for IPv4 and IPv6. Releases and
+images include pinned data; the console shows path, size, timestamp, and SHA-256
+and a super administrator can update it atomically. One-off lookups are not
+stored. Missing or invalid data becomes `Unknown` without stopping the proxy or
+IP rules.
 
-IP access rules accept exact IPv4/IPv6 addresses and CIDR ranges. Exact values
-are normalized to `/32` or `/128`; CIDRs are normalized to their network
-address. Deny rules always win. When one or more allow rules are enabled, any
-unmatched client is denied. Rules apply only to recognized proxy paths, so the
-admin console and health endpoints cannot be locked out.
+## Trusted client address
 
-Regional reports aggregate completed proxy responses by day, target, country,
-region and city. They show delivered and billed bytes separately. Raw client
-IPs and ad-hoc lookup results are never stored. Historic aggregates are not
-reclassified when a database is updated.
+GeoIP, access rules, and rate limits use the client source address. For direct
+connections this is the TCP peer. Behind a reverse proxy, `X-Forwarded-For` is
+read only when that peer matches `trusted_proxies`, and is resolved right to left.
+Only list real proxies, never `0.0.0.0/0`. A single Nginx hop should overwrite
+client-provided XFF; every hop in a multi-proxy chain must be trusted.
 
-[中文](GeoIP-and-IP-Access-Control-zh-CN)
+## Rules
+
+- Exact IPv4/IPv6 and CIDR are accepted and normalized to `/32`, `/128`, or the network.
+- Deny rules always win.
+- Once an enabled allow rule exists, every non-match is denied.
+- Rules apply only to recognized package-proxy paths, never `/admin`, `/healthz`,
+  or control APIs.
+
+Add and verify your own egress IP from a second network before enabling an
+allowlist-only policy.
+
+## Regional reports
+
+Reports aggregate completed responses by date range, target, country,
+region/province, and city. They show delivered bytes, billable bytes, and request
+counts. Billable bytes can exceed delivered bytes when bidirectional accounting
+is enabled. Historical aggregates do not store raw client IPs and are not
+rewritten after a GeoIP update. `Unknown` normally means private/reserved space,
+no XDB result, or an incorrect trusted-proxy configuration.
+
+[简体中文](GeoIP-and-IP-Access-Control-zh-CN)

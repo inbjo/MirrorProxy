@@ -24,6 +24,7 @@ access control; offline ip2region databases keep IP location private and fast.
 - [Docker, binary, and reverse-proxy deployment](https://github.com/inbjo/MirrorProxy/wiki/Deployment)
 - [Supported proxy adapters](https://github.com/inbjo/MirrorProxy/wiki/Proxy-Adapters)
 - [Standalone client and source management](https://github.com/inbjo/MirrorProxy/wiki/Client)
+- [Client installation and package-manager distribution](https://github.com/inbjo/MirrorProxy/wiki/Distribution)
 - [Administration, identity, quotas, and observability](https://github.com/inbjo/MirrorProxy/wiki/Administration)
 - [GeoIP, regional traffic, and IP access control](https://github.com/inbjo/MirrorProxy/wiki/GeoIP-and-IP-Access-Control)
 - [Automatic ACME certificates (HTTP-01 and DNS-01)](https://github.com/inbjo/MirrorProxy/wiki/ACME-Certificates)

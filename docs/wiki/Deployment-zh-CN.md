@@ -1,16 +1,43 @@
 # 部署
 
-服务端发布包包含 `mirrorproxy-server`、`config.example.toml` 和 IPv4/IPv6
-ip2region 数据库。应从持久化工作目录运行，或者明确设置 `MIRRORPROXY_DB` 与两个
-`MIRRORPROXY_GEOIP_*_PATH` 环境变量。
+服务端发布包包含 `mirrorproxy-server`、`config.example.toml` 和 IPv4/IPv6 ip2region
+数据库。无论 Docker 还是二进制部署，都应将 SQLite、缓存、GeoIP 与 ACME 目录放在
+持久化存储中；升级二进制/镜像前先验证数据库文件可读，并保持数据目录不变。
 
-生产环境应隐藏服务监听端口，并由 Nginx、Caddy、Traefik、Apache 或 HAProxy 提供
-TLS。`trusted_proxies` 只填写真实反向代理节点。MirrorProxy 仅在直接连接来源可信时
-读取 `X-Forwarded-For`，并从右向左解析代理链。单层 Nginx 应使用 `$remote_addr`
-覆盖该请求头；多层代理只有在所有中间节点都可信时才保留追加链。
+## 部署模式
 
-用户通配符子域名需要通配符 DNS、TLS 证书和原始 Host 转发，全部验证后才能启用
-`subdomain_required`。
+### 反向代理终止 TLS
+
+默认模式监听内部地址，例如 `127.0.0.1:3000`。由 Nginx、Caddy、Traefik、Apache 或
+HAProxy 对外提供 TLS，并将原始 `Host`、请求路径与方法转发给 MirrorProxy。此模式适合
+已经由入口统一管理证书的服务器。`trusted_proxies` 只填写真实反向代理节点；MirrorProxy
+仅在 TCP 对端可信时读取 `X-Forwarded-For`，且从右向左解析代理链。
+
+单层 Nginx 应使用 `$remote_addr` 覆盖该请求头，不能直接转发客户端自带值；多层代理只有
+在每个中间节点都可信时才可保留追加链。管理后台也应通过 HTTPS 暴露。
+
+### MirrorProxy 原生 HTTPS
+
+不使用 Caddy/Nginx 时，可在后台“高级设置 → ACME 自动证书”或 TOML 中启用
+`direct_https`。服务自行绑定 80 与 443，保留 HTTP-01 challenge，证书就绪后将其他 HTTP
+请求 308 重定向到 HTTPS；续期会热加载，不需要重启。详见[ACME 自动证书](ACME-Certificates-zh-CN)。
+
+二进制服务建议使用非 root 帐号，并通过 systemd 授予 `CAP_NET_BIND_SERVICE`；容器默认
+非 root，建议内部使用 3000/3443 再映射到宿主机 80/443。
+
+## Docker 运行要点
+
+- 永久挂载 `/data`；镜像默认将数据库、缓存和可写 GeoIP 放在该目录。
+- 通过环境变量覆盖配置时，环境变量优先于 TOML；特别是 `MIRRORPROXY_ACME_*` 会让后台
+  ACME 表单变为只读。
+- 固定镜像版本后再升级；升级后检查 `/healthz`、`/admin` 登录、一个公共代理目标和日志。
+- 不要把 SQLite 放到网络文件系统；单实例使用本地磁盘最稳妥。
+
+## 用户子域名
+
+`subdomain_required` 是可选的按用户路由/计费模式，不是普通代理的必要条件。启用前必须
+同时完成通配符 DNS、通配符 TLS、入口保留原始 Host，并在后台确认基础设施就绪；否则主域名
+上的包代理路径会按策略拒绝。
 
 ## 镜像上游的企业 CA
 

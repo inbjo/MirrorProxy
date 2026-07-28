@@ -1,26 +1,56 @@
 # Deployment
 
-Release archives contain `mirrorproxy-server`, `config.example.toml`, and the
-IPv4/IPv6 ip2region databases. Run the service from a persistent working
-directory or override `MIRRORPROXY_DB` and the two `MIRRORPROXY_GEOIP_*_PATH`
-variables.
+The server archive contains `mirrorproxy-server`, `config.example.toml`, and
+IPv4/IPv6 ip2region data. Keep SQLite, cache, GeoIP, and ACME storage on durable
+local storage for either Docker or binary deployments; retain that data directory
+across image and binary upgrades.
 
-Production installations should keep the listener private and terminate TLS at
-Nginx, Caddy, Traefik, Apache, or HAProxy. Configure `trusted_proxies` with only
-the proxy peers. MirrorProxy walks `X-Forwarded-For` from right to left and
-accepts it only when the immediate peer is trusted. A single Nginx proxy should
-overwrite the header with `$remote_addr`; multi-proxy installations may append
-a chain only when every intermediate proxy is listed as trusted.
+## Deployment modes
 
-Wildcard user subdomains require wildcard DNS, a wildcard TLS certificate, and
-preservation of the original Host header. Enable `subdomain_required` only
-after those checks pass.
+### TLS at a reverse proxy
 
-## Enterprise CAs for mirror upstreams
+The default mode binds an internal address such as `127.0.0.1:3000`. Nginx,
+Caddy, Traefik, Apache, or HAProxy provides public TLS and forwards the original
+`Host`, path, and method. This fits servers where the edge already owns
+certificates. Only put actual reverse-proxy IPs/networks in `trusted_proxies`:
+MirrorProxy reads `X-Forwarded-For` only from a trusted TCP peer and resolves the
+chain right to left.
 
-The mirror-upstream client trusts both WebPKI public roots and the operating
-system root store by default. Mount one or more PEM bundles when a private CA
-signs an internal HTTPS upstream:
+A single Nginx hop must overwrite client-supplied XFF with `$remote_addr`; a
+multi-hop chain is safe only when every intermediate hop is trusted. Expose the
+console through HTTPS as well.
+
+### Native MirrorProxy HTTPS
+
+Without Caddy/Nginx, enable ACME `direct_https` in the console or TOML.
+MirrorProxy binds 80 and 443, keeps HTTP-01 reachable, and sends other HTTP
+requests to HTTPS with 308 after a certificate is ready. Renewals hot-reload
+without restart. See [ACME Certificates](ACME-Certificates).
+
+For a binary service, prefer a non-root account with systemd
+`CAP_NET_BIND_SERVICE`. The container is non-root by default; use internal ports
+3000/3443 and map host ports 80/443 instead of adding unnecessary capability.
+
+## Docker operating notes
+
+- Persist `/data`; the image keeps its database, cache, and writable GeoIP there.
+- Environment variables override TOML. `MIRRORPROXY_ACME_*` also makes the console
+  ACME fields read-only.
+- Pin an image version before an upgrade, then verify `/healthz`, `/admin`, one
+  public proxy target, and logs.
+- Keep SQLite on local disk, not a network filesystem, for a single-instance deployment.
+
+## User subdomains
+
+`subdomain_required` is an optional per-user routing/accounting mode, not a
+requirement for ordinary proxying. Enable it only after wildcard DNS, wildcard
+TLS, and original Host forwarding are ready and the console's readiness check is
+confirmed; otherwise proxy routes on the base domain are deliberately rejected.
+
+## Enterprise CA for upstream mirrors
+
+Mirror upstream requests trust public WebPKI and OS roots. Add private PEM
+bundles when an enterprise TLS proxy signs upstream traffic:
 
 ```toml
 [upstream_tls]
@@ -28,23 +58,8 @@ ca_certificates = ["/etc/mirrorproxy/ca/company-root.pem"]
 insecure_skip_verify = false
 ```
 
-Docker deployments must mount each certificate into the container first:
+Mount this file into containers. `insecure_skip_verify = true` disables TLS
+verification for every mirror upstream and is only for short-lived diagnostics;
+it does not affect ACME, DNS provider APIs, or OAuth control-plane requests.
 
-```yaml
-volumes:
-  - ./company-root.pem:/etc/mirrorproxy/ca/company-root.pem:ro
-```
-
-Environment equivalents are also available:
-
-```text
-MIRRORPROXY_UPSTREAM_TLS_CA_CERTIFICATES=/etc/mirrorproxy/ca/company-root.pem
-MIRRORPROXY_UPSTREAM_TLS_INSECURE_SKIP_VERIFY=false
-```
-
-Setting `insecure_skip_verify = true` disables certificate verification for all
-mirror-upstream HTTPS requests and permits man-in-the-middle attacks. Use it
-only temporarily for debugging. Additional CAs and this unsafe switch never
-apply to ACME, DNS-provider APIs, OAuth, or other control-plane requests.
-
-[中文](Deployment-zh-CN)
+[简体中文](Deployment-zh-CN)

@@ -1,9 +1,14 @@
 # Development and Roadmap
 
-The workspace contains the server, standalone client, shared catalog, and the
-React/Vite web application. Build the web application from `web/`, then run the
-Rust workspace checks. `./build.sh` is the canonical static Linux release path
-and fetches checksum-pinned GeoIP data before building.
+The workspace contains `crates/server` (`mirrorproxy-server`), `crates/client`
+(`mirrorproxy`), `crates/catalog` (shared catalog), and `web` (React/Vite console).
+Adding a target is a coordinated change: catalog, route/adapter, configuration,
+console, client capability, docs, and smoke coverage must stay aligned.
+
+`./build.sh` is the standard static Linux release path. It builds the web app,
+fetches SHA-256-pinned GeoIP data, and compiles the server and client. The
+Release workflow builds client assets for Linux, macOS, and Windows and server
+assets for Linux, all with checksums.
 
 ```text
 cargo fmt --all --check
@@ -12,9 +17,16 @@ cargo test --workspace --locked
 (cd web && npm test && npm run build)
 ```
 
-Real-client smoke scripts isolate temporary package-manager homes. Adapter
-changes must keep routing, catalog metadata, configuration, the portal, and
-smoke coverage synchronized. Current roadmap work lives in `docs/plan.md` and
-`docs/next.md` in the main repository.
+The end-to-end client smoke uses isolated temporary package-manager homes and
+does not modify a developer's real configuration:
 
-[中文](Development-and-Roadmap-zh-CN)
+```text
+bash scripts/smoke-clients.sh
+```
+
+OS-client and Docker smoke tests are narrower environment checks. Passing
+language-ecosystem smoke must not be described as validation for every OS
+repository. The active roadmap is `docs/plan.md` and `docs/next.md`; distribution
+strategy is documented in [Client distribution](Distribution).
+
+[简体中文](Development-and-Roadmap-zh-CN)
