@@ -70,6 +70,19 @@ no_proxy = ["127.0.0.1", "localhost"]
 # username = "proxy-user"
 # password = "replace-with-secret"
 
+# Mirror-upstream HTTPS trusts both the bundled WebPKI public roots and the
+# operating system root store. Add private/enterprise CA PEM bundles here.
+# These options never affect ACME, DNS-provider APIs, or OAuth clients.
+# Docker users must mount each referenced file into the container.
+[upstream_tls]
+ca_certificates = []
+# Debugging only: disabling verification exposes all mirror-upstream downloads
+# to man-in-the-middle attacks. Keep false in production.
+insecure_skip_verify = false
+# Environment equivalents:
+# MIRRORPROXY_UPSTREAM_TLS_CA_CERTIFICATES=/path/one.pem,/path/two.pem
+# MIRRORPROXY_UPSTREAM_TLS_INSECURE_SKIP_VERIFY=false
+
 [rate_limit]
 enabled = false
 requests_per_minute = 600
@@ -79,6 +92,52 @@ enabled = false
 directory = "mirrorproxy-cache"
 max_entry_mb = 8
 max_total_mb = 256
+
+# Offline ip2region XDB v3 databases. Missing or invalid files degrade regional
+# traffic to "Unknown" without stopping proxy or IP access-list enforcement.
+[geoip]
+enabled = true
+ipv4_path = "geoip/ip2region_v4.xdb"
+ipv6_path = "geoip/ip2region_v6.xdb"
+
+# Optional ACME certificate manager. It writes fullchain.pem and privkey.pem to
+# storage_directory. Keep direct_https=false behind an existing reverse proxy,
+# or enable it to let MirrorProxy bind HTTP/HTTPS and load the files itself.
+# On first startup these values seed the admin-editable SQLite ACME settings.
+# MIRRORPROXY_ACME_* variables keep precedence and make the admin form read-only.
+[acme]
+enabled = false
+email = "admin@example.com"
+domains = ["mirror.example.com"]
+challenge = "http-01" # http-01 or dns-01
+directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+storage_directory = "acme"
+renew_before_days = 30
+check_interval_hours = 12
+# Native edge mode: bind both addresses without Caddy/Nginx. HTTP-01 always
+# remains reachable; other HTTP requests receive 308 after HTTPS becomes ready.
+direct_https = false
+http_listen_addr = "0.0.0.0:80"
+https_listen_addr = "0.0.0.0:443"
+redirect_http_to_https = true
+
+# DNS-01 is required for wildcard certificates. Supported providers are
+# cloudflare, aliyun, tencent, route53, and webhook. Credentials can be entered
+# as write-only secrets in the admin console or supplied through environment variables.
+[acme.dns]
+provider = ""
+cloudflare_zone_id = ""
+# cloudflare_api_token = "replace-with-scoped-token"
+# acme.sh-compatible aliases: CF_Zone_ID, CF_Token, CF_Key, and CF_Email.
+aliyun_domain = ""
+# acme.sh-compatible aliases: Ali_Key and Ali_Secret.
+tencent_domain = ""
+# acme.sh-compatible aliases: Tencent_SecretId and Tencent_SecretKey.
+route53_hosted_zone_id = ""
+# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN are supported.
+webhook_url = ""
+# webhook_bearer_token = "replace-with-secret"
+propagation_delay_secs = 30
 
 [quota]
 enabled = false

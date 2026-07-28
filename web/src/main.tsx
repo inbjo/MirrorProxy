@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   ChartNoAxesCombined,
+  ChevronDown,
   CircleAlert,
   Clipboard,
   Code2,
@@ -13,6 +14,7 @@ import {
   Database,
   Download,
   Github,
+  Globe2,
   Languages,
   Mail,
   Moon,
@@ -25,6 +27,7 @@ import {
   Search,
   ServerCog,
   ShieldCheck,
+  ShieldBan,
   Terminal,
   Sun,
   UserRound,
@@ -70,8 +73,13 @@ type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access'> & {
     password: string | null
     has_password: boolean
   }
+  upstream_tls: {
+    ca_certificates: string[]
+    insecure_skip_verify: boolean
+  }
   rate_limit: { enabled: boolean; requests_per_minute: number }
   cache: { enabled: boolean; directory: string; max_entry_mb: number }
+  geoip: { enabled: boolean; ipv4_path: string; ipv6_path: string }
   user_access: {
     base_domain: string
     mode: 'public' | 'subdomain_required'
@@ -109,6 +117,11 @@ type AdminStats = {
   daily: Array<{ day: string; target_code: string; request_count: number; response_bytes: number; error_count: number }>
   targets: Array<{ target_code: string; request_count: number; response_bytes: number; error_count: number }>
 }
+type GeoDatabaseStatus = { ip_version: number; available: boolean; path: string; created_at: number | null; modified_at: number | null; size_bytes: number | null; sha256: string | null; error: string | null }
+type GeoIpStatus = { enabled: boolean; ipv4: GeoDatabaseStatus; ipv6: GeoDatabaseStatus }
+type GeoLocation = { country: string | null; province: string | null; city: string | null; isp: string | null; country_code: string | null }
+type IpAccessRule = { id: number; action: 'allow' | 'deny'; input_kind: 'ip' | 'cidr'; network: string; note: string; enabled: boolean; created_at: number; updated_at: number }
+type GeoTrafficOverview = { request_count: number; response_bytes: number; billed_bytes: number; error_count: number; daily: Array<{ day: string; request_count: number; response_bytes: number; billed_bytes: number; error_count: number }>; regions: Array<{ country_code: string; country: string; province: string; city: string; request_count: number; response_bytes: number; billed_bytes: number; error_count: number }> }
 
 const PROXY_ADAPTERS = [
   'github', 'composer', 'oci', 'npm', 'nvm', 'opam', 'go', 'maven', 'rubygems', 'rustup',
@@ -992,6 +1005,7 @@ export function sourceManualCommand(targetCode: string, repoUrl: string, templat
     xbps: `printf 'repository=${base}/current\\n' | sudo tee /etc/xbps.d/00-mirrorproxy.conf >/dev/null\nsudo xbps-install -S`,
     gentoo: `printf '\\n# MirrorProxy\\nGENTOO_MIRRORS="${base}"\\n' | sudo tee -a /etc/portage/make.conf >/dev/null\nsudo emerge --sync`,
     zypper: `sudo zypper ar -f '${base}/distribution/leap/15.6/repo/oss/' mirrorproxy-oss\nsudo zypper refresh`,
+    freebsd: `sudo mkdir -p /usr/local/etc/pkg/repos\nsudo tee /usr/local/etc/pkg/repos/FreeBSD.conf >/dev/null <<'EOF'\nFreeBSD: {\n  url: "${base}/\${ABI}/quarterly",\n  mirror_type: "none",\n  signature_type: "fingerprints",\n  fingerprints: "/usr/share/keys/pkg",\n  enabled: yes\n}\nEOF\nsudo pkg update -f`,
   }
   return commands[targetCode] ?? template?.replaceAll('{repo_url}', repoUrl) ?? `mirrorproxy get ${targetCode}`
 }
@@ -1128,8 +1142,8 @@ function AdminConsole({ locale }: { locale: Locale }) {
         administrators: '管理员账号', createAdministrator: '创建管理员', role: '角色', disable: '禁用', enable: '启用', adminCreateError: '管理员创建失败。',
         passkeys: 'Passkey', usePasskey: '使用 Passkey 登录', addPasskey: '登记 Passkey', passkeyName: 'Passkey 名称', deletePasskey: '删除', passkeyError: 'Passkey 操作失败。', webauthnEnabled: '启用管理员 Passkey', webauthnRpId: 'RP ID（主域名）', webauthnOrigin: 'RP Origin（HTTPS）', webauthnName: 'RP 名称', requirePasskey: '除应急账号外强制使用 Passkey', breakGlass: '应急管理员账号',
         generator: 'CLI 改源命令', target: '目标', mirror: '镜像站', scope: '作用域', distribution: '发行版代号', ready: '可直接执行', guidance: '当前仅生成配置指引', copyCommand: '复制命令', copiedCommand: '已复制',
-        tabOverview: '概览', tabHealth: '镜像检测', tabAccess: '访问与配额', tabUsers: '用户与分组', tabProviders: '第三方登录', tabEmail: '邮件与邀请', tabSecurity: '管理员与安全', tabAdvanced: '高级设置', tabAudit: '审计日志',
-        overviewHint: '查看当前月份的代理流量和请求状态。', healthHint: '检测全部公网代理路径，快速定位不可用的镜像源。', accessHint: '设置谁可以使用服务、子域名规则和流量上限。', usersHint: '管理用户、计费组、个人配额和使用状态。', providersHint: '配置 GitHub、Google 或企业 OIDC 等登录方式。', emailHint: '配置发件服务器，并邀请用户加入。', securityHint: '管理后台账号、Passkey、登录会话和密码。', advancedHint: '低频服务参数。如果不确定，请保持默认值。', auditHint: '查看最近的管理和安全操作。',
+        tabOverview: '概览', tabHealth: '镜像检测', tabGeo: '地域报表', tabIpAccess: 'IP 访问控制', tabAccess: '访问与配额', tabUsers: '用户与分组', tabProviders: '第三方登录', tabEmail: '邮件与邀请', tabSecurity: '管理员与安全', tabAdvanced: '高级设置', tabAudit: '审计日志',
+        overviewHint: '查看当前月份的代理流量和请求状态。', healthHint: '检测全部公网代理路径，快速定位不可用的镜像源。', geoHint: '按国家、省市和代理目标分析实际与计费流量。', ipAccessHint: '查询 IP 地域并管理精确地址和 CIDR 黑白名单。', accessHint: '设置谁可以使用服务、子域名规则和流量上限。', usersHint: '管理用户、计费组、个人配额和使用状态。', providersHint: '配置 GitHub、Google 或企业 OIDC 等登录方式。', emailHint: '配置发件服务器，并邀请用户加入。', securityHint: '管理后台账号、Passkey、登录会话和密码。', advancedHint: '低频服务参数。如果不确定，请保持默认值。', auditHint: '查看最近的管理和安全操作。',
         serviceAccess: '服务准入', trafficQuota: '流量配额', subdomainRouting: '用户子域名', advancedWarning: '这些选项直接影响代理请求和上游连接，错误配置可能导致服务不可用。', showUpstreams: '编辑上游地址', upstreamHint: '上游字段可填多个 HTTP(S) 地址，用英文逗号分隔；服务会按顺序请求，直到返回 200。', auditLog: '审计日志', noAudit: '暂无审记录。', defaultUserQuota: '默认单用户上限（GB）', bidirectionalAccounting: '双向计费', unlimited: '不限量', requestLabel: '次请求', errorLabel: '个错误', runtimeState: '当前运行地址',
       }
     : {
@@ -1144,8 +1158,8 @@ function AdminConsole({ locale }: { locale: Locale }) {
         administrators: 'Administrators', createAdministrator: 'Create administrator', role: 'Role', disable: 'Disable', enable: 'Enable', adminCreateError: 'Administrator creation failed.',
         passkeys: 'Passkeys', usePasskey: 'Sign in with a passkey', addPasskey: 'Register passkey', passkeyName: 'Passkey name', deletePasskey: 'Delete', passkeyError: 'Passkey operation failed.', webauthnEnabled: 'Enable administrator passkeys', webauthnRpId: 'RP ID (primary domain)', webauthnOrigin: 'RP origin (HTTPS)', webauthnName: 'RP name', requirePasskey: 'Require passkeys except break-glass account', breakGlass: 'Break-glass administrator',
         generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', distribution: 'Distribution codename', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied', auditLog: 'Audit log', noAudit: 'No audit entries yet.',
-        tabOverview: 'Overview', tabHealth: 'Mirror health', tabAccess: 'Access & quotas', tabUsers: 'Users & groups', tabProviders: 'Identity providers', tabEmail: 'Email & invitations', tabSecurity: 'Administrators & security', tabAdvanced: 'Advanced', tabAudit: 'Audit log',
-        overviewHint: 'Review proxy traffic and request health for the current month.', healthHint: 'Probe every public proxy path and identify unavailable mirrors.', accessHint: 'Control who can use the service, user subdomains, and traffic limits.', usersHint: 'Manage users, billing groups, individual quotas, and account status.', providersHint: 'Configure GitHub, Google, or an enterprise OpenID Connect provider.', emailHint: 'Configure outbound email and invite people to the service.', securityHint: 'Manage administrator accounts, passkeys, sessions, and passwords.', advancedHint: 'Low-frequency service settings. Keep the defaults unless you know they need to change.', auditHint: 'Review recent administrative and security operations.',
+        tabOverview: 'Overview', tabHealth: 'Mirror health', tabGeo: 'Regional traffic', tabIpAccess: 'IP access control', tabAccess: 'Access & quotas', tabUsers: 'Users & groups', tabProviders: 'Identity providers', tabEmail: 'Email & invitations', tabSecurity: 'Administrators & security', tabAdvanced: 'Advanced', tabAudit: 'Audit log',
+        overviewHint: 'Review proxy traffic and request health for the current month.', healthHint: 'Probe every public proxy path and identify unavailable mirrors.', geoHint: 'Analyze delivered and billed traffic by country, region, city, and proxy target.', ipAccessHint: 'Look up IP locations and manage exact-address and CIDR allow/deny rules.', accessHint: 'Control who can use the service, user subdomains, and traffic limits.', usersHint: 'Manage users, billing groups, individual quotas, and account status.', providersHint: 'Configure GitHub, Google, or an enterprise OpenID Connect provider.', emailHint: 'Configure outbound email and invite people to the service.', securityHint: 'Manage administrator accounts, passkeys, sessions, and passwords.', advancedHint: 'Low-frequency service settings. Keep the defaults unless you know they need to change.', auditHint: 'Review recent administrative and security operations.',
         serviceAccess: 'Service access', trafficQuota: 'Traffic quota', subdomainRouting: 'User subdomains', advancedWarning: 'These settings directly affect proxy requests and upstream connectivity. Incorrect values can make the service unavailable.', showUpstreams: 'Edit upstream endpoints', upstreamHint: 'Upstream fields accept comma-separated HTTP(S) endpoints. Requests try them in order until one returns 200.', defaultUserQuota: 'Default per-user limit (GB)', bidirectionalAccounting: 'Bidirectional billing', unlimited: 'Unlimited', requestLabel: 'requests', errorLabel: 'errors', runtimeState: 'Listening on',
       }
   const [token, setToken] = React.useState<string | null>(null)
@@ -1173,7 +1187,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
   const [passkeys, setPasskeys] = React.useState<AdminPasskey[]>([])
   const [passkeyName, setPasskeyName] = React.useState('')
   const [passkeyBusy, setPasskeyBusy] = React.useState(false)
-  const [activeTab, setActiveTab] = React.useState<'overview' | 'health' | 'access' | 'users' | 'providers' | 'email' | 'security' | 'advanced' | 'audit'>('overview')
+  const [activeTab, setActiveTab] = React.useState<'overview' | 'health' | 'geo' | 'ip-access' | 'access' | 'users' | 'providers' | 'email' | 'security' | 'advanced' | 'audit'>('overview')
 
   React.useEffect(() => {
     if (!notice) return
@@ -1199,6 +1213,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
       public_base_url: config.public_base_url || window.location.origin,
       trusted_proxies: config.trusted_proxies ?? [],
       outbound_proxy: config.outbound_proxy ?? { enabled: false, url: '', no_proxy: ['127.0.0.1', 'localhost'], username: null, password: null, has_password: false },
+      upstream_tls: config.upstream_tls ?? { ca_certificates: [], insecure_skip_verify: false },
       user_access: config.user_access ?? { base_domain: '', mode: 'public', infrastructure_ready: false, routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
       registration: config.registration ?? { mode: 'invite_only', allowed_email_domains: [], email_token_ttl_minutes: 10 },
       webauthn,
@@ -1412,6 +1427,13 @@ function AdminConsole({ locale }: { locale: Locale }) {
   const updateRate = (key: keyof AdminConfig['rate_limit'], value: string | boolean | number) => setDraft((current) => current ? { ...current, rate_limit: { ...current.rate_limit, [key]: value } } : current)
   const updateCache = (key: keyof AdminConfig['cache'], value: string | boolean | number) => setDraft((current) => current ? { ...current, cache: { ...current.cache, [key]: value } } : current)
   const updateOutboundProxy = (key: keyof AdminConfig['outbound_proxy'], value: string | boolean | string[] | null) => setDraft((current) => current ? { ...current, outbound_proxy: { ...current.outbound_proxy, [key]: value } } : current)
+  const updateUpstreamTls = (key: keyof AdminConfig['upstream_tls'], value: boolean | string[]) => setDraft((current) => current ? { ...current, upstream_tls: { ...current.upstream_tls, [key]: value } } : current)
+  const toggleInsecureUpstreamTls = (enabled: boolean) => {
+    if (enabled && !window.confirm(locale === 'zh'
+      ? '关闭上游 TLS 证书校验会使所有镜像上游请求容易遭受中间人攻击。仅应临时用于调试，确定继续吗？'
+      : 'Disabling upstream TLS verification exposes all mirror-upstream requests to man-in-the-middle attacks. Use it only temporarily for debugging. Continue?')) return
+    updateUpstreamTls('insecure_skip_verify', enabled)
+  }
   const updateUserAccess = (key: keyof AdminConfig['user_access'], value: string | number | boolean) => setDraft((current) => current ? { ...current, user_access: { ...current.user_access, [key]: value } } : current)
   const updateRegistration = (key: keyof AdminConfig['registration'], value: string | number | string[]) => setDraft((current) => current ? { ...current, registration: { ...current.registration, [key]: value } } : current)
   const toggleAdapter = (adapter: string) => setDraft((current) => {
@@ -1435,6 +1457,8 @@ function AdminConsole({ locale }: { locale: Locale }) {
   const tabs = [
     { id: 'overview', label: text.tabOverview, hint: text.overviewHint },
     { id: 'health', label: text.tabHealth, hint: text.healthHint },
+    { id: 'geo', label: text.tabGeo, hint: text.geoHint },
+    { id: 'ip-access', label: text.tabIpAccess, hint: text.ipAccessHint },
     { id: 'access', label: text.tabAccess, hint: text.accessHint },
     { id: 'users', label: text.tabUsers, hint: text.usersHint },
     { id: 'providers', label: text.tabProviders, hint: text.providersHint },
@@ -1460,6 +1484,8 @@ function AdminConsole({ locale }: { locale: Locale }) {
           <div className="stats-columns"><div><h4>{text.top}</h4>{stats.targets.length ? stats.targets.map((target) => <div className="stat-row" key={target.target_code}><span>{target.target_code}</span><strong>{byteLabel(target.response_bytes)}</strong><small>{target.request_count} {text.requestLabel}</small></div>) : <p className="empty-stat">{text.noData}</p>}</div><div><h4>{text.daily}</h4>{stats.daily.slice(-8).map((day) => <div className="stat-row" key={`${day.day}-${day.target_code}`}><span>{day.day.slice(5)} · {day.target_code}</span><strong>{byteLabel(day.response_bytes)}</strong><small>{day.error_count} {text.errorLabel}</small></div>)}</div></div>
         </section> : null}
         {activeTab === 'health' ? <AdminSourceHealthPanel report={sourceHealth} locale={locale} /> : null}
+        {activeTab === 'geo' ? <AdminGeoTraffic locale={locale} /> : null}
+        {activeTab === 'ip-access' ? <AdminIpAccess locale={locale} superAdmin={identity?.role === 'super_admin'} /> : null}
         {activeTab === 'access' ? <section className="admin-tab-panel settings-stack">
           <div className="settings-card"><div className="settings-card-head"><h4>{text.serviceAccess}</h4><p>{text.accessHint}</p></div><div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label>{text.registrationMode}<select value={draft.registration.mode} onChange={(event) => updateRegistration('mode', event.target.value)}><option value="invite_only">{locale === 'zh' ? '仅邀请用户' : 'Invitation only'}</option><option value="domain_allowlist">{locale === 'zh' ? '仅允许指定邮箱域名' : 'Allowed email domains'}</option><option value="open">{locale === 'zh' ? '开放注册' : 'Open registration'}</option><option value="disabled">{locale === 'zh' ? '禁止新用户' : 'New users disabled'}</option></select></label><label className="wide-field">{text.allowedDomains}<input placeholder="example.com, subsidiary.example.com" value={draft.registration.allowed_email_domains.join(', ')} onChange={(event) => updateRegistration('allowed_email_domains', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /><small>{locale === 'zh' ? '仅“指定邮箱域名”模式需要填写，多个域名用逗号分隔。' : 'Only required for the allowed-domain mode. Separate multiple domains with commas.'}</small></label><label>{text.emailTtl}<input min="1" max="60" type="number" value={draft.registration.email_token_ttl_minutes} onChange={(event) => updateRegistration('email_token_ttl_minutes', Number(event.target.value))} /></label></div></div>
           <div className="settings-card"><div className="settings-card-head"><h4>{text.subdomainRouting}</h4><p>{locale === 'zh' ? '默认保留主域名代理。只有企业内部强制计费时才需要强制用户子域名。' : 'Keep main-domain proxying by default. Require user subdomains only for controlled internal deployments.'}</p></div><div className="config-fields"><label>{text.baseDomain}<input placeholder="mirror.example.com" value={draft.user_access.base_domain} onChange={(event) => updateUserAccess('base_domain', event.target.value)} /></label><label>{text.accessMode}<select value={draft.user_access.mode} onChange={(event) => updateUserAccess('mode', event.target.value)}><option value="public">{locale === 'zh' ? '公开模式（推荐）' : 'Public (recommended)'}</option><option value="subdomain_required">{locale === 'zh' ? '强制用户子域名' : 'Require user subdomains'}</option></select></label>{draft.user_access.mode === 'subdomain_required' ? <div className="infrastructure-readiness wide-field"><label className="toggle-field"><input type="checkbox" checked={draft.user_access.infrastructure_ready} onChange={(event) => updateUserAccess('infrastructure_ready', event.target.checked)} />{text.infrastructureReady}</label><p>{locale === 'zh' ? '这是保存前的安全确认，不会自动配置基础设施。请确保 *.主域名 已解析到本服务、TLS 证书覆盖通配符域名，并且反向代理保留客户端请求的原始 Host。' : 'This is a safety acknowledgement, not automatic provisioning. Ensure *.base-domain resolves to this service, TLS covers the wildcard domain, and the reverse proxy preserves the original Host header.'}</p></div> : <div className="infrastructure-readiness infrastructure-readiness-passive wide-field"><CheckCircle2 size={17} /><p>{locale === 'zh' ? '公开模式只使用公开地址，不需要通配符 DNS、通配符证书或用户子域名配置。' : 'Public mode only uses the public URL; wildcard DNS, wildcard certificates, and user subdomains are not required.'}</p></div>}</div></div>
@@ -1467,6 +1493,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
         </section> : null}
         {activeTab === 'advanced' ? <section className="admin-tab-panel settings-stack">
           <div className="advanced-notice">{text.advancedWarning}</div>
+          <AdminAcmeStatus locale={locale} superAdmin={identity?.role === 'super_admin'} />
           <div className="settings-card">
             <div className="settings-card-head"><div><h4>{text.configuration}</h4><p>{locale === 'zh' ? '相关配置已按用途分组；启用开关与它控制的参数位于同一区域。' : 'Settings are grouped by purpose; each switch sits with the values it controls.'}</p></div><p>{text.runtimeState}: {draft.listen_addr}</p></div>
             <div className="runtime-config-groups">
@@ -1482,6 +1509,14 @@ function AdminConsole({ locale }: { locale: Locale }) {
                   <label>{locale === 'zh' ? '用户名（可选）' : 'Username (optional)'}<input autoComplete="off" value={draft.outbound_proxy.username ?? ''} onChange={(event) => updateOutboundProxy('username', event.target.value || null)} /></label>
                   <label>{locale === 'zh' ? '密码（可选）' : 'Password (optional)'}<input autoComplete="new-password" type="password" placeholder={draft.outbound_proxy.has_password ? (locale === 'zh' ? '已保存，留空表示不修改' : 'Saved; leave blank to keep') : ''} value={draft.outbound_proxy.password ?? ''} onChange={(event) => updateOutboundProxy('password', event.target.value || null)} /></label>
                   <label className="wide-field">{locale === 'zh' ? '不使用代理的地址' : 'Bypass proxy for'}<input placeholder="127.0.0.1, localhost" value={draft.outbound_proxy.no_proxy.join(', ')} onChange={(event) => updateOutboundProxy('no_proxy', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small>{locale === 'zh' ? '多个主机或地址用逗号分隔。' : 'Separate hosts or addresses with commas.'}</small></label>
+                </div>
+              </section>
+              <section className={`runtime-config-group runtime-config-group-wide${draft.upstream_tls.insecure_skip_verify ? ' runtime-config-group-danger' : ''}`}>
+                <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '镜像上游 TLS 信任' : 'Mirror upstream TLS trust'}</h5><p>{locale === 'zh' ? '默认同时信任 WebPKI 公共根证书和操作系统根证书；以下设置只影响镜像上游，不影响 ACME、DNS API 或 OAuth。' : 'WebPKI public roots and native system roots are trusted by default. These settings affect mirror upstreams only, never ACME, DNS APIs, or OAuth.'}</p></div>
+                <div className="runtime-config-fields">
+                  <label className="wide-field">{locale === 'zh' ? '附加 CA PEM Bundle 路径' : 'Additional CA PEM bundle paths'}<input placeholder="/etc/mirrorproxy/ca/company-root.pem" value={draft.upstream_tls.ca_certificates.join(', ')} onChange={(event) => updateUpstreamTls('ca_certificates', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small>{locale === 'zh' ? '多个路径用逗号分隔。Docker 部署时需要先将证书文件挂载到容器中；保存时会立即读取并校验证书。' : 'Separate paths with commas. Mount certificate files into Docker first; bundles are read and validated when saved.'}</small></label>
+                  <label className="toggle-field wide-field tls-insecure-toggle"><input type="checkbox" checked={draft.upstream_tls.insecure_skip_verify} onChange={(event) => toggleInsecureUpstreamTls(event.target.checked)} /><ShieldBan size={16} />{locale === 'zh' ? '跳过镜像上游 TLS 证书校验（不安全，仅调试）' : 'Skip mirror-upstream TLS verification (unsafe, debugging only)'}</label>
+                  {draft.upstream_tls.insecure_skip_verify ? <div className="tls-danger-note wide-field" role="alert"><CircleAlert size={18} /><span>{locale === 'zh' ? '当前所有镜像上游 HTTPS 请求均不会验证证书，可能被中间人篡改。完成调试后请立即关闭。' : 'Certificates are not verified for any mirror-upstream HTTPS request, allowing man-in-the-middle attacks. Disable this immediately after debugging.'}</span></div> : null}
                 </div>
               </section>
               <section className="runtime-config-group">
@@ -1536,6 +1571,48 @@ function AdminConsole({ locale }: { locale: Locale }) {
 type SmtpView = { enabled: boolean; host: string; port: number; security: string; username: string | null; has_password: boolean; from_name: string; from_address: string }
 type InvitationView = { id: number; email: string; display_name: string; status: string; expires_at: number }
 type OperationNotice = { tone: 'success' | 'error'; message: string }
+type AcmeStatusView = { enabled: boolean; challenge: string; dns_provider: string | null; domains: string[]; certificate_path: string; private_key_path: string; certificate_not_after: number | null; last_success_at: number | null; last_error: string | null; running: boolean; direct_https: boolean; http_listen_addr: string; https_listen_addr: string; https_active: boolean }
+type AcmeDnsConfigDraft = {
+  provider: string; cloudflare_zone_id: string; cloudflare_api_token: string; cloudflare_api_key: string; cloudflare_email: string
+  aliyun_domain: string; aliyun_access_key_id: string; aliyun_access_key_secret: string
+  tencent_domain: string; tencent_secret_id: string; tencent_secret_key: string
+  route53_hosted_zone_id: string; route53_access_key_id: string; route53_secret_access_key: string; route53_session_token: string
+  webhook_url: string; webhook_bearer_token: string; propagation_delay_secs: number
+  has_cloudflare_api_token: boolean; has_cloudflare_api_key: boolean; has_cloudflare_email: boolean
+  has_aliyun_access_key_id: boolean; has_aliyun_access_key_secret: boolean
+  has_tencent_secret_id: boolean; has_tencent_secret_key: boolean
+  has_route53_access_key_id: boolean; has_route53_secret_access_key: boolean; has_route53_session_token: boolean
+  has_webhook_bearer_token: boolean
+}
+type AcmeConfigDraft = {
+  enabled: boolean; email: string; domains: string[]; challenge: 'http-01' | 'dns-01'; directory_url: string
+  storage_directory: string; renew_before_days: number; check_interval_hours: number
+  direct_https: boolean; http_listen_addr: string; https_listen_addr: string; redirect_http_to_https: boolean; dns: AcmeDnsConfigDraft
+}
+
+const emptyAcmeDnsConfig = (): AcmeDnsConfigDraft => ({
+  provider: 'cloudflare', cloudflare_zone_id: '', cloudflare_api_token: '', cloudflare_api_key: '', cloudflare_email: '',
+  aliyun_domain: '', aliyun_access_key_id: '', aliyun_access_key_secret: '', tencent_domain: '', tencent_secret_id: '', tencent_secret_key: '',
+  route53_hosted_zone_id: '', route53_access_key_id: '', route53_secret_access_key: '', route53_session_token: '', webhook_url: '', webhook_bearer_token: '', propagation_delay_secs: 30,
+  has_cloudflare_api_token: false, has_cloudflare_api_key: false, has_cloudflare_email: false, has_aliyun_access_key_id: false, has_aliyun_access_key_secret: false,
+  has_tencent_secret_id: false, has_tencent_secret_key: false, has_route53_access_key_id: false, has_route53_secret_access_key: false, has_route53_session_token: false, has_webhook_bearer_token: false,
+})
+
+const hydrateAcmeConfig = (value: Partial<AcmeConfigDraft>): AcmeConfigDraft => ({
+  enabled: value.enabled ?? false,
+  email: value.email ?? '',
+  domains: Array.isArray(value.domains) ? value.domains : [],
+  challenge: value.challenge === 'dns-01' ? 'dns-01' : 'http-01',
+  directory_url: value.directory_url ?? 'https://acme-v02.api.letsencrypt.org/directory',
+  storage_directory: value.storage_directory ?? 'acme',
+  renew_before_days: value.renew_before_days ?? 30,
+  check_interval_hours: value.check_interval_hours ?? 12,
+  direct_https: value.direct_https ?? false,
+  http_listen_addr: value.http_listen_addr ?? '0.0.0.0:80',
+  https_listen_addr: value.https_listen_addr ?? '0.0.0.0:443',
+  redirect_http_to_https: value.redirect_http_to_https ?? true,
+  dns: { ...emptyAcmeDnsConfig(), ...(value.dns ?? {}), provider: value.dns?.provider || 'cloudflare' },
+})
 
 async function responseError(response: Response) {
   try { return ((await response.json()) as { error?: string }).error ?? '' } catch { return '' }
@@ -1581,6 +1658,123 @@ function AdminSessionManagement({ locale, onCurrentRevoked }: { locale: Locale; 
       ))}</div>
     </section>
   )
+}
+
+function AdminAcmeStatus({ locale, superAdmin }: { locale: Locale; superAdmin: boolean }) {
+  const [status, setStatus] = React.useState<AcmeStatusView | null>(null)
+  const [notice, setNotice] = React.useState<OperationNotice | null>(null)
+  const [draft, setDraft] = React.useState<AcmeConfigDraft | null>(null)
+  const [managedByEnvironment, setManagedByEnvironment] = React.useState(false)
+  const [restartRequired, setRestartRequired] = React.useState(false)
+  const [saving, setSaving] = React.useState(false)
+  const load = React.useCallback(async () => {
+    const response = await fetch('/admin/api/acme/status')
+    if (response.ok) {
+      const value = await response.json() as Partial<AcmeStatusView>
+      if (Array.isArray(value.domains) && typeof value.challenge === 'string') setStatus(value as AcmeStatusView)
+    }
+  }, [])
+  const loadConfig = React.useCallback(async () => {
+    if (!superAdmin) return
+    const response = await fetch('/admin/api/acme/config')
+    if (!response.ok) return
+    const value = await response.json() as { config?: Partial<AcmeConfigDraft>; managed_by_environment?: boolean; restart_required?: boolean }
+    if (value.config) setDraft(hydrateAcmeConfig(value.config))
+    setManagedByEnvironment(Boolean(value.managed_by_environment))
+    setRestartRequired(Boolean(value.restart_required))
+  }, [superAdmin])
+  React.useEffect(() => { load().catch(() => undefined) }, [load])
+  React.useEffect(() => { loadConfig().catch(() => undefined) }, [loadConfig])
+  React.useEffect(() => {
+    if (!status?.running) return
+    const timer = window.setInterval(() => load().catch(() => undefined), 2000)
+    return () => window.clearInterval(timer)
+  }, [load, status?.running])
+  const renew = async () => {
+    setNotice(null)
+    const response = await fetch('/admin/api/acme/renew', { method: 'POST' })
+    if (!response.ok) {
+      setNotice({ tone: 'error', message: locale === 'zh' ? '无法启动证书签发，请检查 ACME 是否已在服务配置中启用。' : 'Certificate issuance could not be started. Check that ACME is enabled in the service configuration.' })
+      return
+    }
+    setStatus((current) => current ? { ...current, running: true } : current)
+    setNotice({ tone: 'success', message: locale === 'zh' ? '证书签发任务已进入队列，可在此查看结果。' : 'Certificate issuance is queued. Its result will appear here.' })
+  }
+  const saveConfig = async () => {
+    if (!draft || managedByEnvironment) return
+    setSaving(true); setNotice(null)
+    try {
+      const response = await fetch('/admin/api/acme/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) })
+      const value = await response.json().catch(() => ({})) as { config?: Partial<AcmeConfigDraft>; restart_required?: boolean; error?: string }
+      if (!response.ok) {
+        setNotice({ tone: 'error', message: value.error || (locale === 'zh' ? 'ACME 配置保存失败。' : 'ACME settings could not be saved.') })
+        return
+      }
+      if (value.config) setDraft(hydrateAcmeConfig(value.config))
+      setRestartRequired(Boolean(value.restart_required))
+      setNotice({ tone: 'success', message: locale === 'zh' ? 'ACME 配置已安全保存，重启 MirrorProxy 后生效。' : 'ACME settings were saved securely and take effect after restarting MirrorProxy.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+  const updateConfig = <K extends keyof AcmeConfigDraft>(key: K, value: AcmeConfigDraft[K]) => setDraft((current) => current ? { ...current, [key]: value } : current)
+  const updateDns = <K extends keyof AcmeDnsConfigDraft>(key: K, value: AcmeDnsConfigDraft[K]) => setDraft((current) => current ? { ...current, dns: { ...current.dns, [key]: value } } : current)
+  const savedPlaceholder = (saved: boolean) => saved ? (locale === 'zh' ? '已保存，留空表示保留' : 'Saved; leave blank to keep') : ''
+  const expiry = status?.certificate_not_after ? new Date(status.certificate_not_after * 1000).toLocaleString() : '—'
+  return <div className="acme-console-stack">
+    <section className="settings-card acme-status-card">
+      <div className="settings-card-head"><div><h4>{locale === 'zh' ? 'ACME 自动证书' : 'Automatic ACME certificates'}</h4><p>{locale === 'zh' ? '签发状态、验证链路和证书输出一目了然。' : 'Issuance state, challenge path, and certificate output at a glance.'}</p></div><span className={`acme-runtime-chip${status?.https_active || (status?.enabled && !status?.direct_https) ? ' active' : ''}`}><i />{status?.direct_https ? (status.https_active ? (locale === 'zh' ? '原生 HTTPS 已监听' : 'Native HTTPS active') : (locale === 'zh' ? '原生 HTTPS 等待证书' : 'Native HTTPS waiting')) : status?.enabled ? (locale === 'zh' ? '证书管理已启用' : 'Certificate manager enabled') : (locale === 'zh' ? '运行配置未启用' : 'Runtime disabled')}</span></div>
+      <div className="acme-status-grid">
+        <div><small>{locale === 'zh' ? '运行状态' : 'Status'}</small><strong className={status?.enabled ? 'ready' : ''}>{status?.enabled ? (status.running ? (locale === 'zh' ? '签发中…' : 'Issuing…') : (locale === 'zh' ? '待命' : 'Ready')) : (locale === 'zh' ? '未启用' : 'Disabled')}</strong></div>
+        <div><small>{locale === 'zh' ? '验证方式' : 'Challenge'}</small><strong>{status?.challenge ?? '—'}</strong></div>
+        <div><small>{locale === 'zh' ? 'DNS 提供商' : 'DNS provider'}</small><strong>{status?.dns_provider || '—'}</strong></div>
+        <div><small>{locale === 'zh' ? '证书到期' : 'Certificate expiry'}</small><strong>{expiry}</strong></div>
+      </div>
+      <div className="acme-status-details">
+        <div><small>{locale === 'zh' ? '证书域名' : 'Domains'}</small><code>{status?.domains?.join(', ') || '—'}</code></div>
+        <div><small>{locale === 'zh' ? '输出文件' : 'Output files'}</small><code>{status ? `${status.certificate_path} · ${status.private_key_path}` : '—'}</code></div>
+      </div>
+      {status?.last_error ? <p className="operation-notice operation-notice-error" role="alert"><CircleAlert size={17} />{status.last_error}</p> : null}
+      {superAdmin && status?.enabled ? <div className="form-actions"><button className="geo-update-button" disabled={status.running} onClick={renew}><RefreshCw className={status.running ? 'spin' : ''} size={15} />{status.running ? (locale === 'zh' ? '签发中…' : 'Issuing…') : (locale === 'zh' ? '立即签发 / 续期' : 'Issue / renew now')}</button></div> : null}
+    </section>
+    {superAdmin && draft ? <section className="settings-card acme-config-card">
+      <div className="settings-card-head"><div><h4>{locale === 'zh' ? '证书编排配置' : 'Certificate orchestration'}</h4><p>{locale === 'zh' ? 'DNS 密钥只写不读，保存后不会返回明文。配置在重启 MirrorProxy 后生效。' : 'DNS secrets are write-only and never returned in plaintext. Changes take effect after restarting MirrorProxy.'}</p></div>{restartRequired ? <span className="acme-restart-chip"><RefreshCw size={13} />{locale === 'zh' ? '等待重启' : 'Restart pending'}</span> : <KeyRound size={21} />}</div>
+      {managedByEnvironment ? <div className="acme-managed-note"><Terminal size={17} /><span>{locale === 'zh' ? '当前 ACME 配置由环境变量托管，后台保持只读。请移除 MIRRORPROXY_ACME_* 或对应 DNS 提供商环境变量后重启。' : 'ACME is managed by environment variables, so this form is read-only. Remove MIRRORPROXY_ACME_* or provider variables and restart to edit here.'}</span></div> : null}
+      <fieldset className="acme-config-form" disabled={managedByEnvironment || saving}>
+        <label className="toggle-field acme-enable-toggle"><input type="checkbox" checked={draft.enabled} onChange={(event) => updateConfig('enabled', event.target.checked)} /><span><strong>{locale === 'zh' ? '启用自动签发与续期' : 'Enable automatic issuance and renewal'}</strong><small>{locale === 'zh' ? '保存不会立即触碰现有证书，重启后才启用新的运行配置。' : 'Saving does not touch the current certificate; the new runtime configuration starts after restart.'}</small></span></label>
+        <div className="acme-config-grid">
+          <label>{locale === 'zh' ? '联系邮箱' : 'Contact email'}<input type="email" placeholder="admin@example.com" value={draft.email} onChange={(event) => updateConfig('email', event.target.value)} /></label>
+          <label>{locale === 'zh' ? '验证方式' : 'Challenge type'}<select value={draft.challenge} onChange={(event) => updateConfig('challenge', event.target.value as 'http-01' | 'dns-01')}><option value="http-01">HTTP-01</option><option value="dns-01">DNS-01 · Wildcard</option></select></label>
+          <label className="wide-field">{locale === 'zh' ? '证书域名' : 'Certificate domains'}<input placeholder="mirror.example.com, *.mirror.example.com" value={draft.domains.join(', ')} onChange={(event) => updateConfig('domains', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /><small>{locale === 'zh' ? '多个域名用逗号分隔；通配符域名必须使用 DNS-01。' : 'Separate domains with commas. Wildcard domains require DNS-01.'}</small></label>
+          <label className="wide-field">{locale === 'zh' ? 'ACME Directory URL' : 'ACME directory URL'}<input value={draft.directory_url} onChange={(event) => updateConfig('directory_url', event.target.value)} /></label>
+          <label>{locale === 'zh' ? '证书目录' : 'Certificate directory'}<input value={draft.storage_directory} onChange={(event) => updateConfig('storage_directory', event.target.value)} /></label>
+          <label>{locale === 'zh' ? '提前续期（天）' : 'Renew before (days)'}<input min="1" type="number" value={draft.renew_before_days} onChange={(event) => updateConfig('renew_before_days', Number(event.target.value))} /></label>
+          <label>{locale === 'zh' ? '检查间隔（小时）' : 'Check interval (hours)'}<input min="1" type="number" value={draft.check_interval_hours} onChange={(event) => updateConfig('check_interval_hours', Number(event.target.value))} /></label>
+        </div>
+        <div className={`acme-https-panel${draft.direct_https ? ' enabled' : ''}`}>
+          <div className="acme-https-panel-head"><div><small>NATIVE TLS EDGE</small><h5>{locale === 'zh' ? 'MirrorProxy 直接提供 HTTPS' : 'Serve HTTPS directly from MirrorProxy'}</h5><p>{locale === 'zh' ? '无需 Caddy 或 Nginx。80 端口响应 HTTP-01，其余请求重定向到 443；证书续期后自动热加载。' : 'No Caddy or Nginx required. Port 80 serves HTTP-01 and redirects other traffic to 443; renewed certificates reload automatically.'}</p></div><label className="toggle-field"><input type="checkbox" checked={draft.direct_https} onChange={(event) => updateConfig('direct_https', event.target.checked)} />{locale === 'zh' ? '启用原生 HTTPS' : 'Enable native HTTPS'}</label></div>
+          {draft.direct_https ? <div className="acme-config-grid acme-https-fields">
+            <label>{locale === 'zh' ? 'HTTP 监听地址' : 'HTTP listen address'}<input placeholder="0.0.0.0:80" value={draft.http_listen_addr} onChange={(event) => updateConfig('http_listen_addr', event.target.value)} /></label>
+            <label>{locale === 'zh' ? 'HTTPS 监听地址' : 'HTTPS listen address'}<input placeholder="0.0.0.0:443" value={draft.https_listen_addr} onChange={(event) => updateConfig('https_listen_addr', event.target.value)} /></label>
+            <label className="toggle-field wide-field"><input type="checkbox" checked={draft.redirect_http_to_https} onChange={(event) => updateConfig('redirect_http_to_https', event.target.checked)} /><span><strong>{locale === 'zh' ? 'HTTP 永久重定向到 HTTPS' : 'Permanently redirect HTTP to HTTPS'}</strong><small>{locale === 'zh' ? 'ACME HTTP-01 验证路径始终不会重定向。首次证书就绪前其他请求返回 503。' : 'The ACME HTTP-01 path is never redirected. Other requests return 503 until the first certificate is ready.'}</small></span></label>
+          </div> : null}
+        </div>
+        {draft.challenge === 'dns-01' ? <div className="acme-dns-panel">
+          <div className="acme-dns-panel-head"><div><small>DNS-01 DRIVER</small><h5>{locale === 'zh' ? 'DNS 提供商凭据' : 'DNS provider credentials'}</h5></div><label>{locale === 'zh' ? '提供商' : 'Provider'}<select value={draft.dns.provider} onChange={(event) => updateDns('provider', event.target.value)}><option value="cloudflare">Cloudflare</option><option value="aliyun">Alibaba Cloud DNS</option><option value="tencent">Tencent DNSPod</option><option value="route53">AWS Route53</option><option value="webhook">Webhook</option></select></label></div>
+          <div className="acme-config-grid">
+            {draft.dns.provider === 'cloudflare' ? <><label>{locale === 'zh' ? 'Zone ID' : 'Zone ID'}<input value={draft.dns.cloudflare_zone_id} onChange={(event) => updateDns('cloudflare_zone_id', event.target.value)} /></label><label>{locale === 'zh' ? 'API Token（推荐）' : 'API token (recommended)'}<input type="password" autoComplete="new-password" placeholder={savedPlaceholder(draft.dns.has_cloudflare_api_token)} value={draft.dns.cloudflare_api_token} onChange={(event) => updateDns('cloudflare_api_token', event.target.value)} /></label><label>{locale === 'zh' ? '账户邮箱（Global API Key）' : 'Account email (global API key)'}<input autoComplete="off" placeholder={savedPlaceholder(draft.dns.has_cloudflare_email)} value={draft.dns.cloudflare_email} onChange={(event) => updateDns('cloudflare_email', event.target.value)} /></label><label>{locale === 'zh' ? 'Global API Key' : 'Global API key'}<input type="password" autoComplete="new-password" placeholder={savedPlaceholder(draft.dns.has_cloudflare_api_key)} value={draft.dns.cloudflare_api_key} onChange={(event) => updateDns('cloudflare_api_key', event.target.value)} /></label></> : null}
+            {draft.dns.provider === 'aliyun' ? <><label>{locale === 'zh' ? '托管域名' : 'Managed domain'}<input placeholder="example.com" value={draft.dns.aliyun_domain} onChange={(event) => updateDns('aliyun_domain', event.target.value)} /></label><label>AccessKey ID<input type="password" autoComplete="new-password" placeholder={savedPlaceholder(draft.dns.has_aliyun_access_key_id)} value={draft.dns.aliyun_access_key_id} onChange={(event) => updateDns('aliyun_access_key_id', event.target.value)} /></label><label>AccessKey Secret<input type="password" autoComplete="new-password" placeholder={savedPlaceholder(draft.dns.has_aliyun_access_key_secret)} value={draft.dns.aliyun_access_key_secret} onChange={(event) => updateDns('aliyun_access_key_secret', event.target.value)} /></label></> : null}
+            {draft.dns.provider === 'tencent' ? <><label>{locale === 'zh' ? '托管域名' : 'Managed domain'}<input placeholder="example.com" value={draft.dns.tencent_domain} onChange={(event) => updateDns('tencent_domain', event.target.value)} /></label><label>SecretId<input type="password" autoComplete="new-password" placeholder={savedPlaceholder(draft.dns.has_tencent_secret_id)} value={draft.dns.tencent_secret_id} onChange={(event) => updateDns('tencent_secret_id', event.target.value)} /></label><label>SecretKey<input type="password" autoComplete="new-password" placeholder={savedPlaceholder(draft.dns.has_tencent_secret_key)} value={draft.dns.tencent_secret_key} onChange={(event) => updateDns('tencent_secret_key', event.target.value)} /></label></> : null}
+            {draft.dns.provider === 'route53' ? <><label>{locale === 'zh' ? 'Hosted Zone ID' : 'Hosted zone ID'}<input value={draft.dns.route53_hosted_zone_id} onChange={(event) => updateDns('route53_hosted_zone_id', event.target.value)} /></label><label>Access Key ID<input type="password" autoComplete="new-password" placeholder={savedPlaceholder(draft.dns.has_route53_access_key_id)} value={draft.dns.route53_access_key_id} onChange={(event) => updateDns('route53_access_key_id', event.target.value)} /></label><label>Secret Access Key<input type="password" autoComplete="new-password" placeholder={savedPlaceholder(draft.dns.has_route53_secret_access_key)} value={draft.dns.route53_secret_access_key} onChange={(event) => updateDns('route53_secret_access_key', event.target.value)} /></label><label>{locale === 'zh' ? 'Session Token（可选）' : 'Session token (optional)'}<input type="password" autoComplete="new-password" placeholder={savedPlaceholder(draft.dns.has_route53_session_token)} value={draft.dns.route53_session_token} onChange={(event) => updateDns('route53_session_token', event.target.value)} /></label></> : null}
+            {draft.dns.provider === 'webhook' ? <><label className="wide-field">Webhook URL<input value={draft.dns.webhook_url} onChange={(event) => updateDns('webhook_url', event.target.value)} /></label><label className="wide-field">{locale === 'zh' ? 'Bearer Token（可选）' : 'Bearer token (optional)'}<input type="password" autoComplete="new-password" placeholder={savedPlaceholder(draft.dns.has_webhook_bearer_token)} value={draft.dns.webhook_bearer_token} onChange={(event) => updateDns('webhook_bearer_token', event.target.value)} /></label></> : null}
+            <label>{locale === 'zh' ? 'DNS 等待时间（秒）' : 'DNS propagation wait (seconds)'}<input min="1" type="number" value={draft.dns.propagation_delay_secs} onChange={(event) => updateDns('propagation_delay_secs', Number(event.target.value))} /></label>
+          </div>
+        </div> : null}
+        <div className="acme-config-actions"><span>{locale === 'zh' ? '密钥保存在本机 SQLite 中，并受数据库文件权限保护。' : 'Secrets stay in local SQLite and are protected by database file permissions.'}</span><button className="primary-button" type="button" disabled={saving || managedByEnvironment} onClick={saveConfig}><Save size={16} />{saving ? (locale === 'zh' ? '保存中…' : 'Saving…') : (locale === 'zh' ? '保存 ACME 配置' : 'Save ACME settings')}</button></div>
+      </fieldset>
+      {notice ? <p className={`operation-notice operation-notice-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.tone === 'error' ? <CircleAlert size={17} /> : <CheckCircle2 size={17} />}{notice.message}</p> : null}
+    </section> : notice ? <p className={`operation-notice operation-notice-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.tone === 'error' ? <CircleAlert size={17} /> : <CheckCircle2 size={17} />}{notice.message}</p> : null}
+  </div>
 }
 
 type AuthProviderView = {
@@ -1884,9 +2078,133 @@ function AdminSourceHealthPanel({ report, locale }: { report: SourceHealthReport
   return <section className="admin-tab-panel source-health-panel">
     <div className="source-health-summary">
       <div className="source-health-summary-copy"><span className="console-kicker"><CheckCircle2 size={15} /> HEALTH MATRIX</span><h3>{locale === 'zh' ? '镜像可用性' : 'Mirror availability'}</h3><p>{labels.auto}</p><small>{labels.checked}: {checkedAt}</small></div>
-      <div className="source-health-counts"><div className="healthy"><span>{labels.healthy}</span><strong>{report?.healthy ?? 0}</strong></div><div className="degraded"><span>{labels.degraded}</span><strong>{report?.degraded ?? 0}</strong></div><div className="unhealthy"><span>{labels.unhealthy}</span><strong>{report?.unhealthy ?? 0}</strong></div><div><span>{labels.disabled}</span><strong>{report?.disabled ?? 0}</strong></div><div><span>{labels.unknown}</span><strong>{report?.unknown ?? report?.total ?? 59}</strong></div></div>
+      <div className="source-health-counts"><div className="healthy"><span>{labels.healthy}</span><strong>{report?.healthy ?? 0}</strong></div><div className="degraded"><span>{labels.degraded}</span><strong>{report?.degraded ?? 0}</strong></div><div className="unhealthy"><span>{labels.unhealthy}</span><strong>{report?.unhealthy ?? 0}</strong></div><div><span>{labels.disabled}</span><strong>{report?.disabled ?? 0}</strong></div><div><span>{labels.unknown}</span><strong>{report?.unknown ?? report?.total ?? 60}</strong></div></div>
     </div>
     {items.length ? <div className="source-health-table-wrap"><table className="source-health-table"><thead><tr><th>{labels.source}</th><th>{labels.adapter}</th><th>{labels.result}</th><th>{labels.latency}</th><th>{labels.checked}</th></tr></thead><tbody>{items.map((item) => <tr className={item.status} key={item.target_code}><td><strong>{item.target_code}</strong>{item.error ? <small>{item.error}</small> : null}{item.endpoints.length ? <details className="source-endpoint-details"><summary>{item.endpoints.length} {labels.upstreams}</summary><div>{item.endpoints.map((endpoint) => <article className={endpoint.status} key={`${endpoint.position}-${endpoint.endpoint}`}><span className={`source-health-badge source-health-${endpoint.status}`}><i />{labels[endpoint.status]}</span><code>{endpoint.endpoint}</code><small>HTTP {endpoint.http_status ?? '—'} · {endpoint.latency_ms === null ? '—' : `${endpoint.latency_ms} ms`}{endpoint.error ? ` · ${endpoint.error}` : ''}</small></article>)}</div></details> : null}</td><td><code>{item.adapter}</code></td><td><span className={`source-health-badge source-health-${item.status}`}><i />{labels[item.status]}</span></td><td>{item.latency_ms === null ? '—' : `${item.latency_ms} ms`}</td><td>{new Date(item.checked_at * 1000).toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US')}</td></tr>)}</tbody></table></div> : <div className="source-health-empty"><Database size={24} /><p>{labels.empty}</p></div>}
+  </section>
+}
+
+function AdminGeoTraffic({ locale }: { locale: Locale }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [from, setFrom] = React.useState(`${today.slice(0, 7)}-01`)
+  const [to, setTo] = React.useState(today)
+  const [target, setTarget] = React.useState('')
+  const [data, setData] = React.useState<GeoTrafficOverview | null>(null)
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState('')
+
+  const load = React.useCallback(async () => {
+    setBusy(true); setError('')
+    const params = new URLSearchParams({ from, to }); if (target) params.set('target', target)
+    try {
+      const response = await fetch(`/admin/api/geo-traffic?${params}`)
+      if (!response.ok) throw new Error(await response.text())
+      const value = await response.json() as { overview: GeoTrafficOverview }
+      setData(value.overview)
+    } catch {
+      setError(locale === 'zh' ? '地域流量读取失败，请检查日期范围。' : 'Regional traffic could not be loaded. Check the date range.')
+    } finally { setBusy(false) }
+  }, [from, locale, target, to])
+  React.useEffect(() => { load() }, [load])
+
+  const countries = React.useMemo(() => {
+    const grouped = new Map<string, { code: string; name: string; billed: number; delivered: number; requests: number; children: GeoTrafficOverview['regions'] }>()
+    for (const row of data?.regions ?? []) {
+      const key = `${row.country_code}:${row.country}`
+      const current = grouped.get(key) ?? { code: row.country_code, name: row.country, billed: 0, delivered: 0, requests: 0, children: [] }
+      current.billed += row.billed_bytes; current.delivered += row.response_bytes; current.requests += row.request_count; current.children.push(row); grouped.set(key, current)
+    }
+    return [...grouped.values()].sort((a, b) => b.billed - a.billed)
+  }, [data])
+  const peak = Math.max(1, ...countries.map((country) => country.billed))
+  const trendPeak = Math.max(1, ...(data?.daily ?? []).map((point) => point.billed_bytes))
+
+  return <section className="admin-tab-panel geo-report-panel">
+    <form className="geo-filter-strip" onSubmit={(event) => { event.preventDefault(); load() }}>
+      <label className="geo-filter-field"><span>{locale === 'zh' ? '开始日期' : 'From'}</span><input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+      <label className="geo-filter-field"><span>{locale === 'zh' ? '结束日期' : 'To'}</span><input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
+      <div className="geo-filter-field"><span>{locale === 'zh' ? '代理目标' : 'Proxy target'}</span><details className="geo-target-picker"><summary><span>{target || (locale === 'zh' ? '全部目标' : 'All targets')}</span><ChevronDown size={15} /></summary><div className="geo-target-options" role="listbox" aria-label={locale === 'zh' ? '选择代理目标' : 'Select proxy target'}><button className={!target ? 'active' : ''} type="button" onClick={(event) => { setTarget(''); event.currentTarget.closest('details')?.removeAttribute('open') }}>{locale === 'zh' ? '全部目标' : 'All targets'}<small>ALL</small></button>{PROXY_ADAPTERS.map((adapter) => <button className={target === adapter ? 'active' : ''} key={adapter} type="button" onClick={(event) => { setTarget(adapter); event.currentTarget.closest('details')?.removeAttribute('open') }}>{adapter}<small>{adapter === 'os' ? 'OS' : 'PROXY'}</small></button>)}</div></details></div>
+      <button className="primary-button" disabled={busy} type="submit"><RefreshCw className={busy ? 'spin' : ''} size={16} /> {locale === 'zh' ? '应用筛选' : 'Apply'}</button>
+    </form>
+    {error ? <p className="form-error">{error}</p> : null}
+    <div className="geo-metric-ribbon">
+      <ConsoleMetric label={locale === 'zh' ? '实际下发' : 'Delivered'} value={byteLabel(data?.response_bytes ?? 0)} />
+      <ConsoleMetric label={locale === 'zh' ? '计费流量' : 'Billed'} value={byteLabel(data?.billed_bytes ?? 0)} />
+      <ConsoleMetric label={locale === 'zh' ? '请求数' : 'Requests'} value={(data?.request_count ?? 0).toLocaleString()} />
+      <ConsoleMetric label={locale === 'zh' ? '错误数' : 'Errors'} value={(data?.error_count ?? 0).toLocaleString()} />
+    </div>
+    <div className="geo-report-grid">
+      <section className="settings-card geo-atlas-card"><div className="settings-card-head"><div><span className="eyebrow">TRAFFIC ATLAS</span><h4>{locale === 'zh' ? '国家 / 省市排行' : 'Country / region ranking'}</h4></div><Globe2 size={22} /></div>
+        {countries.length ? <div className="geo-country-list">{countries.map((country, index) => <details key={`${country.code}-${country.name}`} open={index < 3} className="geo-country-row"><summary><span className="geo-rank">{String(index + 1).padStart(2, '0')}</span><span><strong>{country.name}</strong><small>{country.code} · {country.requests.toLocaleString()} req</small></span><span className="geo-traffic-value">{byteLabel(country.billed)}</span><i style={{ '--geo-share': `${Math.max(2, country.billed / peak * 100)}%` } as React.CSSProperties} /></summary><div className="geo-city-list">{country.children.slice(0, 30).map((row) => <div key={`${row.province}-${row.city}`}><span>{row.province === 'Unknown' ? '—' : row.province} / {row.city === 'Unknown' ? '—' : row.city}</span><strong>{byteLabel(row.billed_bytes)}</strong><small>{byteLabel(row.response_bytes)} {locale === 'zh' ? '实际' : 'delivered'} · {row.request_count} req</small></div>)}</div></details>)}</div> : <p className="empty-stat">{locale === 'zh' ? '所选范围尚无地域流量。' : 'No regional traffic in this range.'}</p>}
+      </section>
+      <section className="settings-card geo-trend-card"><div className="settings-card-head"><div><span className="eyebrow">DAILY PULSE</span><h4>{locale === 'zh' ? '每日计费流量' : 'Daily billed traffic'}</h4></div><ChartNoAxesCombined size={22} /></div><div className="geo-trend-chart" role="img" aria-label={locale === 'zh' ? '每日计费流量趋势' : 'Daily billed traffic trend'}>{(data?.daily ?? []).map((point) => <div key={point.day} title={`${point.day}: ${byteLabel(point.billed_bytes)}`}><span style={{ height: `${Math.max(3, point.billed_bytes / trendPeak * 100)}%` }} /><small>{point.day.slice(5)}</small></div>)}</div></section>
+    </div>
+  </section>
+}
+
+function AdminIpAccess({ locale, superAdmin }: { locale: Locale; superAdmin: boolean }) {
+  const [status, setStatus] = React.useState<GeoIpStatus | null>(null)
+  const [rules, setRules] = React.useState<IpAccessRule[]>([])
+  const [lookupIp, setLookupIp] = React.useState('1.1.1.1')
+  const [lookup, setLookup] = React.useState<{ ip: string; location: GeoLocation } | null>(null)
+  const [editing, setEditing] = React.useState<IpAccessRule | null>(null)
+  const [action, setAction] = React.useState<'allow' | 'deny'>('deny')
+  const [value, setValue] = React.useState('')
+  const [note, setNote] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const [updatingVersion, setUpdatingVersion] = React.useState<number | null>(null)
+  const [updateNotice, setUpdateNotice] = React.useState<{ tone: 'success' | 'error'; message: string } | null>(null)
+  const [error, setError] = React.useState('')
+
+  const load = React.useCallback(async () => {
+    const [statusResponse, rulesResponse] = await Promise.all([fetch('/admin/api/geoip/status'), fetch('/admin/api/ip-access-rules')])
+    if (statusResponse.ok) setStatus(await statusResponse.json() as GeoIpStatus)
+    if (rulesResponse.ok) setRules(await rulesResponse.json() as IpAccessRule[])
+  }, [])
+  React.useEffect(() => { load() }, [load])
+  const submitLookup = async (event: React.FormEvent) => {
+    event.preventDefault(); setError('')
+    const response = await fetch('/admin/api/geoip/lookup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ip: lookupIp }) })
+    if (!response.ok) { setError(locale === 'zh' ? '请输入有效的 IPv4 或 IPv6 地址。' : 'Enter a valid IPv4 or IPv6 address.'); return }
+    setLookup(await response.json() as { ip: string; location: GeoLocation })
+  }
+  const saveRule = async (event: React.FormEvent) => {
+    event.preventDefault(); if (!superAdmin) return; setBusy(true); setError('')
+    const response = await fetch(editing ? `/admin/api/ip-access-rules/${editing.id}` : '/admin/api/ip-access-rules', { method: editing ? 'PUT' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, value, note, enabled: editing?.enabled ?? true }) })
+    setBusy(false)
+    if (!response.ok) { setError(locale === 'zh' ? '规则保存失败，请检查格式或是否重复。' : 'Rule could not be saved. Check its format or duplicates.'); return }
+    setEditing(null); setValue(''); setNote(''); await load()
+  }
+  const edit = (rule: IpAccessRule) => { setEditing(rule); setAction(rule.action); setValue(rule.network); setNote(rule.note) }
+  const updateRule = async (rule: IpAccessRule, enabled: boolean) => { await fetch(`/admin/api/ip-access-rules/${rule.id}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: rule.action, value: rule.network, note: rule.note, enabled }) }); await load() }
+  const remove = async (rule: IpAccessRule) => { if (!confirm(locale === 'zh' ? `删除规则 ${rule.network}？` : `Delete rule ${rule.network}?`)) return; await fetch(`/admin/api/ip-access-rules/${rule.id}`, { method: 'DELETE' }); await load() }
+  const updateDatabase = async (version: number) => {
+    if (!superAdmin || updatingVersion !== null) return
+    setUpdatingVersion(version)
+    setUpdateNotice(null)
+    setError('')
+    try {
+      const response = await fetch('/admin/api/geoip/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ip_version: version }) })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      setStatus(await response.json() as GeoIpStatus)
+      setUpdateNotice({ tone: 'success', message: locale === 'zh' ? `IPv${version} 离线定位库已更新并立即生效。` : `The IPv${version} offline database was updated and is now active.` })
+    } catch {
+      setUpdateNotice({ tone: 'error', message: locale === 'zh' ? `IPv${version} 数据库更新失败，请稍后重试或检查服务日志。` : `The IPv${version} database update failed. Try again later or check the service logs.` })
+    } finally {
+      setUpdatingVersion(null)
+    }
+  }
+
+  return <section className="admin-tab-panel ip-access-layout">
+    <div className="geo-database-grid">{status ? [status.ipv4, status.ipv6].map((database) => <section className={`geo-database-card ${database.available ? 'ready' : 'degraded'}`} key={database.ip_version}><div><span>IPV{database.ip_version} XDB</span><strong>{database.available ? (locale === 'zh' ? '离线定位可用' : 'Offline lookup ready') : (locale === 'zh' ? '降级为未知地域' : 'Degraded to unknown')}</strong><small>{database.available && database.size_bytes ? `${byteLabel(database.size_bytes)} · ${database.modified_at ? new Date(database.modified_at * 1000).toLocaleDateString() : ''}` : database.error}</small></div>{superAdmin ? <button className="geo-update-button" disabled={updatingVersion !== null} onClick={() => updateDatabase(database.ip_version)}><RefreshCw className={updatingVersion === database.ip_version ? 'spin' : ''} size={15} /><span>{updatingVersion === database.ip_version ? (locale === 'zh' ? '更新中…' : 'Updating…') : (locale === 'zh' ? '手动更新' : 'Update XDB')}</span></button> : null}</section>) : null}</div>
+    {updateNotice ? <p className={`operation-notice operation-notice-${updateNotice.tone}`} role={updateNotice.tone === 'error' ? 'alert' : 'status'}>{updateNotice.tone === 'error' ? <CircleAlert size={17} /> : <CheckCircle2 size={17} />}{updateNotice.message}</p> : null}
+    {error ? <p className="form-error">{error}</p> : null}
+    <div className="ip-access-columns">
+      <div className="settings-stack"><section className="settings-card"><div className="settings-card-head"><div><h4>{locale === 'zh' ? 'IP 离线定位' : 'Offline IP lookup'}</h4><p>{locale === 'zh' ? '查询结果不会持久化。' : 'Lookup results are not persisted.'}</p></div><Globe2 size={20} /></div><form className="ip-lookup-form" onSubmit={submitLookup}><input required value={lookupIp} onChange={(event) => setLookupIp(event.target.value)} placeholder="1.1.1.1" /><button className="primary-button" type="submit"><Search size={15} /> {locale === 'zh' ? '查询' : 'Lookup'}</button></form>{lookup ? <div className="ip-lookup-result"><code>{lookup.ip}</code><strong>{[lookup.location.country, lookup.location.province, lookup.location.city].filter(Boolean).join(' / ') || 'Unknown'}</strong><small>{lookup.location.isp ?? '—'} · {lookup.location.country_code ?? 'ZZ'}</small></div> : null}</section>
+        {superAdmin ? <form className="settings-card ip-rule-form" onSubmit={saveRule}><div className="settings-card-head"><div><h4>{editing ? (locale === 'zh' ? '编辑规则' : 'Edit rule') : (locale === 'zh' ? '新增规则' : 'New rule')}</h4><p>{locale === 'zh' ? '黑名单优先；存在白名单后，未命中者默认拒绝。' : 'Deny rules win; an active allowlist rejects unmatched addresses.'}</p></div><ShieldBan size={20} /></div><div className="config-fields"><label>{locale === 'zh' ? '动作' : 'Action'}<select value={action} onChange={(event) => setAction(event.target.value as 'allow' | 'deny')}><option value="deny">{locale === 'zh' ? '黑名单 / 拒绝' : 'Deny'}</option><option value="allow">{locale === 'zh' ? '白名单 / 允许' : 'Allow'}</option></select></label><label>{locale === 'zh' ? 'IP 或 CIDR' : 'IP or CIDR'}<input required value={value} onChange={(event) => setValue(event.target.value)} placeholder="203.0.113.0/24" /></label><label className="wide-field">{locale === 'zh' ? '备注' : 'Note'}<input maxLength={200} value={note} onChange={(event) => setNote(event.target.value)} /></label></div><div className="form-actions"><button className="primary-button" disabled={busy} type="submit">{editing ? (locale === 'zh' ? '保存修改' : 'Save changes') : (locale === 'zh' ? '添加规则' : 'Add rule')}</button>{editing ? <button type="button" onClick={() => { setEditing(null); setValue(''); setNote('') }}>{locale === 'zh' ? '取消' : 'Cancel'}</button> : null}</div></form> : <div className="advanced-notice">{locale === 'zh' ? '当前账号可查看规则，但只有超级管理员可以修改。' : 'This account can view rules; only a super administrator can change them.'}</div>}
+      </div>
+      <section className="settings-card ip-rule-list"><div className="settings-card-head"><div><h4>{locale === 'zh' ? '生效规则' : 'Effective rules'}</h4><p>{rules.filter((rule) => rule.enabled).length} / {rules.length} {locale === 'zh' ? '条已启用' : 'enabled'}</p></div></div>{rules.length ? rules.map((rule) => <article className={`ip-rule-row ${rule.action}`} key={rule.id}><span className="ip-rule-action">{rule.action === 'deny' ? 'DENY' : 'ALLOW'}</span><div><code>{rule.network}</code><small>{rule.note || (locale === 'zh' ? '无备注' : 'No note')} · {rule.input_kind.toUpperCase()}</small></div><label className="mini-switch"><input disabled={!superAdmin} type="checkbox" checked={rule.enabled} onChange={(event) => updateRule(rule, event.target.checked)} /><span>{rule.enabled ? 'ON' : 'OFF'}</span></label>{superAdmin ? <span className="ip-rule-actions"><button onClick={() => edit(rule)}>{locale === 'zh' ? '编辑' : 'Edit'}</button><button onClick={() => remove(rule)}>{locale === 'zh' ? '删除' : 'Delete'}</button></span> : null}</article>) : <p className="empty-stat">{locale === 'zh' ? '暂无规则，代理路径默认允许所有来源。' : 'No rules; proxy paths currently allow every source.'}</p>}</section>
+    </div>
   </section>
 }
 

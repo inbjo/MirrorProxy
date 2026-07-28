@@ -12,6 +12,7 @@ pub struct Observability {
     proxy_response_bytes: IntCounterVec,
     proxy_stream_errors: IntCounterVec,
     rejections: IntCounterVec,
+    geoip_lookups: IntCounterVec,
 }
 
 impl Observability {
@@ -55,6 +56,13 @@ impl Observability {
             ),
             &["reason"],
         )?;
+        let geoip_lookups = IntCounterVec::new(
+            Opts::new(
+                "mirrorproxy_geoip_lookups_total",
+                "Offline GeoIP lookups grouped by IP version and bounded result.",
+            ),
+            &["ip_version", "result"],
+        )?;
         let build_info = IntGaugeVec::new(
             Opts::new(
                 "mirrorproxy_build_info",
@@ -74,6 +82,7 @@ impl Observability {
         registry.register(Box::new(proxy_response_bytes.clone()))?;
         registry.register(Box::new(proxy_stream_errors.clone()))?;
         registry.register(Box::new(rejections.clone()))?;
+        registry.register(Box::new(geoip_lookups.clone()))?;
         registry.register(Box::new(build_info))?;
 
         Ok(Self {
@@ -83,6 +92,7 @@ impl Observability {
             proxy_response_bytes,
             proxy_stream_errors,
             rejections,
+            geoip_lookups,
         })
     }
 
@@ -106,6 +116,12 @@ impl Observability {
 
     pub fn observe_rejection(&self, reason: &str) {
         self.rejections.with_label_values(&[reason]).inc();
+    }
+
+    pub fn observe_geoip_lookup(&self, ip_version: &str, found: bool) {
+        self.geoip_lookups
+            .with_label_values(&[ip_version, if found { "found" } else { "unknown" }])
+            .inc();
     }
 
     pub fn encode(&self) -> anyhow::Result<(String, Vec<u8>)> {

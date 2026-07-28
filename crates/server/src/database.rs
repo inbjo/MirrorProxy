@@ -20,7 +20,8 @@ use sqlx::{
 use uuid::Uuid;
 use webauthn_rs::prelude::{AuthenticationResult, Passkey};
 
-use crate::config::Config;
+use crate::config::{AcmeConfig, Config};
+use crate::geoip::GeoLocation;
 
 const SESSION_LIFETIME_SECS: i64 = 24 * 60 * 60;
 const ADMIN_LOGIN_FAILURE_LIMIT: i64 = 5;
@@ -235,11 +236,56 @@ pub struct ProxyTrafficRecord<'a> {
     pub path: &'a str,
     pub status_code: u16,
     pub response_bytes: u64,
+    pub delivered_response_bytes: u64,
     pub stream_error: bool,
     pub reserved_bytes: u64,
     pub user_id: Option<i64>,
     pub group_id: Option<i64>,
     pub request_event_retention_days: u32,
+    pub location: &'a GeoLocation,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct IpAccessRule {
+    pub id: i64,
+    pub action: String,
+    pub input_kind: String,
+    pub network: String,
+    pub note: String,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GeoTrafficDailyPoint {
+    pub day: String,
+    pub request_count: u64,
+    pub response_bytes: u64,
+    pub billed_bytes: u64,
+    pub error_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GeoTrafficRegionPoint {
+    pub country_code: String,
+    pub country: String,
+    pub province: String,
+    pub city: String,
+    pub request_count: u64,
+    pub response_bytes: u64,
+    pub billed_bytes: u64,
+    pub error_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GeoTrafficOverview {
+    pub request_count: u64,
+    pub response_bytes: u64,
+    pub billed_bytes: u64,
+    pub error_count: u64,
+    pub daily: Vec<GeoTrafficDailyPoint>,
+    pub regions: Vec<GeoTrafficRegionPoint>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -2083,6 +2129,58 @@ impl Database {
         Ok(())
     }
 
+    pub async fn acme_settings(&self) -> anyhow::Result<Option<AcmeConfig>> {
+        sqlx::query("SELECT settings_json, cloudflare_api_token, cloudflare_api_key, cloudflare_email, aliyun_access_key_id, aliyun_access_key_secret, tencent_secret_id, tencent_secret_key, route53_access_key_id, route53_secret_access_key, route53_session_token, webhook_bearer_token FROM acme_settings WHERE singleton = 1")
+            .fetch_optional(&self.pool)
+            .await?
+            .map(acme_config_from_row)
+            .transpose()
+    }
+
+    pub async fn load_or_seed_acme_settings(
+        &self,
+        fallback: AcmeConfig,
+    ) -> anyhow::Result<AcmeConfig> {
+        if let Some(settings) = self.acme_settings().await? {
+            return Ok(settings);
+        }
+        self.save_acme_settings("system", &fallback).await?;
+        Ok(fallback)
+    }
+
+    pub async fn save_acme_settings(
+        &self,
+        actor: &str,
+        settings: &AcmeConfig,
+    ) -> anyhow::Result<()> {
+        let now = unix_timestamp();
+        let settings_json = serde_json::to_string(settings)?;
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("INSERT INTO acme_settings (singleton, settings_json, cloudflare_api_token, cloudflare_api_key, cloudflare_email, aliyun_access_key_id, aliyun_access_key_secret, tencent_secret_id, tencent_secret_key, route53_access_key_id, route53_secret_access_key, route53_session_token, webhook_bearer_token, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET settings_json=excluded.settings_json, cloudflare_api_token=excluded.cloudflare_api_token, cloudflare_api_key=excluded.cloudflare_api_key, cloudflare_email=excluded.cloudflare_email, aliyun_access_key_id=excluded.aliyun_access_key_id, aliyun_access_key_secret=excluded.aliyun_access_key_secret, tencent_secret_id=excluded.tencent_secret_id, tencent_secret_key=excluded.tencent_secret_key, route53_access_key_id=excluded.route53_access_key_id, route53_secret_access_key=excluded.route53_secret_access_key, route53_session_token=excluded.route53_session_token, webhook_bearer_token=excluded.webhook_bearer_token, updated_at=excluded.updated_at")
+            .bind(settings_json)
+            .bind(&settings.dns.cloudflare_api_token)
+            .bind(&settings.dns.cloudflare_api_key)
+            .bind(&settings.dns.cloudflare_email)
+            .bind(&settings.dns.aliyun_access_key_id)
+            .bind(&settings.dns.aliyun_access_key_secret)
+            .bind(&settings.dns.tencent_secret_id)
+            .bind(&settings.dns.tencent_secret_key)
+            .bind(&settings.dns.route53_access_key_id)
+            .bind(&settings.dns.route53_secret_access_key)
+            .bind(&settings.dns.route53_session_token)
+            .bind(&settings.dns.webhook_bearer_token)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'acme_settings_updated', 'acme_settings')")
+            .bind(now)
+            .bind(actor)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
     pub async fn create_email_invitation(
         &self,
         actor: &str,
@@ -2690,6 +2788,21 @@ impl Database {
             sqlx::query("INSERT INTO group_traffic_monthly (month, group_id, request_count, response_bytes, error_count) VALUES (?, ?, 1, ?, ?) ON CONFLICT(month, group_id) DO UPDATE SET request_count = request_count + 1, response_bytes = response_bytes + excluded.response_bytes, error_count = error_count + excluded.error_count, reserved_bytes = MAX(0, reserved_bytes - ?)")
                 .bind(record.month).bind(group_id).bind(bytes).bind(errors).bind(reserved).execute(&mut *transaction).await?;
         }
+        let (country_code, country) = record.location.country_bucket();
+        sqlx::query(
+            "INSERT INTO geo_traffic_daily (day, target_code, country_code, country, province, city, request_count, response_bytes, billed_bytes, error_count) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?) ON CONFLICT(day, target_code, country_code, country, province, city) DO UPDATE SET request_count = request_count + 1, response_bytes = response_bytes + excluded.response_bytes, billed_bytes = billed_bytes + excluded.billed_bytes, error_count = error_count + excluded.error_count",
+        )
+        .bind(record.day)
+        .bind(record.target_code)
+        .bind(country_code)
+        .bind(country)
+        .bind(record.location.province_bucket())
+        .bind(record.location.city_bucket())
+        .bind(i64::try_from(record.delivered_response_bytes).unwrap_or(i64::MAX))
+        .bind(bytes)
+        .bind(errors)
+        .execute(&mut *transaction)
+        .await?;
         sqlx::query(
             "INSERT INTO request_events (created_at, target_code, method, path, status_code, response_bytes) VALUES (?, ?, ?, ?, ?, ?)",
         )
@@ -2710,6 +2823,149 @@ impl Database {
             .await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    pub async fn list_ip_access_rules(&self) -> anyhow::Result<Vec<IpAccessRule>> {
+        sqlx::query("SELECT id, action, input_kind, network, note, enabled, created_at, updated_at FROM ip_access_rules ORDER BY action DESC, network, id")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(ip_access_rule_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub async fn create_ip_access_rule(
+        &self,
+        action: &str,
+        input_kind: &str,
+        network: &str,
+        note: &str,
+        enabled: bool,
+    ) -> anyhow::Result<IpAccessRule> {
+        let now = unix_timestamp();
+        let result = sqlx::query("INSERT INTO ip_access_rules (action, input_kind, network, note, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind(action).bind(input_kind).bind(network).bind(note).bind(i64::from(enabled)).bind(now).bind(now)
+            .execute(&self.pool).await?;
+        self.ip_access_rule(result.last_insert_rowid())
+            .await?
+            .context("created IP access rule disappeared")
+    }
+
+    pub async fn update_ip_access_rule(
+        &self,
+        id: i64,
+        action: &str,
+        input_kind: &str,
+        network: &str,
+        note: &str,
+        enabled: bool,
+    ) -> anyhow::Result<Option<IpAccessRule>> {
+        let result = sqlx::query("UPDATE ip_access_rules SET action = ?, input_kind = ?, network = ?, note = ?, enabled = ?, updated_at = ? WHERE id = ?")
+            .bind(action).bind(input_kind).bind(network).bind(note).bind(i64::from(enabled)).bind(unix_timestamp()).bind(id)
+            .execute(&self.pool).await?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.ip_access_rule(id).await
+    }
+
+    pub async fn delete_ip_access_rule(&self, id: i64) -> anyhow::Result<bool> {
+        Ok(sqlx::query("DELETE FROM ip_access_rules WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected()
+            == 1)
+    }
+
+    async fn ip_access_rule(&self, id: i64) -> anyhow::Result<Option<IpAccessRule>> {
+        sqlx::query("SELECT id, action, input_kind, network, note, enabled, created_at, updated_at FROM ip_access_rules WHERE id = ?")
+            .bind(id).fetch_optional(&self.pool).await?.map(ip_access_rule_from_row).transpose().map_err(Into::into)
+    }
+
+    pub async fn geo_traffic_overview(
+        &self,
+        from: &str,
+        to: &str,
+        target: Option<&str>,
+        country: Option<&str>,
+        province: Option<&str>,
+        city: Option<&str>,
+    ) -> anyhow::Result<GeoTrafficOverview> {
+        let rows = sqlx::query("SELECT day, country_code, country, province, city, request_count, response_bytes, billed_bytes, error_count FROM geo_traffic_daily WHERE day >= ? AND day <= ? AND (? IS NULL OR target_code = ?) AND (? IS NULL OR country_code = ?) AND (? IS NULL OR province = ?) AND (? IS NULL OR city = ?) ORDER BY day, billed_bytes DESC")
+            .bind(from).bind(to)
+            .bind(target).bind(target)
+            .bind(country).bind(country)
+            .bind(province).bind(province)
+            .bind(city).bind(city)
+            .fetch_all(&self.pool).await?;
+        let mut overview = GeoTrafficOverview {
+            request_count: 0,
+            response_bytes: 0,
+            billed_bytes: 0,
+            error_count: 0,
+            daily: Vec::new(),
+            regions: Vec::new(),
+        };
+        let mut daily = BTreeMap::<String, (u64, u64, u64, u64)>::new();
+        let mut regions = BTreeMap::<(String, String, String, String), (u64, u64, u64, u64)>::new();
+        for row in rows {
+            let request_count = as_u64(row.try_get("request_count")?);
+            let response_bytes = as_u64(row.try_get("response_bytes")?);
+            let billed_bytes = as_u64(row.try_get("billed_bytes")?);
+            let error_count = as_u64(row.try_get("error_count")?);
+            overview.request_count = overview.request_count.saturating_add(request_count);
+            overview.response_bytes = overview.response_bytes.saturating_add(response_bytes);
+            overview.billed_bytes = overview.billed_bytes.saturating_add(billed_bytes);
+            overview.error_count = overview.error_count.saturating_add(error_count);
+            let day: String = row.try_get("day")?;
+            let point = daily.entry(day).or_default();
+            point.0 += request_count;
+            point.1 += response_bytes;
+            point.2 += billed_bytes;
+            point.3 += error_count;
+            let key = (
+                row.try_get("country_code")?,
+                row.try_get("country")?,
+                row.try_get("province")?,
+                row.try_get("city")?,
+            );
+            let point = regions.entry(key).or_default();
+            point.0 += request_count;
+            point.1 += response_bytes;
+            point.2 += billed_bytes;
+            point.3 += error_count;
+        }
+        overview.daily = daily
+            .into_iter()
+            .map(|(day, value)| GeoTrafficDailyPoint {
+                day,
+                request_count: value.0,
+                response_bytes: value.1,
+                billed_bytes: value.2,
+                error_count: value.3,
+            })
+            .collect();
+        overview.regions = regions
+            .into_iter()
+            .map(
+                |((country_code, country, province, city), value)| GeoTrafficRegionPoint {
+                    country_code,
+                    country,
+                    province,
+                    city,
+                    request_count: value.0,
+                    response_bytes: value.1,
+                    billed_bytes: value.2,
+                    error_count: value.3,
+                },
+            )
+            .collect();
+        overview
+            .regions
+            .sort_by_key(|point| std::cmp::Reverse(point.billed_bytes));
+        Ok(overview)
     }
 
     pub async fn mark_month_quota_exceeded(&self, month: &str) -> anyhow::Result<()> {
@@ -2882,6 +3138,17 @@ impl Database {
         .collect::<Result<Vec<_>, _>>()?;
         Ok((rows, total.max(0) as u64))
     }
+
+    pub async fn append_audit_log(
+        &self,
+        username: &str,
+        action: &str,
+        detail: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, ?, ?)")
+            .bind(unix_timestamp()).bind(username).bind(action).bind(detail).execute(&self.pool).await?;
+        Ok(())
+    }
 }
 
 fn as_u64(value: i64) -> u64 {
@@ -2973,6 +3240,24 @@ fn auth_provider_from_row(row: SqliteRow) -> anyhow::Result<AuthProvider> {
     })
 }
 
+fn acme_config_from_row(row: SqliteRow) -> anyhow::Result<AcmeConfig> {
+    let settings_json: String = row.try_get("settings_json")?;
+    let mut settings: AcmeConfig =
+        serde_json::from_str(&settings_json).context("stored ACME settings are not valid JSON")?;
+    settings.dns.cloudflare_api_token = row.try_get("cloudflare_api_token")?;
+    settings.dns.cloudflare_api_key = row.try_get("cloudflare_api_key")?;
+    settings.dns.cloudflare_email = row.try_get("cloudflare_email")?;
+    settings.dns.aliyun_access_key_id = row.try_get("aliyun_access_key_id")?;
+    settings.dns.aliyun_access_key_secret = row.try_get("aliyun_access_key_secret")?;
+    settings.dns.tencent_secret_id = row.try_get("tencent_secret_id")?;
+    settings.dns.tencent_secret_key = row.try_get("tencent_secret_key")?;
+    settings.dns.route53_access_key_id = row.try_get("route53_access_key_id")?;
+    settings.dns.route53_secret_access_key = row.try_get("route53_secret_access_key")?;
+    settings.dns.route53_session_token = row.try_get("route53_session_token")?;
+    settings.dns.webhook_bearer_token = row.try_get("webhook_bearer_token")?;
+    Ok(settings)
+}
+
 fn user_account_from_row(row: SqliteRow) -> Result<UserAccount, sqlx::Error> {
     Ok(UserAccount {
         id: row.try_get("id")?,
@@ -3058,6 +3343,7 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS group_traffic_monthly (month TEXT NOT NULL, group_id INTEGER NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(month, group_id), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS user_routing_ids (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, public_number INTEGER NOT NULL UNIQUE, routing_id TEXT NOT NULL UNIQUE COLLATE NOCASE, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, revoked_at INTEGER, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS smtp_settings (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), enabled INTEGER NOT NULL DEFAULT 0, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 587, security TEXT NOT NULL DEFAULT 'starttls', username TEXT, password TEXT, from_name TEXT NOT NULL DEFAULT 'MirrorProxy', from_address TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS acme_settings (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), settings_json TEXT NOT NULL, cloudflare_api_token TEXT NOT NULL DEFAULT '', cloudflare_api_key TEXT NOT NULL DEFAULT '', cloudflare_email TEXT NOT NULL DEFAULT '', aliyun_access_key_id TEXT NOT NULL DEFAULT '', aliyun_access_key_secret TEXT NOT NULL DEFAULT '', tencent_secret_id TEXT NOT NULL DEFAULT '', tencent_secret_key TEXT NOT NULL DEFAULT '', route53_access_key_id TEXT NOT NULL DEFAULT '', route53_secret_access_key TEXT NOT NULL DEFAULT '', route53_session_token TEXT NOT NULL DEFAULT '', webhook_bearer_token TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS email_invitations (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, display_name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'pending', expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, accepted_at INTEGER, revoked_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS email_login_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, code_hash TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, invitation_id INTEGER, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL, FOREIGN KEY(invitation_id) REFERENCES email_invitations(id) ON DELETE SET NULL)",
     "CREATE TABLE IF NOT EXISTS email_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, html_body TEXT, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, last_error TEXT, created_at INTEGER NOT NULL, sent_at INTEGER)",
@@ -3068,6 +3354,10 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS traffic_daily (day TEXT NOT NULL, target_code TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, target_code))",
     "CREATE TABLE IF NOT EXISTS traffic_monthly (month TEXT PRIMARY KEY, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, upstream_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, quota_exceeded INTEGER NOT NULL DEFAULT 0)",
     "CREATE TABLE IF NOT EXISTS request_events (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, target_code TEXT, method TEXT NOT NULL, path TEXT NOT NULL, status_code INTEGER NOT NULL, response_bytes INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS ip_access_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL CHECK(action IN ('allow', 'deny')), input_kind TEXT NOT NULL CHECK(input_kind IN ('ip', 'cidr')), network TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(action, network))",
+    "CREATE INDEX IF NOT EXISTS idx_ip_access_rules_enabled ON ip_access_rules(enabled, action)",
+    "CREATE TABLE IF NOT EXISTS geo_traffic_daily (day TEXT NOT NULL, target_code TEXT NOT NULL, country_code TEXT NOT NULL, country TEXT NOT NULL, province TEXT NOT NULL, city TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, billed_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, target_code, country_code, country, province, city))",
+    "CREATE INDEX IF NOT EXISTS idx_geo_traffic_daily_region ON geo_traffic_daily(day, country_code, province, city)",
     "CREATE TABLE IF NOT EXISTS config_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, username TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS source_health (target_code TEXT PRIMARY KEY, adapter TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER, latency_ms INTEGER, checked_at INTEGER NOT NULL, error TEXT)",
     "CREATE TABLE IF NOT EXISTS source_endpoint_health (target_code TEXT NOT NULL, position INTEGER NOT NULL, endpoint TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER, latency_ms INTEGER, checked_at INTEGER NOT NULL, error TEXT, PRIMARY KEY(target_code, position))",
@@ -3084,6 +3374,19 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS user_auth_flows_expires_idx ON user_auth_flows(expires_at)",
     "CREATE INDEX IF NOT EXISTS request_events_created_at_idx ON request_events(created_at)",
 ];
+
+fn ip_access_rule_from_row(row: SqliteRow) -> Result<IpAccessRule, sqlx::Error> {
+    Ok(IpAccessRule {
+        id: row.try_get("id")?,
+        action: row.try_get("action")?,
+        input_kind: row.try_get("input_kind")?,
+        network: row.try_get("network")?,
+        note: row.try_get("note")?,
+        enabled: row.try_get::<i64, _>("enabled")? != 0,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -3683,11 +3986,13 @@ mod tests {
                 path: "/npm/react",
                 status_code: 200,
                 response_bytes: 1024,
+                delivered_response_bytes: 1024,
                 stream_error: false,
                 reserved_bytes: 0,
                 user_id: None,
                 group_id: None,
                 request_event_retention_days: 30,
+                location: &GeoLocation::default(),
             })
             .await
             .unwrap();
@@ -3700,11 +4005,13 @@ mod tests {
                 path: "/npm/missing",
                 status_code: 404,
                 response_bytes: 12,
+                delivered_response_bytes: 12,
                 stream_error: false,
                 reserved_bytes: 0,
                 user_id: None,
                 group_id: None,
                 request_event_retention_days: 30,
+                location: &GeoLocation::default(),
             })
             .await
             .unwrap();
@@ -3716,6 +4023,81 @@ mod tests {
         assert_eq!(overview.error_count, 1);
         assert!(overview.quota_exceeded);
         assert_eq!(overview.targets[0].target_code, "npm");
+    }
+
+    #[tokio::test]
+    async fn aggregates_geo_traffic_without_storing_client_ips() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let location = GeoLocation {
+            country: Some("中国".into()),
+            province: Some("广东省".into()),
+            city: Some("深圳市".into()),
+            isp: Some("电信".into()),
+            country_code: Some("CN".into()),
+        };
+        database
+            .record_proxy_response(ProxyTrafficRecord {
+                day: "2026-07-10",
+                month: "2026-07",
+                target_code: "npm",
+                method: "GET",
+                path: "/npm/react",
+                status_code: 200,
+                response_bytes: 2048,
+                delivered_response_bytes: 1024,
+                stream_error: false,
+                reserved_bytes: 0,
+                user_id: None,
+                group_id: None,
+                request_event_retention_days: 30,
+                location: &location,
+            })
+            .await
+            .unwrap();
+        let report = database
+            .geo_traffic_overview(
+                "2026-07-01",
+                "2026-07-31",
+                Some("npm"),
+                Some("CN"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.request_count, 1);
+        assert_eq!(report.response_bytes, 1024);
+        assert_eq!(report.billed_bytes, 2048);
+        assert_eq!(report.regions[0].city, "深圳市");
+        let columns: Vec<String> = sqlx::query("PRAGMA table_info(geo_traffic_daily)")
+            .fetch_all(&database.pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get("name").unwrap())
+            .collect();
+        assert!(!columns.iter().any(|column| column.contains("ip")));
+    }
+
+    #[tokio::test]
+    async fn manages_normalized_ip_access_rules() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let rule = database
+            .create_ip_access_rule("deny", "cidr", "203.0.113.0/24", "scanner", true)
+            .await
+            .unwrap();
+        assert_eq!(
+            database.list_ip_access_rules().await.unwrap(),
+            vec![rule.clone()]
+        );
+        let updated = database
+            .update_ip_access_rule(rule.id, "deny", "cidr", "203.0.113.0/24", "disabled", false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!updated.enabled);
+        assert!(database.delete_ip_access_rule(rule.id).await.unwrap());
+        assert!(database.list_ip_access_rules().await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -3735,11 +4117,13 @@ mod tests {
                 path: "/npm/react",
                 status_code: 200,
                 response_bytes: 1,
+                delivered_response_bytes: 1,
                 stream_error: false,
                 reserved_bytes: 0,
                 user_id: None,
                 group_id: None,
                 request_event_retention_days: 1,
+                location: &GeoLocation::default(),
             })
             .await
             .unwrap();
@@ -3772,11 +4156,13 @@ mod tests {
                 path: "/npm/pkg",
                 status_code: 200,
                 response_bytes: 4,
+                delivered_response_bytes: 4,
                 stream_error: false,
                 reserved_bytes: 6,
                 user_id: None,
                 group_id: None,
                 request_event_retention_days: 30,
+                location: &GeoLocation::default(),
             })
             .await
             .unwrap();
@@ -3867,11 +4253,13 @@ mod tests {
                 path: "/npm/react",
                 status_code: 200,
                 response_bytes: 4,
+                delivered_response_bytes: 4,
                 stream_error: false,
                 reserved_bytes: 6,
                 user_id: Some(first.id),
                 group_id: Some(group.id),
                 request_event_retention_days: 30,
+                location: &GeoLocation::default(),
             })
             .await
             .unwrap();
@@ -3898,11 +4286,13 @@ mod tests {
                 path: "/npm/vue",
                 status_code: 200,
                 response_bytes: 4,
+                delivered_response_bytes: 4,
                 stream_error: false,
                 reserved_bytes: 4,
                 user_id: Some(first.id),
                 group_id: Some(group.id),
                 request_event_retention_days: 30,
+                location: &GeoLocation::default(),
             })
             .await
             .unwrap();
@@ -4234,6 +4624,45 @@ mod tests {
             records[0].endpoints[0].endpoint,
             "https://repo.example/maven2"
         );
+    }
+
+    #[tokio::test]
+    async fn stores_acme_secrets_separately_and_reloads_them() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let settings = AcmeConfig {
+            enabled: true,
+            email: "admin@example.com".to_string(),
+            domains: vec!["example.com".to_string(), "*.example.com".to_string()],
+            challenge: "dns-01".to_string(),
+            dns: crate::config::AcmeDnsConfig {
+                provider: "cloudflare".to_string(),
+                cloudflare_zone_id: "zone-id".to_string(),
+                cloudflare_api_token: "cloudflare-secret".to_string(),
+                ..crate::config::AcmeDnsConfig::default()
+            },
+            ..AcmeConfig::default()
+        };
+
+        database
+            .save_acme_settings("admin", &settings)
+            .await
+            .unwrap();
+        let stored = database.acme_settings().await.unwrap().unwrap();
+        assert_eq!(stored, settings);
+
+        let settings_json: String =
+            sqlx::query_scalar("SELECT settings_json FROM acme_settings WHERE singleton = 1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert!(!settings_json.contains("cloudflare-secret"));
+        let secret: String = sqlx::query_scalar(
+            "SELECT cloudflare_api_token FROM acme_settings WHERE singleton = 1",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+        assert_eq!(secret, "cloudflare-secret");
     }
 
     fn test_auth_provider(slug: &str, client_secret: &str) -> AuthProvider {

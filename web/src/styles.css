@@ -454,6 +454,56 @@ p {
 .operation-notice-success { color: var(--ok); background: color-mix(in srgb, var(--ok) 11%, transparent); }
 .operation-notice-error { color: color-mix(in srgb, #d34e4e 82%, var(--text)); background: color-mix(in srgb, #d34e4e 11%, transparent); }
 
+.acme-console-stack { display: grid; gap: 16px; }
+.acme-status-card { overflow: hidden; border-left: 3px solid color-mix(in srgb, var(--accent) 78%, #24c8a5); }
+.acme-status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--line); }
+.acme-status-grid > div { display: grid; min-width: 0; min-height: 74px; align-content: center; gap: 7px; padding: 13px 15px; background: var(--panel); }
+.acme-status-grid small, .acme-status-details small { color: var(--muted); font: 10px "Cascadia Mono", ui-monospace, monospace; letter-spacing: .07em; text-transform: uppercase; }
+.acme-status-grid strong, .acme-status-details code { overflow-wrap: anywhere; color: var(--text); font-size: 12px; }
+.acme-status-grid strong.ready { color: var(--ok); }
+.acme-status-details { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 10px; margin-top: 10px; }
+.acme-status-details > div { display: grid; min-width: 0; gap: 7px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--panel) 74%, transparent); }
+.acme-runtime-chip, .acme-restart-chip { display: inline-flex; align-items: center; gap: 7px; width: max-content; padding: 6px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--panel); font: 700 10px "Cascadia Mono", ui-monospace, monospace; letter-spacing: .04em; }
+.acme-runtime-chip i { width: 7px; height: 7px; border-radius: 50%; background: #8794a5; box-shadow: 0 0 0 3px color-mix(in srgb, #8794a5 14%, transparent); }
+.acme-runtime-chip.active { border-color: color-mix(in srgb, var(--ok) 34%, var(--line)); color: var(--ok); }
+.acme-runtime-chip.active i { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 14%, transparent); }
+.acme-restart-chip { border-color: color-mix(in srgb, #c58b22 40%, var(--line)); color: #a86f0a; background: color-mix(in srgb, #c58b22 8%, var(--panel)); }
+.acme-status-card .form-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+.acme-config-card { position: relative; border-top: 3px solid color-mix(in srgb, var(--accent) 62%, #24c8a5); }
+.acme-config-card::before { position: absolute; inset: 0 0 auto; height: 22px; opacity: .16; background: repeating-linear-gradient(90deg, transparent 0 18px, var(--accent) 18px 20px); content: ""; pointer-events: none; }
+.acme-managed-note { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 15px; padding: 11px 12px; border: 1px solid color-mix(in srgb, #c58b22 42%, var(--line)); border-radius: 8px; color: #9a6713; background: color-mix(in srgb, #c58b22 9%, var(--panel)); font-size: 12px; line-height: 1.55; }
+.acme-managed-note svg { flex: 0 0 auto; margin-top: 1px; }
+.acme-config-form { display: grid; gap: 16px; margin: 0; padding: 0; border: 0; }
+.acme-config-form:disabled { opacity: .72; }
+.acme-enable-toggle { display: flex; align-items: center; gap: 11px; min-height: 58px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: 9px; color: var(--text); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+.acme-enable-toggle > input { flex: 0 0 auto; width: 16px; height: 16px; accent-color: var(--accent-strong); }
+.acme-enable-toggle span { display: grid; gap: 4px; }
+.acme-enable-toggle strong { font-size: 13px; }
+.acme-enable-toggle small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.acme-config-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.acme-config-grid .wide-field { grid-column: 1 / -1; }
+.acme-config-grid label, .acme-dns-panel-head label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font: 11px "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; }
+.acme-config-grid input, .acme-config-grid select, .acme-dns-panel-head select { width: 100%; min-width: 0; min-height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: none; color: var(--text); background: var(--panel); font: inherit; }
+.acme-config-grid input:focus, .acme-config-grid select:focus, .acme-dns-panel-head select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.acme-config-grid small { color: var(--muted); font-family: inherit; line-height: 1.45; }
+.acme-https-panel { display: grid; gap: 15px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(145deg, color-mix(in srgb, var(--panel-strong) 92%, var(--accent)), var(--panel)); transition: border-color .18s ease, box-shadow .18s ease; }
+.acme-https-panel.enabled { border-color: color-mix(in srgb, var(--ok) 42%, var(--line)); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--ok) 75%, var(--accent)); }
+.acme-https-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.acme-https-panel-head > div { min-width: 0; }
+.acme-https-panel-head > div > small { color: var(--accent-strong); font: 800 9px "Cascadia Mono", ui-monospace, monospace; letter-spacing: .16em; }
+.acme-https-panel-head h5 { margin: 5px 0 4px; color: var(--text); font-size: 14px; }
+.acme-https-panel-head p { max-width: 720px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.acme-https-panel-head > label { flex: 0 0 auto; min-height: 42px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.acme-https-fields { padding-top: 14px; border-top: 1px dashed var(--line); }
+.acme-dns-panel { display: grid; gap: 14px; padding: 15px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 10px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, var(--panel)), var(--panel-strong)); }
+.acme-dns-panel-head { display: flex; align-items: end; justify-content: space-between; gap: 18px; }
+.acme-dns-panel-head > div > small { color: var(--accent-strong); font: 800 9px "Cascadia Mono", ui-monospace, monospace; letter-spacing: .16em; }
+.acme-dns-panel-head h5 { margin: 5px 0 0; color: var(--text); font-size: 14px; }
+.acme-dns-panel-head label { width: min(100%, 250px); }
+.acme-config-actions { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.acme-config-actions > span { max-width: 620px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.acme-config-actions button { flex: 0 0 auto; }
+
 .advanced-notice {
   padding: 12px 14px;
   border: 1px solid color-mix(in srgb, #d29c42 48%, var(--line));
@@ -505,7 +555,10 @@ p {
 .admin-user-controls { display: grid; gap: 10px; min-width: 0; }
 .admin-user-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .admin-user-fields label { display: grid; gap: 5px; color: var(--muted); font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; font-size: 10px; }
-.admin-user-fields input, .admin-user-fields select { width: 100%; min-height: 38px; }
+.admin-user-fields input, .admin-user-fields select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 42px; padding: 0 11px; border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line)); border-radius: 8px; outline: none; color: var(--text); background: var(--panel); font: 600 12px "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+.admin-user-fields input:hover, .admin-user-fields select:hover { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); }
+.admin-user-fields input:focus, .admin-user-fields select:focus { border-color: var(--accent); background: var(--panel-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.admin-user-fields input[type="number"] { font-variant-numeric: tabular-nums; }
 .admin-user-actions { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 10px; border-top: 1px dashed var(--line); }
 .admin-user-actions button { display: inline-flex; align-items: center; justify-content: center; width: auto; min-height: 36px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: 7px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 6%, var(--panel-strong)); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .admin-user-actions button:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel-strong)); }
@@ -901,6 +954,12 @@ p {
 .provider-registration-policy small { color: var(--muted); font-size: 11px; line-height: 1.55; }
 
 @media (max-width: 860px) {
+  .geo-filter-strip, .geo-metric-ribbon, .geo-report-grid, .geo-database-grid, .ip-access-columns { grid-template-columns: 1fr; }
+  .geo-target-options { grid-template-columns: 1fr; width: 100%; }
+  .geo-filter-strip > .primary-button { width: 100%; }
+  .ip-rule-row { grid-template-columns: 48px minmax(0, 1fr) auto; }
+  .ip-rule-actions { grid-column: 2 / -1; }
+  .geo-city-list { padding-left: 14px; }
   .provider-form { grid-template-columns: 1fr; }
   .provider-form .wide-field { grid-column: auto; }
 }
@@ -1091,6 +1150,82 @@ p {
 .stat-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 9px 0; border-bottom: 1px dashed var(--line); color: var(--muted); font-size: 12px; }
 .stat-row strong { color: var(--text); font-weight: 700; }.stat-row small { grid-column: 1 / -1; color: var(--muted); }.empty-stat { color: var(--muted); font-size: 13px; }
 
+/* Geo traffic and IP policy: a compact operations-atlas treatment that keeps
+   the existing console's restrained industrial language. */
+.geo-report-panel, .ip-access-layout { display: grid; gap: 18px; }
+.geo-filter-strip { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)) auto; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%); align-items: end; }
+.geo-filter-field { position: relative; display: grid; min-width: 0; gap: 7px; }
+.geo-filter-field > span { color: var(--muted); font: 700 10px/1.2 "Cascadia Mono", ui-monospace, monospace; letter-spacing: .09em; text-transform: uppercase; }
+.geo-filter-field input,
+.geo-target-picker summary {
+  width: 100%;
+  height: 46px;
+  box-sizing: border-box;
+  padding: 0 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: 10px;
+  outline: none;
+  color: var(--text);
+  background: var(--panel-strong);
+  font: 600 13px "Cascadia Mono", ui-monospace, monospace;
+  transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+}
+.geo-filter-field input { color-scheme: light dark; }
+.geo-filter-field input:hover,
+.geo-target-picker summary:hover { border-color: color-mix(in srgb, var(--accent) 64%, var(--line)); }
+.geo-filter-field input:focus,
+.geo-target-picker[open] summary,
+.geo-target-picker summary:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.geo-target-picker { position: relative; min-width: 0; }
+.geo-target-picker summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; }
+.geo-target-picker summary::-webkit-details-marker { display: none; }
+.geo-target-picker summary svg { flex: 0 0 auto; color: var(--accent-strong); transition: transform .18s ease; }
+.geo-target-picker[open] summary svg { transform: rotate(180deg); }
+.geo-target-options { position: absolute; z-index: 30; top: calc(100% + 8px); left: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; width: min(440px, 82vw); max-height: 292px; overflow: auto; padding: 8px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); border-radius: 12px; background: var(--panel-strong); box-shadow: 0 18px 45px color-mix(in srgb, #071b24 22%, transparent); }
+.geo-target-options button { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; min-height: 36px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; color: var(--text); background: transparent; cursor: pointer; font: 600 11px "Cascadia Mono", ui-monospace, monospace; text-align: left; }
+.geo-target-options button:hover { border-color: var(--line); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.geo-target-options button.active { border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.geo-target-options small { color: var(--muted); font-size: 8px; letter-spacing: .08em; }
+.geo-filter-strip > .primary-button { min-height: 46px; border-radius: 10px; }
+.geo-metric-ribbon { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--line); }
+.geo-metric-ribbon .console-metric { margin: 0; border: 0; border-radius: 0; background: var(--surface); }
+.geo-report-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, .8fr); gap: 18px; align-items: start; }
+.geo-atlas-card, .geo-trend-card { min-width: 0; }
+.geo-country-list { display: grid; gap: 8px; }
+.geo-country-row { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--surface) 96%, var(--accent) 4%); }
+.geo-country-row summary { position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 13px 14px 16px; cursor: pointer; list-style: none; }
+.geo-country-row summary::-webkit-details-marker { display: none; }
+.geo-country-row summary > span:nth-child(2) { display: grid; gap: 2px; }
+.geo-country-row summary small { color: var(--muted); font: 10px/1.3 "Cascadia Mono", ui-monospace, monospace; }
+.geo-country-row summary i { position: absolute; bottom: 0; left: 0; width: var(--geo-share); height: 3px; background: linear-gradient(90deg, var(--accent), #24c8a5); transition: width .35s ease; }
+.geo-rank { color: var(--muted); font: 700 11px "Cascadia Mono", ui-monospace, monospace; }
+.geo-traffic-value { font: 700 12px "Cascadia Mono", ui-monospace, monospace; }
+.geo-city-list { display: grid; padding: 4px 14px 12px 60px; border-top: 1px dashed var(--line); }
+.geo-city-list > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
+.geo-city-list > div:last-child { border: 0; }.geo-city-list small { grid-column: 1 / -1; color: var(--muted); font-size: 10px; }
+.geo-trend-chart { display: flex; height: 270px; gap: 5px; align-items: end; padding-top: 18px; overflow-x: auto; }
+.geo-trend-chart > div { display: grid; grid-template-rows: 1fr auto; align-items: end; min-width: 20px; height: 100%; gap: 7px; }
+.geo-trend-chart span { display: block; min-height: 3px; border-radius: 4px 4px 1px 1px; background: linear-gradient(180deg, #24c8a5, var(--accent)); box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 30%, transparent); }
+.geo-trend-chart small { writing-mode: vertical-rl; color: var(--muted); font: 9px "Cascadia Mono", ui-monospace, monospace; }
+.geo-database-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.geo-database-card { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 16px 18px; border: 1px solid var(--line); border-left: 4px solid var(--warning, #d89a33); border-radius: 14px; background: var(--surface); }
+.geo-database-card.ready { border-left-color: #24b58f; }.geo-database-card > div { display: grid; gap: 3px; }.geo-database-card span { color: var(--muted); font: 700 10px "Cascadia Mono", ui-monospace, monospace; letter-spacing: .12em; }.geo-database-card small { color: var(--muted); font-size: 10px; }
+.geo-update-button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; min-height: 39px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line)); border-radius: 9px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 7%, var(--panel-strong)); cursor: pointer; font: 700 11px "Cascadia Mono", ui-monospace, monospace; transition: border-color .16s ease, background .16s ease, transform .16s ease, box-shadow .16s ease; }
+.geo-update-button:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel-strong)); box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 14%, transparent); transform: translateY(-1px); }
+.geo-update-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.geo-update-button:disabled { cursor: wait; opacity: .55; }
+.ip-access-columns { display: grid; grid-template-columns: minmax(320px, .75fr) minmax(0, 1.25fr); gap: 18px; align-items: start; }
+.ip-lookup-form { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+.ip-lookup-form input { width: 100%; min-width: 0; min-height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line)); border-radius: 9px; outline: none; color: var(--text); background: var(--panel-strong); font: 600 13px "Cascadia Mono", ui-monospace, monospace; transition: border-color .16s ease, box-shadow .16s ease; }
+.ip-lookup-form input:hover { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); }
+.ip-lookup-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.ip-lookup-result { display: grid; gap: 5px; margin-top: 14px; padding: 15px; border: 1px dashed var(--line); border-radius: 12px; background: color-mix(in srgb, var(--surface) 92%, #24c8a5 8%); }.ip-lookup-result strong { font-size: 15px; }.ip-lookup-result small { color: var(--muted); }
+.ip-rule-form .form-actions { display: flex; gap: 10px; margin-top: 14px; }
+.ip-rule-list { display: grid; gap: 9px; }
+.ip-rule-row { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 13px; border: 1px solid var(--line); border-radius: 12px; border-left: 3px solid #d35d67; }
+.ip-rule-row.allow { border-left-color: #24b58f; }.ip-rule-row > div { display: grid; gap: 4px; }.ip-rule-row small { color: var(--muted); font-size: 10px; }.ip-rule-action { font: 800 10px "Cascadia Mono", ui-monospace, monospace; letter-spacing: .08em; }.ip-rule-row.deny .ip-rule-action { color: #d35d67; }.ip-rule-row.allow .ip-rule-action { color: #24b58f; }
+.mini-switch { display: grid; place-items: center; gap: 2px; color: var(--muted); font: 9px "Cascadia Mono", ui-monospace, monospace; }.ip-rule-actions { display: flex; gap: 5px; }.ip-rule-actions button { padding: 6px 8px; font-size: 10px; }
+
 .config-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin: 20px 0; }
 .config-fields label:first-child { grid-column: auto; }
 .config-fields .wide-field { grid-column: 1 / -1; }
@@ -1129,6 +1264,10 @@ p {
 .runtime-config-fields small { color: var(--muted); font-family: inherit; font-size: 11px; line-height: 1.45; }
 .runtime-config-fields .toggle-field { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--panel); font-family: inherit; font-size: 13px; }
 .runtime-config-fields .toggle-field input { width: auto; accent-color: var(--accent-strong); }
+.runtime-config-group-danger { border-color: color-mix(in srgb, #c44d42 48%, var(--line)); background: color-mix(in srgb, #c44d42 6%, var(--panel-strong)); }
+.runtime-config-fields .tls-insecure-toggle { border-color: color-mix(in srgb, #c44d42 42%, var(--line)); color: #a53b32; }
+.tls-danger-note { display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; border: 1px solid color-mix(in srgb, #c44d42 45%, var(--line)); border-radius: 7px; color: #a53b32; background: color-mix(in srgb, #c44d42 10%, transparent); font-size: 12px; line-height: 1.55; }
+.tls-danger-note svg { flex: 0 0 auto; margin-top: 1px; }
 
 .security-form {
   display: grid;
@@ -1556,6 +1695,8 @@ p {
   .registration-policy { border-right: 0; border-bottom: 1px solid var(--line); }
   .admin-tab-toolbar { align-items: stretch; flex-direction: column; }
   .inline-form { grid-template-columns: 1fr; }
+  .acme-status-grid, .acme-config-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .acme-status-details { grid-template-columns: 1fr; }
   .admin-login-card {
     grid-template-areas: "intro" "username" "password" "feedback" "actions";
     grid-template-columns: 1fr;
@@ -1636,7 +1777,11 @@ p {
   .admin-tab-panel { margin: 0 16px; }
   .settings-card-head { align-items: stretch; flex-direction: column; }
   .console-actions { flex-wrap: wrap; }
-  .config-fields, .stats-columns, .security-credentials-grid, .admin-user-summary, .admin-user-fields, .runtime-config-groups, .runtime-config-fields.paired-fields { grid-template-columns: 1fr; }
+  .config-fields, .stats-columns, .security-credentials-grid, .admin-user-summary, .admin-user-fields, .runtime-config-groups, .runtime-config-fields.paired-fields, .acme-status-grid, .acme-config-grid { grid-template-columns: 1fr; }
+  .acme-config-grid .wide-field { grid-column: auto; }
+  .acme-dns-panel-head, .acme-https-panel-head, .acme-config-actions { align-items: stretch; flex-direction: column; }
+  .acme-dns-panel-head label { width: 100%; }
+  .acme-config-actions button { width: 100%; justify-content: center; }
   .admin-user-identity { padding-right: 0; padding-bottom: 14px; border-right: 0; border-bottom: 1px solid var(--line); }
   .runtime-config-group-wide { grid-column: auto; }
   .compact-form, .provider-advanced-grid { grid-template-columns: 1fr; }

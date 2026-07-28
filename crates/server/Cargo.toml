@@ -7,15 +7,21 @@ repository.workspace = true
 
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
 argon2 = "0.5"
 axum = { version = "0.8", features = ["macros"] }
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 bytes = "1"
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
 http = "1"
+hmac = "0.12"
+hex = "0.4"
 include_dir = "0.7"
+instant-acme = "0.8.5"
 lettre = { version = "0.11.22", default-features = false, features = ["builder", "pool", "smtp-transport", "tokio1-rustls-tls"] }
 mime_guess = "2"
 mirrorproxy-catalog = { path = "../catalog" }
@@ -29,15 +35,18 @@ openidconnect = "4"
 # Build it from source so MUSL release artifacts do not require a target sysroot.
 openssl-sys = { version = "0.9", features = ["vendored"] }
 prometheus = "0.14"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "gzip", "brotli", "deflate", "json", "socks"] }
+quick-xml = "0.39.4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "rustls-tls-native-roots", "stream", "gzip", "brotli", "deflate", "json", "socks"] }
+rustls = "0.23.41"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha1 = "0.10"
 sha2 = "0.10"
 sqids = "0.4.2"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 toml = "0.9"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 tracing = "0.1"
@@ -46,6 +55,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
+x509-parser = "0.18"
 
 [dev-dependencies]
+rcgen = "0.14.8"
 tower = { version = "0.5", features = ["util"] }

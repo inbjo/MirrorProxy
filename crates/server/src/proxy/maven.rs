@@ -142,6 +142,14 @@ mod tests {
             admin_login_limiter: Arc::new(crate::AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
+            geoip: Arc::new(crate::geoip::GeoIpService::new(
+                false,
+                "missing-v4.xdb".into(),
+                "missing-v6.xdb".into(),
+            )),
+            ip_access_policy: Arc::new(RwLock::new(crate::geoip::IpAccessPolicy::default())),
+            acme_environment_managed: false,
+            acme: crate::test_acme_manager(),
         }
     }
 

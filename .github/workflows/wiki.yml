@@ -1,0 +1,41 @@
+name: Publish Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/wiki/**"
+      - ".github/workflows/wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirrorproxy-wiki
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Publish canonical Wiki pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          wiki_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+          if git clone "$wiki_url" wiki-repository; then
+            find wiki-repository -maxdepth 1 -type f -name '*.md' -delete
+          else
+            mkdir wiki-repository
+            git -C wiki-repository init
+            git -C wiki-repository remote add origin "$wiki_url"
+          fi
+          cp docs/wiki/*.md wiki-repository/
+          git -C wiki-repository config user.name github-actions[bot]
+          git -C wiki-repository config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C wiki-repository add .
+          git -C wiki-repository diff --cached --quiet && exit 0
+          git -C wiki-repository commit -m "docs: sync project wiki"
+          git -C wiki-repository push origin HEAD:master

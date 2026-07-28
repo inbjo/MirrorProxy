@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fmt, net::IpAddr, path::Path};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    net::{IpAddr, SocketAddr},
+    path::Path,
+};
 
 use chrono_tz::Tz;
 use reqwest::Url;
@@ -27,6 +32,10 @@ pub struct Config {
     #[serde(default)]
     pub cache: CacheConfig,
     #[serde(default)]
+    pub geoip: GeoIpConfig,
+    #[serde(default)]
+    pub acme: AcmeConfig,
+    #[serde(default)]
     pub quota: QuotaConfig,
     #[serde(default)]
     pub user_access: UserAccessConfig,
@@ -39,6 +48,10 @@ pub struct Config {
     /// redact its password before returning configuration to the browser.
     #[serde(default)]
     pub outbound_proxy: OutboundProxyConfig,
+    /// TLS trust settings for mirror-upstream requests only. Control-plane
+    /// clients such as ACME DNS APIs always retain certificate verification.
+    #[serde(default)]
+    pub upstream_tls: UpstreamTlsConfig,
     #[serde(default)]
     pub forward_client_authorization: bool,
     /// Credentials are deliberately excluded from API responses and SQLite runtime
@@ -181,6 +194,168 @@ pub struct CacheConfig {
     pub max_total_mb: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeoIpConfig {
+    #[serde(default = "default_geoip_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_geoip_ipv4_path")]
+    pub ipv4_path: String,
+    #[serde(default = "default_geoip_ipv6_path")]
+    pub ipv6_path: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcmeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default = "default_acme_challenge")]
+    pub challenge: String,
+    #[serde(default = "default_acme_directory_url")]
+    pub directory_url: String,
+    #[serde(default = "default_acme_storage_directory")]
+    pub storage_directory: String,
+    #[serde(default = "default_acme_renew_before_days")]
+    pub renew_before_days: u32,
+    #[serde(default = "default_acme_check_interval_hours")]
+    pub check_interval_hours: u32,
+    #[serde(default)]
+    pub direct_https: bool,
+    #[serde(default = "default_acme_http_listen_addr")]
+    pub http_listen_addr: String,
+    #[serde(default = "default_acme_https_listen_addr")]
+    pub https_listen_addr: String,
+    #[serde(default = "default_true")]
+    pub redirect_http_to_https: bool,
+    #[serde(default)]
+    pub dns: AcmeDnsConfig,
+}
+
+impl fmt::Debug for AcmeConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AcmeConfig")
+            .field("enabled", &self.enabled)
+            .field("email", &self.email)
+            .field("domains", &self.domains)
+            .field("challenge", &self.challenge)
+            .field("directory_url", &self.directory_url)
+            .field("storage_directory", &self.storage_directory)
+            .field("renew_before_days", &self.renew_before_days)
+            .field("check_interval_hours", &self.check_interval_hours)
+            .field("direct_https", &self.direct_https)
+            .field("http_listen_addr", &self.http_listen_addr)
+            .field("https_listen_addr", &self.https_listen_addr)
+            .field("redirect_http_to_https", &self.redirect_http_to_https)
+            .field("dns", &self.dns)
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcmeDnsConfig {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub cloudflare_zone_id: String,
+    /// Secrets are accepted from TOML for self-contained deployments, but are
+    /// never returned by configuration APIs or written into runtime snapshots.
+    #[serde(default, skip_serializing)]
+    pub cloudflare_api_token: String,
+    #[serde(default, skip_serializing)]
+    pub cloudflare_api_key: String,
+    #[serde(default, skip_serializing)]
+    pub cloudflare_email: String,
+    #[serde(default)]
+    pub aliyun_domain: String,
+    #[serde(default, skip_serializing)]
+    pub aliyun_access_key_id: String,
+    #[serde(default, skip_serializing)]
+    pub aliyun_access_key_secret: String,
+    #[serde(default)]
+    pub tencent_domain: String,
+    #[serde(default, skip_serializing)]
+    pub tencent_secret_id: String,
+    #[serde(default, skip_serializing)]
+    pub tencent_secret_key: String,
+    #[serde(default)]
+    pub route53_hosted_zone_id: String,
+    #[serde(default, skip_serializing)]
+    pub route53_access_key_id: String,
+    #[serde(default, skip_serializing)]
+    pub route53_secret_access_key: String,
+    #[serde(default, skip_serializing)]
+    pub route53_session_token: String,
+    #[serde(default)]
+    pub webhook_url: String,
+    #[serde(default, skip_serializing)]
+    pub webhook_bearer_token: String,
+    #[serde(default = "default_acme_dns_propagation_delay_secs")]
+    pub propagation_delay_secs: u64,
+}
+
+impl fmt::Debug for AcmeDnsConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AcmeDnsConfig")
+            .field("provider", &self.provider)
+            .field("cloudflare_zone_id", &self.cloudflare_zone_id)
+            .field(
+                "cloudflare_api_token",
+                &(!self.cloudflare_api_token.is_empty()).then_some("[redacted]"),
+            )
+            .field(
+                "cloudflare_api_key",
+                &(!self.cloudflare_api_key.is_empty()).then_some("[redacted]"),
+            )
+            .field(
+                "cloudflare_email",
+                &(!self.cloudflare_email.is_empty()).then_some("[redacted]"),
+            )
+            .field("aliyun_domain", &self.aliyun_domain)
+            .field(
+                "aliyun_access_key_id",
+                &(!self.aliyun_access_key_id.is_empty()).then_some("[redacted]"),
+            )
+            .field(
+                "aliyun_access_key_secret",
+                &(!self.aliyun_access_key_secret.is_empty()).then_some("[redacted]"),
+            )
+            .field("tencent_domain", &self.tencent_domain)
+            .field(
+                "tencent_secret_id",
+                &(!self.tencent_secret_id.is_empty()).then_some("[redacted]"),
+            )
+            .field(
+                "tencent_secret_key",
+                &(!self.tencent_secret_key.is_empty()).then_some("[redacted]"),
+            )
+            .field("route53_hosted_zone_id", &self.route53_hosted_zone_id)
+            .field(
+                "route53_access_key_id",
+                &(!self.route53_access_key_id.is_empty()).then_some("[redacted]"),
+            )
+            .field(
+                "route53_secret_access_key",
+                &(!self.route53_secret_access_key.is_empty()).then_some("[redacted]"),
+            )
+            .field(
+                "route53_session_token",
+                &(!self.route53_session_token.is_empty()).then_some("[redacted]"),
+            )
+            .field("webhook_url", &self.webhook_url)
+            .field(
+                "webhook_bearer_token",
+                &(!self.webhook_bearer_token.is_empty()).then_some("[redacted]"),
+            )
+            .field("propagation_delay_secs", &self.propagation_delay_secs)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaConfig {
     #[serde(default)]
@@ -253,6 +428,17 @@ pub struct OutboundProxyConfig {
     pub password: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct UpstreamTlsConfig {
+    /// Additional PEM bundles containing private or enterprise CA certificates.
+    #[serde(default)]
+    pub ca_certificates: Vec<String>,
+    /// Debug-only escape hatch. This disables certificate validation for every
+    /// configured mirror upstream, so it must remain opt-in.
+    #[serde(default)]
+    pub insecure_skip_verify: bool,
+}
+
 impl fmt::Debug for OutboundProxyConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let endpoint = Url::parse(&self.url)
@@ -295,6 +481,7 @@ impl Config {
 
         config.public_base_url = config.public_base_url.trim_end_matches('/').to_string();
         config.apply_env_overrides()?;
+        config.acme.normalize();
         config.validate()?;
         Ok(config)
     }
@@ -360,6 +547,135 @@ impl Config {
             if let Ok(max_total_mb) = value.parse() {
                 self.cache.max_total_mb = max_total_mb;
             }
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_GEOIP_ENABLED") {
+            self.geoip.enabled = parse_env_bool("MIRRORPROXY_GEOIP_ENABLED", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_GEOIP_IPV4_PATH") {
+            self.geoip.ipv4_path = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_GEOIP_IPV6_PATH") {
+            self.geoip.ipv6_path = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_ENABLED") {
+            self.acme.enabled = parse_env_bool("MIRRORPROXY_ACME_ENABLED", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_EMAIL") {
+            self.acme.email = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_DOMAINS") {
+            self.acme.domains = value
+                .split(',')
+                .map(str::trim)
+                .filter(|domain| !domain.is_empty())
+                .map(ToString::to_string)
+                .collect();
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_CHALLENGE") {
+            self.acme.challenge = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_DIRECTORY_URL") {
+            self.acme.directory_url = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_STORAGE_DIRECTORY") {
+            self.acme.storage_directory = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_DIRECT_HTTPS") {
+            self.acme.direct_https = parse_env_bool("MIRRORPROXY_ACME_DIRECT_HTTPS", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_HTTP_LISTEN_ADDR") {
+            self.acme.http_listen_addr = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_HTTPS_LISTEN_ADDR") {
+            self.acme.https_listen_addr = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_REDIRECT_HTTP_TO_HTTPS") {
+            self.acme.redirect_http_to_https =
+                parse_env_bool("MIRRORPROXY_ACME_REDIRECT_HTTP_TO_HTTPS", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_DNS_PROVIDER") {
+            self.acme.dns.provider = value;
+        }
+        if let Ok(value) = std::env::var("CF_Zone_ID") {
+            self.acme.dns.cloudflare_zone_id = value;
+        }
+        if let Ok(value) = std::env::var("CF_Token") {
+            self.acme.dns.cloudflare_api_token = value;
+        }
+        if let Ok(value) = std::env::var("CF_Key") {
+            self.acme.dns.cloudflare_api_key = value;
+        }
+        if let Ok(value) = std::env::var("CF_Email") {
+            self.acme.dns.cloudflare_email = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_CLOUDFLARE_ZONE_ID") {
+            self.acme.dns.cloudflare_zone_id = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_CLOUDFLARE_API_TOKEN") {
+            self.acme.dns.cloudflare_api_token = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_CLOUDFLARE_API_KEY") {
+            self.acme.dns.cloudflare_api_key = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_CLOUDFLARE_EMAIL") {
+            self.acme.dns.cloudflare_email = value;
+        }
+        if let Ok(value) = std::env::var("Ali_Key") {
+            self.acme.dns.aliyun_access_key_id = value;
+        }
+        if let Ok(value) = std::env::var("Ali_Secret") {
+            self.acme.dns.aliyun_access_key_secret = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_ALIYUN_DOMAIN") {
+            self.acme.dns.aliyun_domain = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_ALIYUN_ACCESS_KEY_ID") {
+            self.acme.dns.aliyun_access_key_id = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_ALIYUN_ACCESS_KEY_SECRET") {
+            self.acme.dns.aliyun_access_key_secret = value;
+        }
+        if let Ok(value) = std::env::var("Tencent_SecretId") {
+            self.acme.dns.tencent_secret_id = value;
+        }
+        if let Ok(value) = std::env::var("Tencent_SecretKey") {
+            self.acme.dns.tencent_secret_key = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_TENCENT_DOMAIN") {
+            self.acme.dns.tencent_domain = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_TENCENT_SECRET_ID") {
+            self.acme.dns.tencent_secret_id = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_TENCENT_SECRET_KEY") {
+            self.acme.dns.tencent_secret_key = value;
+        }
+        if let Ok(value) = std::env::var("AWS_ACCESS_KEY_ID") {
+            self.acme.dns.route53_access_key_id = value;
+        }
+        if let Ok(value) = std::env::var("AWS_SECRET_ACCESS_KEY") {
+            self.acme.dns.route53_secret_access_key = value;
+        }
+        if let Ok(value) = std::env::var("AWS_SESSION_TOKEN") {
+            self.acme.dns.route53_session_token = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_ROUTE53_HOSTED_ZONE_ID") {
+            self.acme.dns.route53_hosted_zone_id = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_ROUTE53_ACCESS_KEY_ID") {
+            self.acme.dns.route53_access_key_id = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_ROUTE53_SECRET_ACCESS_KEY") {
+            self.acme.dns.route53_secret_access_key = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_ROUTE53_SESSION_TOKEN") {
+            self.acme.dns.route53_session_token = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_DNS_WEBHOOK_URL") {
+            self.acme.dns.webhook_url = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ACME_DNS_WEBHOOK_BEARER_TOKEN") {
+            self.acme.dns.webhook_bearer_token = value;
         }
         if let Ok(value) = std::env::var("MIRRORPROXY_QUOTA_ENABLED") {
             self.quota.enabled = matches!(
@@ -473,6 +789,13 @@ impl Config {
         if let Ok(value) = std::env::var("MIRRORPROXY_OUTBOUND_PROXY_PASSWORD") {
             self.outbound_proxy.password = (!value.is_empty()).then_some(value);
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_UPSTREAM_TLS_CA_CERTIFICATES") {
+            self.upstream_tls.ca_certificates = parse_url_list(&value);
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_UPSTREAM_TLS_INSECURE_SKIP_VERIFY") {
+            self.upstream_tls.insecure_skip_verify =
+                parse_env_bool("MIRRORPROXY_UPSTREAM_TLS_INSECURE_SKIP_VERIFY", &value)?;
+        }
         Ok(())
     }
 
@@ -503,6 +826,13 @@ impl Config {
         if self.cache.enabled && self.cache.max_total_mb == 0 {
             anyhow::bail!("cache.max_total_mb must be greater than 0 when cache is enabled");
         }
+        if self.geoip.enabled
+            && self.geoip.ipv4_path.trim().is_empty()
+            && self.geoip.ipv6_path.trim().is_empty()
+        {
+            anyhow::bail!("at least one GeoIP XDB path is required when geoip is enabled");
+        }
+        self.acme.validate()?;
         if self.quota.enabled && self.quota.timezone.trim().is_empty() {
             anyhow::bail!("quota.timezone cannot be empty when quota is enabled");
         }
@@ -523,6 +853,7 @@ impl Config {
         self.registration.validate()?;
         self.webauthn.validate()?;
         self.outbound_proxy.validate()?;
+        self.upstream_tls.validate()?;
         for (name, auth) in &self.upstream_auth {
             if self.upstream_url(name).is_none() {
                 anyhow::bail!("upstream_auth contains unknown upstream: {name}");
@@ -814,11 +1145,14 @@ impl Default for Config {
             timeout: TimeoutConfig::default(),
             rate_limit: RateLimitConfig::default(),
             cache: CacheConfig::default(),
+            geoip: GeoIpConfig::default(),
+            acme: AcmeConfig::default(),
             quota: QuotaConfig::default(),
             user_access: UserAccessConfig::default(),
             registration: RegistrationConfig::default(),
             webauthn: WebauthnConfig::default(),
             outbound_proxy: OutboundProxyConfig::default(),
+            upstream_tls: UpstreamTlsConfig::default(),
             forward_client_authorization: false,
             upstream_auth: BTreeMap::new(),
         }
@@ -969,6 +1303,61 @@ impl Default for CacheConfig {
             directory: default_cache_directory(),
             max_entry_mb: default_cache_max_entry_mb(),
             max_total_mb: default_cache_max_total_mb(),
+        }
+    }
+}
+
+impl Default for GeoIpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_geoip_enabled(),
+            ipv4_path: default_geoip_ipv4_path(),
+            ipv6_path: default_geoip_ipv6_path(),
+        }
+    }
+}
+
+impl Default for AcmeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            email: String::new(),
+            domains: Vec::new(),
+            challenge: default_acme_challenge(),
+            directory_url: default_acme_directory_url(),
+            storage_directory: default_acme_storage_directory(),
+            renew_before_days: default_acme_renew_before_days(),
+            check_interval_hours: default_acme_check_interval_hours(),
+            direct_https: false,
+            http_listen_addr: default_acme_http_listen_addr(),
+            https_listen_addr: default_acme_https_listen_addr(),
+            redirect_http_to_https: true,
+            dns: AcmeDnsConfig::default(),
+        }
+    }
+}
+
+impl Default for AcmeDnsConfig {
+    fn default() -> Self {
+        Self {
+            provider: String::new(),
+            cloudflare_zone_id: String::new(),
+            cloudflare_api_token: String::new(),
+            cloudflare_api_key: String::new(),
+            cloudflare_email: String::new(),
+            aliyun_domain: String::new(),
+            aliyun_access_key_id: String::new(),
+            aliyun_access_key_secret: String::new(),
+            tencent_domain: String::new(),
+            tencent_secret_id: String::new(),
+            tencent_secret_key: String::new(),
+            route53_hosted_zone_id: String::new(),
+            route53_access_key_id: String::new(),
+            route53_secret_access_key: String::new(),
+            route53_session_token: String::new(),
+            webhook_url: String::new(),
+            webhook_bearer_token: String::new(),
+            propagation_delay_secs: default_acme_dns_propagation_delay_secs(),
         }
     }
 }
@@ -1152,6 +1541,25 @@ impl OutboundProxyConfig {
     }
 }
 
+impl UpstreamTlsConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self
+            .ca_certificates
+            .iter()
+            .any(|path| path.trim().is_empty())
+        {
+            anyhow::bail!("upstream_tls.ca_certificates entries cannot be empty");
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for path in &self.ca_certificates {
+            if !unique.insert(path) {
+                anyhow::bail!("upstream_tls.ca_certificates contains a duplicate path: {path}");
+            }
+        }
+        Ok(())
+    }
+}
+
 impl WebauthnConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !self.enabled {
@@ -1199,6 +1607,208 @@ impl WebauthnConfig {
         }
         Ok(())
     }
+}
+
+impl AcmeConfig {
+    pub(crate) fn normalize(&mut self) {
+        self.email = self.email.trim().to_string();
+        self.domains = self
+            .domains
+            .iter()
+            .map(|domain| domain.trim().to_ascii_lowercase())
+            .filter(|domain| !domain.is_empty())
+            .collect();
+        self.challenge = self.challenge.trim().to_ascii_lowercase();
+        self.directory_url = self.directory_url.trim().to_string();
+        self.storage_directory = self.storage_directory.trim().to_string();
+        self.http_listen_addr = self.http_listen_addr.trim().to_string();
+        self.https_listen_addr = self.https_listen_addr.trim().to_string();
+        self.dns.provider = normalize_acme_dns_provider(&self.dns.provider);
+    }
+
+    pub(crate) fn preserve_blank_secrets_from(&mut self, current: &Self) {
+        let new_cloudflare_token = !self.dns.cloudflare_api_token.trim().is_empty();
+        let new_cloudflare_global = !self.dns.cloudflare_api_key.trim().is_empty()
+            || !self.dns.cloudflare_email.trim().is_empty();
+        preserve_blank(
+            &mut self.dns.cloudflare_api_token,
+            &current.dns.cloudflare_api_token,
+        );
+        preserve_blank(
+            &mut self.dns.cloudflare_api_key,
+            &current.dns.cloudflare_api_key,
+        );
+        preserve_blank(
+            &mut self.dns.cloudflare_email,
+            &current.dns.cloudflare_email,
+        );
+        if new_cloudflare_token {
+            self.dns.cloudflare_api_key.clear();
+            self.dns.cloudflare_email.clear();
+        } else if new_cloudflare_global {
+            self.dns.cloudflare_api_token.clear();
+        }
+        preserve_blank(
+            &mut self.dns.aliyun_access_key_id,
+            &current.dns.aliyun_access_key_id,
+        );
+        preserve_blank(
+            &mut self.dns.aliyun_access_key_secret,
+            &current.dns.aliyun_access_key_secret,
+        );
+        preserve_blank(
+            &mut self.dns.tencent_secret_id,
+            &current.dns.tencent_secret_id,
+        );
+        preserve_blank(
+            &mut self.dns.tencent_secret_key,
+            &current.dns.tencent_secret_key,
+        );
+        preserve_blank(
+            &mut self.dns.route53_access_key_id,
+            &current.dns.route53_access_key_id,
+        );
+        preserve_blank(
+            &mut self.dns.route53_secret_access_key,
+            &current.dns.route53_secret_access_key,
+        );
+        preserve_blank(
+            &mut self.dns.route53_session_token,
+            &current.dns.route53_session_token,
+        );
+        preserve_blank(
+            &mut self.dns.webhook_bearer_token,
+            &current.dns.webhook_bearer_token,
+        );
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.direct_https && !self.enabled {
+            anyhow::bail!("acme.direct_https requires ACME to be enabled");
+        }
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.email.trim().is_empty() || !self.email.contains('@') {
+            anyhow::bail!("acme.email must contain a valid ACME contact email");
+        }
+        if self.domains.is_empty() || self.domains.iter().any(|domain| !valid_acme_domain(domain)) {
+            anyhow::bail!("acme.domains must contain valid lowercase DNS names");
+        }
+        if self.storage_directory.trim().is_empty() {
+            anyhow::bail!("acme.storage_directory cannot be empty");
+        }
+        if self.renew_before_days == 0 || self.check_interval_hours == 0 {
+            anyhow::bail!("ACME renewal intervals must be greater than zero");
+        }
+        if self.direct_https {
+            let http_addr = self
+                .http_listen_addr
+                .parse::<SocketAddr>()
+                .map_err(|_| anyhow::anyhow!("acme.http_listen_addr must be a socket address"))?;
+            let https_addr = self
+                .https_listen_addr
+                .parse::<SocketAddr>()
+                .map_err(|_| anyhow::anyhow!("acme.https_listen_addr must be a socket address"))?;
+            if http_addr == https_addr {
+                anyhow::bail!("ACME HTTP and HTTPS listen addresses must be different");
+            }
+        }
+        let directory = Url::parse(&self.directory_url)
+            .map_err(|error| anyhow::anyhow!("acme.directory_url is invalid: {error}"))?;
+        if directory.scheme() != "https" || directory.host_str().is_none() {
+            anyhow::bail!("acme.directory_url must be an HTTPS URL");
+        }
+        match self.challenge.as_str() {
+            "http-01" => {
+                if self.domains.iter().any(|domain| domain.starts_with("*.")) {
+                    anyhow::bail!("wildcard ACME domains require the dns-01 challenge");
+                }
+            }
+            "dns-01" => match self.dns.provider.as_str() {
+                "cloudflare" => {
+                    let token = !self.dns.cloudflare_api_token.trim().is_empty();
+                    let global_key = !self.dns.cloudflare_api_key.trim().is_empty()
+                        && !self.dns.cloudflare_email.trim().is_empty();
+                    if self.dns.cloudflare_zone_id.trim().is_empty() || (!token && !global_key) {
+                        anyhow::bail!("Cloudflare DNS-01 requires a zone ID and either an API token or email/global API key");
+                    }
+                }
+                "aliyun" => {
+                    if !valid_dns_zone(&self.dns.aliyun_domain)
+                        || self.dns.aliyun_access_key_id.trim().is_empty()
+                        || self.dns.aliyun_access_key_secret.trim().is_empty()
+                    {
+                        anyhow::bail!("Alibaba Cloud DNS-01 requires a managed domain, AccessKey ID, and AccessKey secret");
+                    }
+                }
+                "tencent" => {
+                    if !valid_dns_zone(&self.dns.tencent_domain)
+                        || self.dns.tencent_secret_id.trim().is_empty()
+                        || self.dns.tencent_secret_key.trim().is_empty()
+                    {
+                        anyhow::bail!("Tencent DNSPod DNS-01 requires a managed domain, SecretId, and SecretKey");
+                    }
+                }
+                "route53" => {
+                    if self.dns.route53_hosted_zone_id.trim().is_empty()
+                        || self.dns.route53_access_key_id.trim().is_empty()
+                        || self.dns.route53_secret_access_key.trim().is_empty()
+                    {
+                        anyhow::bail!("AWS Route53 DNS-01 requires a hosted zone ID, access key ID, and secret access key");
+                    }
+                }
+                "webhook" => {
+                    validate_http_url("acme.dns.webhook_url", &self.dns.webhook_url)?;
+                }
+                _ => anyhow::bail!(
+                    "acme.dns.provider must be cloudflare, aliyun, tencent, route53, or webhook"
+                ),
+            },
+            _ => anyhow::bail!("acme.challenge must be http-01 or dns-01"),
+        }
+        Ok(())
+    }
+}
+
+fn preserve_blank(next: &mut String, current: &str) {
+    if next.trim().is_empty() {
+        next.clear();
+        next.push_str(current);
+    }
+}
+
+fn normalize_acme_dns_provider(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "dns_cf" => "cloudflare",
+        "dns_ali" => "aliyun",
+        "dns_tencent" | "dns_dp" => "tencent",
+        "dns_aws" => "route53",
+        value => value,
+    }
+    .to_string()
+}
+
+fn valid_dns_zone(value: &str) -> bool {
+    !value.starts_with("*.") && valid_acme_domain(value)
+}
+
+fn valid_acme_domain(value: &str) -> bool {
+    let domain = value.strip_prefix("*.").unwrap_or(value);
+    !domain.is_empty()
+        && domain == domain.to_ascii_lowercase()
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && domain.contains('.')
+        && !domain.contains("..")
+        && domain.split('.').all(|label| {
+            !label.is_empty()
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        })
 }
 
 fn default_listen_addr() -> String {
@@ -1249,6 +1859,42 @@ fn default_cache_max_entry_mb() -> u64 {
 }
 fn default_cache_max_total_mb() -> u64 {
     256
+}
+fn default_geoip_enabled() -> bool {
+    true
+}
+fn default_geoip_ipv4_path() -> String {
+    "geoip/ip2region_v4.xdb".to_string()
+}
+fn default_geoip_ipv6_path() -> String {
+    "geoip/ip2region_v6.xdb".to_string()
+}
+fn default_acme_challenge() -> String {
+    "http-01".to_string()
+}
+fn default_acme_directory_url() -> String {
+    "https://acme-v02.api.letsencrypt.org/directory".to_string()
+}
+fn default_acme_storage_directory() -> String {
+    "acme".to_string()
+}
+fn default_acme_renew_before_days() -> u32 {
+    30
+}
+fn default_acme_check_interval_hours() -> u32 {
+    12
+}
+fn default_acme_http_listen_addr() -> String {
+    "0.0.0.0:80".to_string()
+}
+fn default_acme_https_listen_addr() -> String {
+    "0.0.0.0:443".to_string()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_acme_dns_propagation_delay_secs() -> u64 {
+    30
 }
 
 fn default_enabled_proxies() -> Vec<String> {
@@ -1645,6 +2291,10 @@ url = "socks5h://127.0.0.1:1080"
 no_proxy = ["localhost", "127.0.0.1"]
 username = "proxy-user"
 password = "proxy-password"
+
+[upstream_tls]
+ca_certificates = ["/etc/mirrorproxy/ca/company.pem"]
+insecure_skip_verify = true
 "#,
         )
         .unwrap();
@@ -1652,6 +2302,24 @@ password = "proxy-password"
         assert!(config.validate().is_ok());
         assert!(config.outbound_proxy.enabled);
         assert_eq!(config.outbound_proxy.no_proxy.len(), 2);
+        assert_eq!(
+            config.upstream_tls.ca_certificates,
+            ["/etc/mirrorproxy/ca/company.pem"]
+        );
+        assert!(config.upstream_tls.insecure_skip_verify);
+    }
+
+    #[test]
+    fn rejects_empty_or_duplicate_upstream_tls_ca_paths() {
+        let mut config = Config::default();
+        config.upstream_tls.ca_certificates = vec![String::new()];
+        assert!(config.validate().is_err());
+
+        config.upstream_tls.ca_certificates = vec![
+            "/etc/mirrorproxy/ca/company.pem".to_string(),
+            "/etc/mirrorproxy/ca/company.pem".to_string(),
+        ];
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -1669,6 +2337,11 @@ password = "proxy-password"
             ("MIRRORPROXY_OUTBOUND_PROXY_NO_PROXY", "localhost,127.0.0.1"),
             ("MIRRORPROXY_OUTBOUND_PROXY_USERNAME", "proxy-user"),
             ("MIRRORPROXY_OUTBOUND_PROXY_PASSWORD", "proxy-password"),
+            (
+                "MIRRORPROXY_UPSTREAM_TLS_CA_CERTIFICATES",
+                "/etc/mirrorproxy/ca/one.pem,/etc/mirrorproxy/ca/two.pem",
+            ),
+            ("MIRRORPROXY_UPSTREAM_TLS_INSECURE_SKIP_VERIFY", "true"),
             ("MIRRORPROXY_REGISTRATION_MODE", "domain_allowlist"),
             ("MIRRORPROXY_ALLOWED_EMAIL_DOMAINS", "corp.example"),
             ("MIRRORPROXY_EMAIL_TOKEN_TTL_MINUTES", "15"),
@@ -1695,6 +2368,11 @@ password = "proxy-password"
             config.outbound_proxy.password.as_deref(),
             Some("proxy-password")
         );
+        assert_eq!(
+            config.upstream_tls.ca_certificates,
+            ["/etc/mirrorproxy/ca/one.pem", "/etc/mirrorproxy/ca/two.pem"]
+        );
+        assert!(config.upstream_tls.insecure_skip_verify);
         assert_eq!(config.registration.mode, "domain_allowlist");
         assert_eq!(config.registration.allowed_email_domains, ["corp.example"]);
         assert_eq!(config.registration.email_token_ttl_minutes, 15);
@@ -2132,5 +2810,199 @@ password = "proxy-password"
             .validate()
             .is_err());
         }
+    }
+
+    #[test]
+    fn validates_http01_and_rejects_wildcards() {
+        let valid = AcmeConfig {
+            enabled: true,
+            email: "admin@example.com".to_string(),
+            domains: vec!["mirror.example.com".to_string()],
+            ..AcmeConfig::default()
+        };
+        assert!(valid.validate().is_ok());
+
+        let wildcard = AcmeConfig {
+            domains: vec!["*.example.com".to_string()],
+            ..valid
+        };
+        assert!(wildcard.validate().is_err());
+    }
+
+    #[test]
+    fn validates_direct_https_listener_configuration() {
+        let valid = AcmeConfig {
+            enabled: true,
+            email: "admin@example.com".to_string(),
+            domains: vec!["mirror.example.com".to_string()],
+            direct_https: true,
+            http_listen_addr: "0.0.0.0:80".to_string(),
+            https_listen_addr: "0.0.0.0:443".to_string(),
+            ..AcmeConfig::default()
+        };
+        assert!(valid.validate().is_ok());
+
+        let disabled = AcmeConfig {
+            enabled: false,
+            ..valid.clone()
+        };
+        assert!(disabled.validate().is_err());
+
+        let same_address = AcmeConfig {
+            https_listen_addr: valid.http_listen_addr.clone(),
+            ..valid.clone()
+        };
+        assert!(same_address.validate().is_err());
+
+        let invalid_address = AcmeConfig {
+            https_listen_addr: "localhost:443".to_string(),
+            ..valid
+        };
+        assert!(invalid_address.validate().is_err());
+    }
+
+    #[test]
+    fn validates_cloudflare_dns01_for_wildcards() {
+        let valid = AcmeConfig {
+            enabled: true,
+            email: "admin@example.com".to_string(),
+            domains: vec!["example.com".to_string(), "*.example.com".to_string()],
+            challenge: "dns-01".to_string(),
+            dns: AcmeDnsConfig {
+                provider: "cloudflare".to_string(),
+                cloudflare_zone_id: "zone-id".to_string(),
+                cloudflare_api_token: "secret".to_string(),
+                ..AcmeDnsConfig::default()
+            },
+            ..AcmeConfig::default()
+        };
+        assert!(valid.validate().is_ok());
+
+        let missing_token = AcmeConfig {
+            dns: AcmeDnsConfig {
+                cloudflare_api_token: String::new(),
+                ..valid.dns.clone()
+            },
+            ..valid
+        };
+        assert!(missing_token.validate().is_err());
+    }
+
+    #[test]
+    fn acme_dns_secrets_are_not_serialized() {
+        let config = AcmeDnsConfig {
+            provider: "cloudflare".to_string(),
+            cloudflare_zone_id: "zone-id".to_string(),
+            cloudflare_api_token: "cloudflare-secret".to_string(),
+            aliyun_access_key_id: "aliyun-id".to_string(),
+            aliyun_access_key_secret: "aliyun-secret".to_string(),
+            tencent_secret_id: "tencent-id".to_string(),
+            tencent_secret_key: "tencent-secret".to_string(),
+            route53_access_key_id: "aws-id".to_string(),
+            route53_secret_access_key: "aws-secret".to_string(),
+            route53_session_token: "aws-token".to_string(),
+            webhook_bearer_token: "webhook-secret".to_string(),
+            ..AcmeDnsConfig::default()
+        };
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(!serialized.contains("cloudflare-secret"));
+        assert!(!serialized.contains("aliyun-id"));
+        assert!(!serialized.contains("aliyun-secret"));
+        assert!(!serialized.contains("tencent-id"));
+        assert!(!serialized.contains("tencent-secret"));
+        assert!(!serialized.contains("aws-id"));
+        assert!(!serialized.contains("aws-secret"));
+        assert!(!serialized.contains("aws-token"));
+        assert!(!serialized.contains("webhook-secret"));
+    }
+
+    #[test]
+    fn acme_admin_updates_preserve_blank_secrets_and_switch_cloudflare_auth_modes() {
+        let current = AcmeConfig {
+            dns: AcmeDnsConfig {
+                provider: "cloudflare".to_string(),
+                cloudflare_zone_id: "zone-id".to_string(),
+                cloudflare_api_token: "existing-token".to_string(),
+                aliyun_access_key_id: "existing-aliyun-id".to_string(),
+                ..AcmeDnsConfig::default()
+            },
+            ..AcmeConfig::default()
+        };
+        let mut unchanged = AcmeConfig {
+            dns: AcmeDnsConfig {
+                provider: "dns_cf".to_string(),
+                cloudflare_zone_id: "zone-id".to_string(),
+                ..AcmeDnsConfig::default()
+            },
+            ..AcmeConfig::default()
+        };
+        unchanged.normalize();
+        unchanged.preserve_blank_secrets_from(&current);
+        assert_eq!(unchanged.dns.provider, "cloudflare");
+        assert_eq!(unchanged.dns.cloudflare_api_token, "existing-token");
+        assert_eq!(unchanged.dns.aliyun_access_key_id, "existing-aliyun-id");
+
+        let mut global_key = AcmeConfig {
+            dns: AcmeDnsConfig {
+                provider: "cloudflare".to_string(),
+                cloudflare_zone_id: "zone-id".to_string(),
+                cloudflare_email: "admin@example.com".to_string(),
+                cloudflare_api_key: "global-key".to_string(),
+                ..AcmeDnsConfig::default()
+            },
+            ..AcmeConfig::default()
+        };
+        global_key.preserve_blank_secrets_from(&current);
+        assert!(global_key.dns.cloudflare_api_token.is_empty());
+        assert_eq!(global_key.dns.cloudflare_api_key, "global-key");
+    }
+
+    #[test]
+    fn validates_native_multi_dns_providers() {
+        let base = AcmeConfig {
+            enabled: true,
+            email: "admin@example.com".to_string(),
+            domains: vec!["example.com".to_string(), "*.example.com".to_string()],
+            challenge: "dns-01".to_string(),
+            ..AcmeConfig::default()
+        };
+        for dns in [
+            AcmeDnsConfig {
+                provider: "aliyun".to_string(),
+                aliyun_domain: "example.com".to_string(),
+                aliyun_access_key_id: "id".to_string(),
+                aliyun_access_key_secret: "secret".to_string(),
+                ..AcmeDnsConfig::default()
+            },
+            AcmeDnsConfig {
+                provider: "tencent".to_string(),
+                tencent_domain: "example.com".to_string(),
+                tencent_secret_id: "id".to_string(),
+                tencent_secret_key: "secret".to_string(),
+                ..AcmeDnsConfig::default()
+            },
+            AcmeDnsConfig {
+                provider: "route53".to_string(),
+                route53_hosted_zone_id: "Z0123456789".to_string(),
+                route53_access_key_id: "id".to_string(),
+                route53_secret_access_key: "secret".to_string(),
+                ..AcmeDnsConfig::default()
+            },
+        ] {
+            assert!(AcmeConfig {
+                dns,
+                ..base.clone()
+            }
+            .validate()
+            .is_ok());
+        }
+    }
+
+    #[test]
+    fn normalizes_acme_sh_provider_names() {
+        assert_eq!(normalize_acme_dns_provider("dns_cf"), "cloudflare");
+        assert_eq!(normalize_acme_dns_provider("dns_ali"), "aliyun");
+        assert_eq!(normalize_acme_dns_provider("dns_tencent"), "tencent");
+        assert_eq!(normalize_acme_dns_provider("dns_aws"), "route53");
     }
 }

@@ -48,6 +48,7 @@ checks=(
   'xbps|os|head|/os/void/current/x86_64-repodata'
   'zypper|os|head|/os/opensuse/distribution'
   'gentoo|os|head|/os/gentoo/releases'
+  'freebsd|os|get|/os/freebsd/FreeBSD:14:amd64/quarterly/meta.conf'
   'termux|os|get|/os/termux/dists/stable/InRelease'
   'flatpak|flatpak|head|/flatpak/summary'
   'nix|nix|get|/nix/nix-cache-info'

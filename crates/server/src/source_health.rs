@@ -110,6 +110,11 @@ const PROBES: &[ProbeSpec] = &[
     head!("xbps", "os", "/os/void/current/x86_64-repodata"),
     head!("zypper", "os", "/os/opensuse/distribution"),
     head!("gentoo", "os", "/os/gentoo/releases"),
+    get!(
+        "freebsd",
+        "os",
+        "/os/freebsd/FreeBSD:14:amd64/quarterly/meta.conf"
+    ),
     get!("termux", "os", "/os/termux/dists/stable/InRelease"),
     head!("flatpak", "flatpak", "/flatpak/summary"),
     get!("nix", "nix", "/nix/nix-cache-info"),
@@ -644,6 +649,16 @@ mod tests {
             admin_login_limiter: std::sync::Arc::new(crate::AdminLoginRateLimiter::new()),
             webauthn: std::sync::Arc::new(std::sync::RwLock::new(None)),
             observability: std::sync::Arc::new(crate::observability::Observability::new().unwrap()),
+            geoip: std::sync::Arc::new(crate::geoip::GeoIpService::new(
+                false,
+                "missing-v4.xdb".into(),
+                "missing-v6.xdb".into(),
+            )),
+            ip_access_policy: std::sync::Arc::new(std::sync::RwLock::new(
+                crate::geoip::IpAccessPolicy::default(),
+            )),
+            acme: crate::test_acme_manager(),
+            acme_environment_managed: false,
         };
         let probe = PROBES
             .iter()
@@ -661,9 +676,9 @@ mod tests {
             .await
             .unwrap();
         let report = report(&state, true).await.unwrap();
-        assert_eq!(report.total, 59);
+        assert_eq!(report.total, 60);
         assert_eq!(report.degraded, 1);
-        assert_eq!(report.unknown, 58);
+        assert_eq!(report.unknown, 59);
         assert_eq!(report.items[0].endpoints.len(), 2);
         unavailable_server.abort();
         available_server.abort();
@@ -694,6 +709,16 @@ mod tests {
             admin_login_limiter: std::sync::Arc::new(crate::AdminLoginRateLimiter::new()),
             webauthn: std::sync::Arc::new(std::sync::RwLock::new(None)),
             observability: std::sync::Arc::new(crate::observability::Observability::new().unwrap()),
+            geoip: std::sync::Arc::new(crate::geoip::GeoIpService::new(
+                false,
+                "missing-v4.xdb".into(),
+                "missing-v6.xdb".into(),
+            )),
+            ip_access_policy: std::sync::Arc::new(std::sync::RwLock::new(
+                crate::geoip::IpAccessPolicy::default(),
+            )),
+            acme: crate::test_acme_manager(),
+            acme_environment_managed: false,
         };
         let probe = PROBES
             .iter()

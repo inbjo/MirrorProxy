@@ -25,6 +25,12 @@ RUN --mount=type=cache,id=mirrorproxy-cargo-registry-${TARGETPLATFORM},target=/u
     cargo build --locked --release --package mirrorproxy-server --bin mirrorproxy-server && \
     install -D -m 0755 target/release/mirrorproxy-server /out/mirrorproxy-server
 
+FROM ${BASE_IMAGE_REGISTRY}/debian:bookworm-slim AS geoip-data
+RUN apt-get update && apt-get install --yes --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY scripts/fetch-geoip.sh scripts/fetch-geoip.sh
+RUN MIRRORPROXY_GEOIP_DESTINATION=/out/geoip bash scripts/fetch-geoip.sh
+
 FROM ${BASE_IMAGE_REGISTRY}/debian:bookworm-slim AS runtime
 ARG UID=10001
 ARG GID=10001
@@ -49,18 +55,22 @@ LABEL org.opencontainers.image.title="MirrorProxy" \
       org.opencontainers.image.created="${BUILD_TIME}"
 
 COPY --from=server-build /out/mirrorproxy-server /usr/local/bin/mirrorproxy-server
+COPY --from=geoip-data /out/geoip /usr/share/mirrorproxy/geoip
 COPY config.example.toml /etc/mirrorproxy/config.example.toml
+COPY --chmod=0755 scripts/docker-entrypoint.sh /usr/local/bin/mirrorproxy-entrypoint
 
 ENV MIRRORPROXY_LISTEN_ADDR="0.0.0.0:3000" \
     MIRRORPROXY_DB="/data/mirrorproxy.sqlite3" \
     MIRRORPROXY_CACHE_DIRECTORY="/data/cache" \
+    MIRRORPROXY_GEOIP_IPV4_PATH="/data/geoip/ip2region_v4.xdb" \
+    MIRRORPROXY_GEOIP_IPV6_PATH="/data/geoip/ip2region_v6.xdb" \
     RUST_LOG="mirrorproxy_server=info,tower_http=info"
 
 WORKDIR /data
 VOLUME ["/data"]
-EXPOSE 3000
+EXPOSE 3000 3443
 USER mirrorproxy
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/healthz"]
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/mirrorproxy-server"]
-CMD ["serve"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/mirrorproxy-entrypoint"]
+CMD ["/usr/local/bin/mirrorproxy-server", "serve"]

@@ -123,6 +123,7 @@ jobs:
       - name: Build server
         shell: bash
         run: |
+          bash scripts/fetch-geoip.sh
           GIT_COMMIT="${GITHUB_SHA}" \
           BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           cargo build --locked --release -p mirrorproxy-server --target ${{ matrix.target }}
@@ -132,8 +133,10 @@ jobs:
           staging="mirrorproxy-server-${{ matrix.target }}"
           mkdir "$staging"
           cp "target/${{ matrix.target }}/release/mirrorproxy-server" "$staging/mirrorproxy-server"
+          cp config.example.toml "$staging/config.example.toml"
+          cp -R geoip "$staging/geoip"
           chmod +x "$staging/mirrorproxy-server"
-          tar -czf "${{ matrix.archive }}" -C "$staging" mirrorproxy-server
+          tar -czf "${{ matrix.archive }}" -C "$staging" mirrorproxy-server config.example.toml geoip
           shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
       - uses: actions/upload-artifact@v6
         with:

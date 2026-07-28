@@ -953,6 +953,13 @@ pub const TARGET_SOURCES: &[TargetSource] = &[
         capability: SourceMode::ProxyAdapter,
     },
     TargetSource {
+        target_code: "freebsd",
+        provider_code: "mirrorproxy",
+        repo_url: "/os/freebsd/",
+        speed_url: None,
+        capability: SourceMode::ProxyAdapter,
+    },
+    TargetSource {
         target_code: "termux",
         provider_code: "mirrorproxy",
         repo_url: "/os/termux/",

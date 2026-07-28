@@ -1,6 +1,9 @@
+mod acme;
+mod acme_dns;
 mod config;
 mod database;
 mod email;
+mod geoip;
 mod oauth;
 mod observability;
 mod proxy;
@@ -10,9 +13,12 @@ mod static_assets;
 use std::{
     collections::{HashMap, VecDeque},
     fs,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, RwLock,
+    },
     time::{Duration, Instant},
 };
 
@@ -20,17 +26,18 @@ use anyhow::Context;
 use axum::{
     body::Body,
     extract::{connect_info::ConnectInfo, Path as AxumPath, Query, Request, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, uri::Authority, HeaderMap, HeaderValue, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
-use chrono::{Datelike, Local, Utc};
+use chrono::{Datelike, Local, NaiveDate, Utc};
 use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
-use config::{Config, OutboundProxyConfig};
+use config::{AcmeConfig, Config, OutboundProxyConfig};
 use database::{AdminUsernameChangeOutcome, Database, ProxyTrafficRecord};
+use geoip::{AccessDecision, GeoIpService, GeoLocation, IpAccessPolicy, IpNetwork};
 use mirrorproxy_catalog as catalog;
 use observability::Observability;
 use opentelemetry::trace::TracerProvider as _;
@@ -42,7 +49,7 @@ use proxy::{
     hackage, homebrew, julia, luarocks, maven, nix, npm, nuget, nvm, oci, opam, os, pub_repository,
     pypi, rubygems, rustup, texlive, winget, ProxyError,
 };
-use reqwest::{Client, ClientBuilder, NoProxy, Proxy, Url};
+use reqwest::{Certificate, Client, ClientBuilder, NoProxy, Proxy, Url};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tracing::Instrument;
@@ -118,6 +125,10 @@ pub struct AppState {
     admin_login_limiter: Arc<AdminLoginRateLimiter>,
     webauthn: Arc<RwLock<Option<Arc<Webauthn>>>>,
     observability: Arc<Observability>,
+    geoip: Arc<GeoIpService>,
+    ip_access_policy: Arc<RwLock<IpAccessPolicy>>,
+    acme: Arc<acme::AcmeManager>,
+    acme_environment_managed: bool,
 }
 
 pub struct RateLimiter {
@@ -163,6 +174,11 @@ impl AppState {
             configured
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_acme_manager() -> Arc<acme::AcmeManager> {
+    acme::AcmeManager::new(config::AcmeConfig::default()).0
 }
 
 fn request_public_base_url(headers: &HeaderMap) -> Option<String> {
@@ -211,6 +227,9 @@ fn forwarded_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a 
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| anyhow::anyhow!("failed to install the rustls ring crypto provider"))?;
     let _tracer_provider = init_tracing()?;
     let cli = Cli::parse();
     match cli.command {
@@ -226,22 +245,304 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
-    let addr: SocketAddr = config
+    let application = build_application(config).await?;
+    if application.config.acme.direct_https {
+        serve_direct_https(application).await
+    } else {
+        serve_http(application).await
+    }
+}
+
+struct BuiltApplication {
+    router: Router,
+    state: AppState,
+    config: Config,
+    control_plane_client: Client,
+    acme_receiver: tokio::sync::mpsc::Receiver<()>,
+}
+
+impl BuiltApplication {
+    fn start_acme_worker(&mut self) {
+        if cfg!(test) {
+            return;
+        }
+        let (_, replacement) = tokio::sync::mpsc::channel(1);
+        let receiver = std::mem::replace(&mut self.acme_receiver, replacement);
+        self.state
+            .acme
+            .clone()
+            .spawn(self.control_plane_client.clone(), receiver);
+    }
+}
+
+async fn serve_http(mut application: BuiltApplication) -> anyhow::Result<()> {
+    let addr: SocketAddr = application
+        .config
         .listen_addr
         .parse()
-        .with_context(|| format!("invalid listen_addr: {}", config.listen_addr))?;
-
-    let app = build_router(config).await?;
-    tracing::info!(%addr, "starting MirrorProxy");
-
+        .with_context(|| format!("invalid listen_addr: {}", application.config.listen_addr))?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    application.start_acme_worker();
+    tracing::info!(%addr, "starting MirrorProxy HTTP service");
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+        application
+            .router
+            .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+#[derive(Clone)]
+struct DirectHttpState {
+    acme: Arc<acme::AcmeManager>,
+    domains: Arc<Vec<String>>,
+    https_addr: SocketAddr,
+    https_ready: Arc<AtomicBool>,
+}
+
+async fn serve_direct_https(mut application: BuiltApplication) -> anyhow::Result<()> {
+    let http_addr = application
+        .config
+        .acme
+        .http_listen_addr
+        .parse::<SocketAddr>()
+        .context("validated ACME HTTP listen address became invalid")?;
+    let https_addr = application
+        .config
+        .acme
+        .https_listen_addr
+        .parse::<SocketAddr>()
+        .context("validated ACME HTTPS listen address became invalid")?;
+    let http_listener = std::net::TcpListener::bind(http_addr)
+        .with_context(|| format!("failed to bind direct HTTP listener {http_addr}"))?;
+    http_listener.set_nonblocking(true)?;
+    let https_listener = std::net::TcpListener::bind(https_addr)
+        .with_context(|| format!("failed to bind direct HTTPS listener {https_addr}"))?;
+    https_listener.set_nonblocking(true)?;
+
+    let https_ready = Arc::new(AtomicBool::new(false));
+    let http_router = if application.config.acme.redirect_http_to_https {
+        Router::new()
+            .route(
+                "/.well-known/acme-challenge/{token}",
+                get(direct_acme_http01_challenge),
+            )
+            .fallback(direct_http_redirect)
+            .with_state(DirectHttpState {
+                acme: application.state.acme.clone(),
+                domains: Arc::new(application.config.acme.domains.clone()),
+                https_addr,
+                https_ready: https_ready.clone(),
+            })
+    } else {
+        application.router.clone()
+    };
+
+    let http_handle = axum_server::Handle::new();
+    let https_handle = axum_server::Handle::new();
+    let http_server_handle = http_handle.clone();
+    let https_server_handle = https_handle.clone();
+    let acme = application.state.acme.clone();
+    let storage_directory = PathBuf::from(&application.config.acme.storage_directory);
+    let https_router = application.router.clone();
+    let https_ready_for_shutdown = https_ready.clone();
+
+    application.start_acme_worker();
+    tracing::info!(%http_addr, %https_addr, "starting MirrorProxy direct HTTP/HTTPS service");
+
+    let mut http_task = tokio::spawn(async move {
+        axum_server::from_tcp(http_listener)?
+            .handle(http_server_handle)
+            .serve(http_router.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+    });
+    let mut https_task = tokio::spawn(run_https_listener(
+        https_listener,
+        https_server_handle,
+        https_router,
+        acme,
+        storage_directory,
+        https_ready,
+        https_addr,
+    ));
+
+    tokio::select! {
+        result = &mut http_task => {
+            https_handle.shutdown();
+            https_task.abort();
+            flatten_server_task("HTTP", result)
+        }
+        result = &mut https_task => {
+            http_handle.shutdown();
+            http_task.abort();
+            flatten_server_task("HTTPS", result)
+        }
+        _ = shutdown_signal() => {
+            http_handle.graceful_shutdown(Some(Duration::from_secs(30)));
+            if https_ready_for_shutdown.load(Ordering::Acquire) {
+                https_handle.graceful_shutdown(Some(Duration::from_secs(30)));
+            } else {
+                https_task.abort();
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(31), async {
+                let _ = tokio::join!(&mut http_task, &mut https_task);
+            }).await;
+            http_task.abort();
+            https_task.abort();
+            Ok(())
+        }
+    }
+}
+
+fn flatten_server_task(
+    name: &str,
+    result: Result<std::io::Result<()>, tokio::task::JoinError>,
+) -> anyhow::Result<()> {
+    result
+        .with_context(|| format!("{name} server task failed"))?
+        .with_context(|| format!("{name} server failed"))
+}
+
+async fn run_https_listener(
+    listener: std::net::TcpListener,
+    handle: axum_server::Handle<SocketAddr>,
+    router: Router,
+    acme: Arc<acme::AcmeManager>,
+    storage_directory: PathBuf,
+    https_ready: Arc<AtomicBool>,
+    https_addr: SocketAddr,
+) -> std::io::Result<()> {
+    let certificate_path = storage_directory.join("fullchain.pem");
+    let private_key_path = storage_directory.join("privkey.pem");
+    let mut certificate_updates = acme.subscribe_certificates();
+    let tls_config = loop {
+        match axum_server::tls_rustls::RustlsConfig::from_pem_file(
+            &certificate_path,
+            &private_key_path,
+        )
+        .await
+        {
+            Ok(config) => break config,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    certificate = %certificate_path.display(),
+                    "direct HTTPS is waiting for the first valid ACME certificate"
+                );
+                if certificate_updates.changed().await.is_err() {
+                    return Ok(());
+                }
+            }
+        }
+    };
+
+    let server = axum_server::from_tcp_rustls(listener, tls_config.clone())?
+        .handle(handle)
+        .serve(router.into_make_service_with_connect_info::<SocketAddr>());
+    tokio::pin!(server);
+    https_ready.store(true, Ordering::Release);
+    acme.set_https_active(true).await;
+    tracing::info!(%https_addr, "MirrorProxy direct HTTPS listener is ready");
+
+    loop {
+        tokio::select! {
+            result = &mut server => {
+                https_ready.store(false, Ordering::Release);
+                acme.set_https_active(false).await;
+                return result;
+            }
+            update = certificate_updates.changed() => {
+                if update.is_err() {
+                    continue;
+                }
+                match tls_config.reload_from_pem_file(&certificate_path, &private_key_path).await {
+                    Ok(()) => tracing::info!("reloaded renewed ACME certificate for direct HTTPS"),
+                    Err(error) => tracing::error!(%error, "kept the previous direct HTTPS certificate because the renewed files could not be loaded"),
+                }
+            }
+        }
+    }
+}
+
+async fn direct_acme_http01_challenge(
+    AxumPath(token): AxumPath<String>,
+    State(state): State<DirectHttpState>,
+) -> Response {
+    match state.acme.challenge_response(&token).await {
+        Some(response) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            response,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn direct_http_redirect(
+    State(state): State<DirectHttpState>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    if !state.https_ready.load(Ordering::Acquire) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "5")],
+            "HTTPS certificate is being provisioned",
+        )
+            .into_response();
+    }
+    match direct_https_location(&headers, &uri, &state.domains, state.https_addr.port()) {
+        Ok(location) => (
+            StatusCode::PERMANENT_REDIRECT,
+            [(header::LOCATION, location)],
+        )
+            .into_response(),
+        Err(status) => status.into_response(),
+    }
+}
+
+fn direct_https_location(
+    headers: &HeaderMap,
+    uri: &Uri,
+    domains: &[String],
+    https_port: u16,
+) -> Result<HeaderValue, StatusCode> {
+    let authority = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<Authority>().ok())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    let host = authority.host().trim_end_matches('.').to_ascii_lowercase();
+    if !domains
+        .iter()
+        .any(|domain| acme_domain_matches_host(domain, &host))
+    {
+        return Err(StatusCode::MISDIRECTED_REQUEST);
+    }
+    let redirect_authority = if https_port == 443 {
+        host
+    } else {
+        format!("{host}:{https_port}")
+    };
+    let path_and_query = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or("/");
+    HeaderValue::from_str(&format!("https://{redirect_authority}{path_and_query}"))
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn acme_domain_matches_host(domain: &str, host: &str) -> bool {
+    if let Some(suffix) = domain.strip_prefix("*.") {
+        return host
+            .strip_suffix(&format!(".{suffix}"))
+            .is_some_and(|label| !label.is_empty() && !label.contains('.'));
+    }
+    domain == host
 }
 
 fn run_config_command(
@@ -489,6 +790,16 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             "outbound_proxy.no_proxy",
             ConfigValueKind::StringList,
         ),
+        "upstream_tls.ca_certificates" => (
+            "upstream_tls.ca_certificates",
+            "upstream_tls.ca_certificates",
+            ConfigValueKind::StringList,
+        ),
+        "upstream_tls.insecure_skip_verify" => (
+            "upstream_tls.insecure_skip_verify",
+            "upstream_tls.insecure_skip_verify",
+            ConfigValueKind::Bool,
+        ),
         "timeout.request_secs" => (
             "timeout.request_secs",
             "timeout.request_secs",
@@ -659,6 +970,10 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "outbound_proxy.enabled" => Some(config.outbound_proxy.enabled.to_string()),
         "outbound_proxy.url" => Some(config.outbound_proxy.url.clone()),
         "outbound_proxy.no_proxy" => Some(config.outbound_proxy.no_proxy.join(",")),
+        "upstream_tls.ca_certificates" => Some(config.upstream_tls.ca_certificates.join(",")),
+        "upstream_tls.insecure_skip_verify" => {
+            Some(config.upstream_tls.insecure_skip_verify.to_string())
+        }
         "enabled_proxies" => Some(config.enabled_proxies.join(",")),
         "timeout.request_secs" => Some(config.timeout.request_secs.to_string()),
         "rate_limit.enabled" => Some(config.rate_limit.enabled.to_string()),
@@ -735,6 +1050,8 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
         "outbound_proxy.enabled",
         "outbound_proxy.url",
         "outbound_proxy.no_proxy",
+        "upstream_tls.ca_certificates",
+        "upstream_tls.insecure_skip_verify",
         "enabled_proxies",
         "timeout.request_secs",
         "rate_limit.enabled",
@@ -858,7 +1175,12 @@ fn init_tracing() -> anyhow::Result<Option<SdkTracerProvider>> {
     Ok(tracer_provider)
 }
 
+#[cfg(test)]
 async fn build_router(config: Config) -> anyhow::Result<Router> {
+    Ok(build_application(config).await?.router)
+}
+
+async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
     let database_path = if cfg!(test) {
         ":memory:"
     } else {
@@ -873,6 +1195,14 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     // for the global outbound proxy deliberately override the persisted admin
     // setting at process startup for managed/container deployments.
     config.upstream_auth = service_config.upstream_auth;
+    let acme_environment_managed = acme_environment_managed();
+    config.acme = if acme_environment_managed {
+        service_config.acme
+    } else {
+        database
+            .load_or_seed_acme_settings(service_config.acme)
+            .await?
+    };
     if [
         "MIRRORPROXY_OUTBOUND_PROXY_ENABLED",
         "MIRRORPROXY_OUTBOUND_PROXY_URL",
@@ -885,7 +1215,18 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     {
         config.outbound_proxy = service_config.outbound_proxy;
     }
+    if [
+        "MIRRORPROXY_UPSTREAM_TLS_CA_CERTIFICATES",
+        "MIRRORPROXY_UPSTREAM_TLS_INSECURE_SKIP_VERIFY",
+    ]
+    .iter()
+    .any(|key| std::env::var_os(key).is_some())
+    {
+        config.upstream_tls = service_config.upstream_tls;
+    }
     let client = build_upstream_client(&config)?;
+    let control_plane_client = build_control_plane_client(&config)?;
+    log_upstream_tls_configuration(&config);
     if config.outbound_proxy.enabled {
         let endpoint = Url::parse(&config.outbound_proxy.url)
             .context("validated outbound proxy URL became invalid")?;
@@ -899,6 +1240,18 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
     }
     let observability = Arc::new(Observability::new()?);
     let webauthn = build_webauthn(&config)?;
+    let geoip = Arc::new(GeoIpService::new(
+        config.geoip.enabled,
+        config.geoip.ipv4_path.clone().into(),
+        config.geoip.ipv6_path.clone().into(),
+    ));
+    let rules = database.list_ip_access_rules().await?;
+    let ip_access_policy = IpAccessPolicy::compile(
+        rules
+            .iter()
+            .map(|rule| (rule.action.as_str(), rule.network.as_str(), rule.enabled)),
+    )?;
+    let (acme, acme_receiver) = acme::AcmeManager::new(config.acme.clone());
 
     if let Some(credentials) = initial_admin {
         tracing::warn!(
@@ -915,10 +1268,14 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         webauthn: Arc::new(RwLock::new(webauthn)),
-        config: Arc::new(RwLock::new(config)),
+        config: Arc::new(RwLock::new(config.clone())),
         database: Arc::new(database),
         client: Arc::new(RwLock::new(client)),
         observability,
+        geoip,
+        ip_access_policy: Arc::new(RwLock::new(ip_access_policy)),
+        acme,
+        acme_environment_managed,
     };
 
     email::spawn_email_outbox_worker(state.database.clone());
@@ -926,12 +1283,16 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
         source_health::spawn_worker(state.clone());
     }
 
-    Ok(Router::new()
+    let router = Router::new()
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/metrics", get(metrics))
         .route("/api/config", get(public_config))
         .route("/api/public-config", get(public_config))
+        .route(
+            "/.well-known/acme-challenge/{token}",
+            get(acme_http01_challenge),
+        )
         .route("/api/admin/login", post(admin_login))
         .route("/api/admin/logout", post(admin_logout))
         .route("/api/admin/password", post(change_admin_password))
@@ -986,6 +1347,24 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             get(admin_config).put(update_admin_config),
         )
         .route("/admin/api/stats", get(admin_stats))
+        .route("/admin/api/geoip/status", get(admin_geoip_status))
+        .route("/admin/api/geoip/lookup", post(admin_geoip_lookup))
+        .route("/admin/api/geoip/update", post(admin_geoip_update))
+        .route("/admin/api/acme/status", get(admin_acme_status))
+        .route(
+            "/admin/api/acme/config",
+            get(admin_acme_config).put(update_admin_acme_config),
+        )
+        .route("/admin/api/acme/renew", post(admin_acme_renew))
+        .route(
+            "/admin/api/ip-access-rules",
+            get(list_ip_access_rules).post(create_ip_access_rule),
+        )
+        .route(
+            "/admin/api/ip-access-rules/{id}",
+            axum::routing::put(update_ip_access_rule).delete(delete_ip_access_rule),
+        )
+        .route("/admin/api/geo-traffic", get(admin_geo_traffic))
         .route("/admin/api/audit-log", get(admin_audit_log))
         .route(
             "/admin/api/source-health",
@@ -1225,7 +1604,14 @@ async fn build_router(config: Config) -> anyhow::Result<Router> {
             state.clone(),
             observability_middleware,
         ))
-        .with_state(state))
+        .with_state(state.clone());
+    Ok(BuiltApplication {
+        router,
+        state,
+        config,
+        control_plane_client,
+        acme_receiver,
+    })
 }
 
 fn build_upstream_client(config: &Config) -> anyhow::Result<Client> {
@@ -1241,6 +1627,18 @@ fn build_upstream_client_builder(config: &Config) -> anyhow::Result<ClientBuilde
         .user_agent(format!("MirrorProxy/{}", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::limited(10))
         .timeout(request_timeout);
+    for path in &config.upstream_tls.ca_certificates {
+        let pem = fs::read(path)
+            .with_context(|| format!("failed to read upstream TLS CA bundle {path}"))?;
+        let certificates = Certificate::from_pem_bundle(&pem)
+            .with_context(|| format!("failed to parse upstream TLS CA bundle {path}"))?;
+        for certificate in certificates {
+            builder = builder.add_root_certificate(certificate);
+        }
+    }
+    if config.upstream_tls.insecure_skip_verify {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
     if config.outbound_proxy.enabled {
         let mut proxy = Proxy::all(&config.outbound_proxy.url)
             .context("failed to configure global outbound proxy")?;
@@ -1257,6 +1655,54 @@ fn build_upstream_client_builder(config: &Config) -> anyhow::Result<ClientBuilde
         builder = builder.proxy(proxy);
     }
     Ok(builder)
+}
+
+fn build_control_plane_client(config: &Config) -> anyhow::Result<Client> {
+    Client::builder()
+        .no_proxy()
+        .user_agent(format!(
+            "MirrorProxy/{}/control-plane",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(Duration::from_secs(config.timeout.request_secs))
+        .build()
+        .context("failed to build control-plane HTTP client")
+}
+
+fn log_upstream_tls_configuration(config: &Config) {
+    if !config.upstream_tls.ca_certificates.is_empty() {
+        tracing::info!(
+            ca_bundle_count = config.upstream_tls.ca_certificates.len(),
+            "using additional CA bundles for mirror upstreams"
+        );
+    }
+    if config.upstream_tls.insecure_skip_verify {
+        tracing::warn!(
+            "TLS CERTIFICATE VERIFICATION IS DISABLED FOR MIRROR UPSTREAMS; this is unsafe and must only be used temporarily for debugging"
+        );
+    }
+}
+
+fn acme_environment_managed() -> bool {
+    std::env::vars_os().any(|(key, _)| {
+        let key = key.to_string_lossy();
+        key.starts_with("MIRRORPROXY_ACME_")
+            || matches!(
+                key.as_ref(),
+                "CF_Zone_ID"
+                    | "CF_Token"
+                    | "CF_Key"
+                    | "CF_Email"
+                    | "Ali_Key"
+                    | "Ali_Secret"
+                    | "Tencent_SecretId"
+                    | "Tencent_SecretKey"
+                    | "AWS_ACCESS_KEY_ID"
+                    | "AWS_SECRET_ACCESS_KEY"
+                    | "AWS_SESSION_TOKEN"
+            )
+    })
 }
 
 fn build_webauthn(config: &Config) -> anyhow::Result<Option<Arc<Webauthn>>> {
@@ -1285,6 +1731,8 @@ async fn strip_untrusted_forwarded_headers(
     if !trusted {
         request.headers_mut().remove("x-forwarded-host");
         request.headers_mut().remove("x-forwarded-proto");
+        request.headers_mut().remove("x-forwarded-for");
+        request.headers_mut().remove("x-real-ip");
     }
     next.run(request).await
 }
@@ -1557,6 +2005,31 @@ async fn rate_limit_middleware(
     let method = request.method().to_string();
     let target_code = proxy_target_for_path(&path);
     if let Some(target_code) = target_code {
+        let client_ip = resolve_client_ip(&request, &config);
+        let access_decision = state
+            .ip_access_policy
+            .read()
+            .expect("IP access policy lock poisoned")
+            .decide(client_ip);
+        if access_decision != AccessDecision::Allow {
+            let reason = match access_decision {
+                AccessDecision::DenyRule => "ip_deny_rule",
+                AccessDecision::AllowlistRequired => "ip_allowlist_required",
+                AccessDecision::Allow => unreachable!(),
+            };
+            state.observability.observe_rejection(reason);
+            tracing::warn!(%client_ip, reason, target_code, "proxy request rejected by IP policy");
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": "access denied by IP policy" })),
+            )
+                .into_response();
+        }
+        let location = state.geoip.lookup(client_ip);
+        state.observability.observe_geoip_lookup(
+            if client_ip.is_ipv4() { "4" } else { "6" },
+            location.country_code.is_some(),
+        );
         let (day, month) = quota_period(&config.quota.timezone);
         let accounting_multiplier = if config.quota.bidirectional_accounting {
             2
@@ -1630,10 +2103,52 @@ async fn rate_limit_middleware(
             user_context.map(|context| context.user_id),
             group_id,
             config.quota.request_event_retention_days,
+            location,
         );
     }
 
     next.run(request).await
+}
+
+fn resolve_client_ip(request: &Request, config: &Config) -> IpAddr {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|peer| peer.0.ip())
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    if !config.is_trusted_proxy(peer) {
+        return peer;
+    }
+    let Some(value) = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return peer;
+    };
+    let addresses = value
+        .split(',')
+        .map(str::trim)
+        .map(parse_forwarded_ip)
+        .collect::<Option<Vec<_>>>();
+    let Some(addresses) = addresses else {
+        return peer;
+    };
+    let mut current = peer;
+    for candidate in addresses.into_iter().rev() {
+        if !config.is_trusted_proxy(current) {
+            break;
+        }
+        current = candidate;
+    }
+    current
+}
+
+fn parse_forwarded_ip(value: &str) -> Option<IpAddr> {
+    value
+        .parse::<IpAddr>()
+        .ok()
+        .or_else(|| value.parse::<SocketAddr>().ok().map(|address| address.ip()))
 }
 
 fn quota_rejection(state: &AppState, config: &Config, scope: &str) -> Response {
@@ -1765,6 +2280,7 @@ fn track_proxy_response(
     user_id: Option<i64>,
     group_id: Option<i64>,
     request_event_retention_days: u32,
+    location: GeoLocation,
 ) -> Response {
     let status_code = response.status().as_u16();
     let (parts, body) = response.into_parts();
@@ -1785,6 +2301,7 @@ fn track_proxy_response(
             user_id,
             group_id,
             request_event_retention_days,
+            location,
         ),
         move |(
             mut stream,
@@ -1801,6 +2318,7 @@ fn track_proxy_response(
             user_id,
             group_id,
             request_event_retention_days,
+            location,
         )| async move {
             match futures_util::StreamExt::next(&mut stream).await {
                 Some(Ok(chunk)) => Some((
@@ -1820,6 +2338,7 @@ fn track_proxy_response(
                         user_id,
                         group_id,
                         request_event_retention_days,
+                        location,
                     ),
                 )),
                 Some(Err(error)) => {
@@ -1832,11 +2351,13 @@ fn track_proxy_response(
                             path: &path,
                             status_code,
                             response_bytes: response_bytes.saturating_mul(accounting_multiplier),
+                            delivered_response_bytes: response_bytes,
                             stream_error: true,
                             reserved_bytes,
                             user_id,
                             group_id,
                             request_event_retention_days,
+                            location: &location,
                         })
                         .await
                     {
@@ -1865,6 +2386,7 @@ fn track_proxy_response(
                             user_id,
                             group_id,
                             request_event_retention_days,
+                            location,
                         ),
                     ))
                 }
@@ -1881,11 +2403,13 @@ fn track_proxy_response(
                             path: &path,
                             status_code,
                             response_bytes: response_bytes.saturating_mul(accounting_multiplier),
+                            delivered_response_bytes: response_bytes,
                             stream_error,
                             reserved_bytes,
                             user_id,
                             group_id,
                             request_event_retention_days,
+                            location: &location,
                         })
                         .await
                     {
@@ -2964,6 +3488,529 @@ async fn admin_stats(headers: HeaderMap, State(state): State<AppState>) -> Respo
 }
 
 #[derive(Deserialize)]
+struct GeoIpLookupRequest {
+    ip: String,
+}
+
+async fn admin_geoip_status(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => Json(state.geoip.status()).into_response(),
+        Ok(false) => unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "GeoIP status authorization failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn acme_http01_challenge(
+    State(state): State<AppState>,
+    AxumPath(token): AxumPath<String>,
+) -> Response {
+    match state.acme.challenge_response(&token).await {
+        Some(response) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            response,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn admin_acme_status(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => Json(state.acme.status().await).into_response(),
+        Ok(false) => unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "ACME status authorization failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn admin_acme_config(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    if let Err(response) = require_super_admin(&headers, &state).await {
+        return response;
+    }
+    let settings = match state.database.acme_settings().await {
+        Ok(Some(settings)) => settings,
+        Ok(None) => state.config().acme,
+        Err(error) => {
+            tracing::error!(%error, "failed to load ACME settings");
+            return internal_error_response();
+        }
+    };
+    Json(admin_acme_config_value(
+        &settings,
+        state.acme_environment_managed,
+        false,
+    ))
+    .into_response()
+}
+
+async fn update_admin_acme_config(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(mut next): Json<AcmeConfig>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    if state.acme_environment_managed {
+        return conflict_response(
+            "ACME settings are managed by environment variables and cannot be changed in the admin console",
+        );
+    }
+    let current = match state.database.acme_settings().await {
+        Ok(Some(settings)) => settings,
+        Ok(None) => state.config().acme,
+        Err(error) => {
+            tracing::error!(%error, "failed to load existing ACME settings");
+            return internal_error_response();
+        }
+    };
+    next.normalize();
+    next.preserve_blank_secrets_from(&current);
+    if let Err(error) = next.validate() {
+        return bad_request_response(error.to_string());
+    }
+    if let Err(error) = state
+        .database
+        .save_acme_settings(&identity.username, &next)
+        .await
+    {
+        tracing::error!(%error, "failed to save ACME settings");
+        return internal_error_response();
+    }
+    state
+        .config
+        .write()
+        .expect("runtime config lock poisoned")
+        .acme = next.clone();
+    Json(admin_acme_config_value(&next, false, true)).into_response()
+}
+
+fn admin_acme_config_value(
+    settings: &AcmeConfig,
+    managed_by_environment: bool,
+    restart_required: bool,
+) -> serde_json::Value {
+    let mut config = serde_json::to_value(settings).expect("ACME settings are serializable");
+    if let Some(dns) = config
+        .get_mut("dns")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (name, configured) in [
+            (
+                "cloudflare_api_token",
+                !settings.dns.cloudflare_api_token.is_empty(),
+            ),
+            (
+                "cloudflare_api_key",
+                !settings.dns.cloudflare_api_key.is_empty(),
+            ),
+            (
+                "cloudflare_email",
+                !settings.dns.cloudflare_email.is_empty(),
+            ),
+            (
+                "aliyun_access_key_id",
+                !settings.dns.aliyun_access_key_id.is_empty(),
+            ),
+            (
+                "aliyun_access_key_secret",
+                !settings.dns.aliyun_access_key_secret.is_empty(),
+            ),
+            (
+                "tencent_secret_id",
+                !settings.dns.tencent_secret_id.is_empty(),
+            ),
+            (
+                "tencent_secret_key",
+                !settings.dns.tencent_secret_key.is_empty(),
+            ),
+            (
+                "route53_access_key_id",
+                !settings.dns.route53_access_key_id.is_empty(),
+            ),
+            (
+                "route53_secret_access_key",
+                !settings.dns.route53_secret_access_key.is_empty(),
+            ),
+            (
+                "route53_session_token",
+                !settings.dns.route53_session_token.is_empty(),
+            ),
+            (
+                "webhook_bearer_token",
+                !settings.dns.webhook_bearer_token.is_empty(),
+            ),
+        ] {
+            dns.insert(format!("has_{name}"), configured.into());
+        }
+    }
+    serde_json::json!({
+        "config": config,
+        "managed_by_environment": managed_by_environment,
+        "restart_required": restart_required,
+    })
+}
+
+async fn admin_acme_renew(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    if let Err(error) = state.acme.trigger_renewal().await {
+        return bad_request_response(error.to_string());
+    }
+    let _ = state
+        .database
+        .append_audit_log(&identity.username, "acme_renewal_requested", "manual")
+        .await;
+    StatusCode::ACCEPTED.into_response()
+}
+
+async fn admin_geoip_lookup(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<GeoIpLookupRequest>,
+) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => {}
+        Ok(false) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "GeoIP lookup authorization failed");
+            return internal_error_response();
+        }
+    }
+    let ip = match request.ip.trim().parse::<IpAddr>() {
+        Ok(ip) => ip,
+        Err(_) => return bad_request_response("ip must be a valid IPv4 or IPv6 address".into()),
+    };
+    Json(serde_json::json!({
+        "ip": ip,
+        "location": state.geoip.lookup(ip),
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct GeoIpUpdateRequest {
+    ip_version: u8,
+}
+
+async fn admin_geoip_update(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<GeoIpUpdateRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    let url = match request.ip_version {
+        4 => {
+            "https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb"
+        }
+        6 => {
+            "https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v6.xdb"
+        }
+        _ => return bad_request_response("ip_version must be 4 or 6".into()),
+    };
+    let response = match state.client().get(url).send().await {
+        Ok(response) if response.status().is_success() => response,
+        Ok(response) => {
+            return bad_gateway_response(&format!("GeoIP download returned {}", response.status()))
+        }
+        Err(error) => return bad_gateway_response(&format!("GeoIP download failed: {error}")),
+    };
+    if response
+        .content_length()
+        .is_some_and(|size| size > 80 * 1024 * 1024)
+    {
+        return bad_request_response("GeoIP database exceeds the 80 MiB safety limit".into());
+    }
+    let bytes = match response.bytes().await {
+        Ok(bytes) if bytes.len() <= 80 * 1024 * 1024 => bytes,
+        Ok(_) => {
+            return bad_request_response("GeoIP database exceeds the 80 MiB safety limit".into())
+        }
+        Err(error) => return bad_gateway_response(&format!("GeoIP download failed: {error}")),
+    };
+    if let Err(error) = state.geoip.install_database(request.ip_version, &bytes) {
+        tracing::error!(%error, "failed to install GeoIP database");
+        return bad_request_response(error.to_string());
+    }
+    let _ = state
+        .database
+        .append_audit_log(
+            &identity.username,
+            "geoip_database_updated",
+            &format!("ipv{}", request.ip_version),
+        )
+        .await;
+    Json(state.geoip.status()).into_response()
+}
+
+#[derive(Deserialize)]
+struct IpAccessRuleRequest {
+    action: String,
+    value: String,
+    #[serde(default)]
+    note: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn normalize_ip_access_rule(
+    request: &IpAccessRuleRequest,
+) -> Result<(String, String, String, String, bool), Box<Response>> {
+    let action = request.action.trim().to_ascii_lowercase();
+    if action != "allow" && action != "deny" {
+        return Err(Box::new(bad_request_response(
+            "action must be allow or deny".into(),
+        )));
+    }
+    if request.note.chars().count() > 200 {
+        return Err(Box::new(bad_request_response(
+            "note must not exceed 200 characters".into(),
+        )));
+    }
+    let (network, exact) = IpNetwork::parse(&request.value)
+        .map_err(|error| Box::new(bad_request_response(format!("invalid IP or CIDR: {error}"))))?;
+    Ok((
+        action,
+        if exact { "ip" } else { "cidr" }.into(),
+        network.canonical(),
+        request.note.trim().into(),
+        request.enabled,
+    ))
+}
+
+async fn list_ip_access_rules(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => match state.database.list_ip_access_rules().await {
+            Ok(rules) => Json(rules).into_response(),
+            Err(error) => {
+                tracing::error!(%error, "failed to list IP rules");
+                internal_error_response()
+            }
+        },
+        Ok(false) => unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "IP rule authorization failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn create_ip_access_rule(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<IpAccessRuleRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let (action, kind, network, note, enabled) = match normalize_ip_access_rule(&request) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    match state
+        .database
+        .create_ip_access_rule(&action, &kind, &network, &note, enabled)
+        .await
+    {
+        Ok(rule) => {
+            if let Err(error) = refresh_ip_access_policy(&state).await {
+                tracing::error!(%error, "failed to refresh IP policy");
+                return internal_error_response();
+            }
+            let _ = state
+                .database
+                .append_audit_log(
+                    &identity.username,
+                    "ip_access_rule_created",
+                    &format!("{action}:{network}"),
+                )
+                .await;
+            (StatusCode::CREATED, Json(rule)).into_response()
+        }
+        Err(error) if error.to_string().contains("UNIQUE constraint failed") => {
+            conflict_response("an identical IP access rule already exists")
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to create IP rule");
+            internal_error_response()
+        }
+    }
+}
+
+async fn update_ip_access_rule(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+    Json(request): Json<IpAccessRuleRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let (action, kind, network, note, enabled) = match normalize_ip_access_rule(&request) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    match state
+        .database
+        .update_ip_access_rule(id, &action, &kind, &network, &note, enabled)
+        .await
+    {
+        Ok(Some(rule)) => {
+            if let Err(error) = refresh_ip_access_policy(&state).await {
+                tracing::error!(%error, "failed to refresh IP policy");
+                return internal_error_response();
+            }
+            let _ = state
+                .database
+                .append_audit_log(
+                    &identity.username,
+                    "ip_access_rule_updated",
+                    &format!("{action}:{network}"),
+                )
+                .await;
+            Json(rule).into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) if error.to_string().contains("UNIQUE constraint failed") => {
+            conflict_response("an identical IP access rule already exists")
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to update IP rule");
+            internal_error_response()
+        }
+    }
+}
+
+async fn delete_ip_access_rule(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    match state.database.delete_ip_access_rule(id).await {
+        Ok(true) => {
+            if let Err(error) = refresh_ip_access_policy(&state).await {
+                tracing::error!(%error, "failed to refresh IP policy");
+                return internal_error_response();
+            }
+            let _ = state
+                .database
+                .append_audit_log(
+                    &identity.username,
+                    "ip_access_rule_deleted",
+                    &id.to_string(),
+                )
+                .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to delete IP rule");
+            internal_error_response()
+        }
+    }
+}
+
+async fn refresh_ip_access_policy(state: &AppState) -> anyhow::Result<()> {
+    let rules = state.database.list_ip_access_rules().await?;
+    let policy = IpAccessPolicy::compile(
+        rules
+            .iter()
+            .map(|rule| (rule.action.as_str(), rule.network.as_str(), rule.enabled)),
+    )?;
+    *state
+        .ip_access_policy
+        .write()
+        .expect("IP access policy lock poisoned") = policy;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct GeoTrafficQuery {
+    from: Option<String>,
+    to: Option<String>,
+    target: Option<String>,
+    country: Option<String>,
+    province: Option<String>,
+    city: Option<String>,
+}
+
+async fn admin_geo_traffic(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Query(query): Query<GeoTrafficQuery>,
+) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => {}
+        Ok(false) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "geo traffic authorization failed");
+            return internal_error_response();
+        }
+    }
+    let config = state.config();
+    let (today, month) = quota_period(&config.quota.timezone);
+    let from = query.from.unwrap_or_else(|| format!("{month}-01"));
+    let to = query.to.unwrap_or(today);
+    let from_date = match NaiveDate::parse_from_str(&from, "%Y-%m-%d") {
+        Ok(value) => value,
+        Err(_) => return bad_request_response("from must use YYYY-MM-DD".into()),
+    };
+    let to_date = match NaiveDate::parse_from_str(&to, "%Y-%m-%d") {
+        Ok(value) => value,
+        Err(_) => return bad_request_response("to must use YYYY-MM-DD".into()),
+    };
+    let days = to_date.signed_duration_since(from_date).num_days();
+    if !(0..=365).contains(&days) {
+        return bad_request_response("date range must be between 1 and 366 days".into());
+    }
+    match state
+        .database
+        .geo_traffic_overview(
+            &from,
+            &to,
+            nonempty(query.target.as_deref()),
+            nonempty(query.country.as_deref()),
+            nonempty(query.province.as_deref()),
+            nonempty(query.city.as_deref()),
+        )
+        .await
+    {
+        Ok(overview) => Json(serde_json::json!({ "from": from, "to": to, "overview": overview }))
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to query regional traffic");
+            internal_error_response()
+        }
+    }
+}
+
+fn nonempty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+#[derive(Deserialize)]
 struct AuditLogQuery {
     #[serde(default = "default_page")]
     page: u32,
@@ -3038,6 +4085,9 @@ async fn update_admin_config(
     {
         next_config.outbound_proxy.password = current.outbound_proxy.password.clone();
     }
+    // ACME settings use a dedicated super-admin endpoint so secrets never pass
+    // through the general runtime configuration API.
+    next_config.acme = current.acme.clone();
     if let Err(error) = next_config.validate() {
         return (
             StatusCode::BAD_REQUEST,
@@ -3087,6 +4137,7 @@ async fn update_admin_config(
     };
     let next_client = if next_config.timeout.request_secs != current.timeout.request_secs
         || next_config.outbound_proxy != current.outbound_proxy
+        || next_config.upstream_tls != current.upstream_tls
     {
         match build_upstream_client(&next_config) {
             Ok(client) => Some(client),
@@ -3095,7 +4146,11 @@ async fn update_admin_config(
     } else {
         None
     };
-    let restart_required = Vec::new();
+    let restart_required = if next_config.geoip != current.geoip {
+        vec!["geoip"]
+    } else {
+        Vec::new()
+    };
     if let Err(error) = state
         .database
         .save_runtime_config(
@@ -3111,6 +4166,7 @@ async fn update_admin_config(
     *state.config.write().expect("runtime config lock poisoned") = next_config.clone();
     if let Some(client) = next_client {
         *state.client.write().expect("upstream client lock poisoned") = client;
+        log_upstream_tls_configuration(&next_config);
     }
     if let Some(webauthn) = next_webauthn {
         *state.webauthn.write().expect("WebAuthn lock poisoned") = webauthn;
@@ -3789,7 +4845,12 @@ async fn require_super_admin(
     state: &AppState,
 ) -> Result<database::AdminIdentity, Response> {
     match authenticated_admin(headers, state).await {
-        Ok(Some(identity)) => Ok(identity),
+        Ok(Some(identity)) if identity.role == "super_admin" => Ok(identity),
+        Ok(Some(_)) => Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "super administrator access required" })),
+        )
+            .into_response()),
         Ok(None) => Err(unauthorized_response()),
         Err(error) => {
             tracing::error!(%error, "administrator authorization query failed");
@@ -3935,6 +4996,14 @@ fn bad_request_response(error: String) -> Response {
 fn conflict_response(error: &str) -> Response {
     (
         StatusCode::CONFLICT,
+        Json(serde_json::json!({ "error": error })),
+    )
+        .into_response()
+}
+
+fn bad_gateway_response(error: &str) -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
         Json(serde_json::json!({ "error": error })),
     )
         .into_response()
@@ -4128,8 +5197,193 @@ mod tests {
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
+            geoip: Arc::new(GeoIpService::new(
+                false,
+                "missing-v4.xdb".into(),
+                "missing-v6.xdb".into(),
+            )),
+            ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
+            acme: test_acme_manager(),
+            acme_environment_managed: false,
         };
         (state, credentials.unwrap())
+    }
+
+    #[tokio::test]
+    async fn direct_http_preserves_acme_path_and_redirects_to_https() {
+        let (acme, _) = acme::AcmeManager::new(AcmeConfig::default());
+        let ready = Arc::new(AtomicBool::new(true));
+        let app = Router::new()
+            .route(
+                "/.well-known/acme-challenge/{token}",
+                get(direct_acme_http01_challenge),
+            )
+            .fallback(direct_http_redirect)
+            .with_state(DirectHttpState {
+                acme,
+                domains: Arc::new(vec![
+                    "mirror.example.com".to_string(),
+                    "*.mirror.example.com".to_string(),
+                ]),
+                https_addr: "127.0.0.1:8443".parse().unwrap(),
+                https_ready: ready.clone(),
+            });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/npm/package?version=1")
+                    .header(header::HOST, "mirror.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            "https://mirror.example.com:8443/npm/package?version=1"
+        );
+
+        let challenge = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/.well-known/acme-challenge/missing")
+                    .header(header::HOST, "mirror.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(challenge.status(), StatusCode::NOT_FOUND);
+
+        ready.store(false, Ordering::Release);
+        let provisioning = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::HOST, "mirror.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(provisioning.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(provisioning.headers()[header::RETRY_AFTER], "5");
+    }
+
+    #[test]
+    fn direct_https_redirect_rejects_unconfigured_and_nested_wildcard_hosts() {
+        let domains = vec![
+            "mirror.example.com".to_string(),
+            "*.example.com".to_string(),
+        ];
+        let uri = "/healthz".parse::<Uri>().unwrap();
+        for host in ["other.example.net", "nested.user.example.com"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, HeaderValue::from_str(host).unwrap());
+            assert_eq!(
+                direct_https_location(&headers, &uri, &domains, 443),
+                Err(StatusCode::MISDIRECTED_REQUEST)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn native_https_serves_with_an_existing_certificate() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("generate test certificate");
+        let directory =
+            std::env::temp_dir().join(format!("mirrorproxy-native-https-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("fullchain.pem"), generated.cert.pem()).unwrap();
+        fs::write(
+            directory.join("privkey.pem"),
+            generated.signing_key.serialize_pem(),
+        )
+        .unwrap();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = axum_server::Handle::new();
+        let ready = Arc::new(AtomicBool::new(false));
+        let (acme, _) = acme::AcmeManager::new(AcmeConfig {
+            enabled: true,
+            direct_https: true,
+            storage_directory: directory.display().to_string(),
+            ..AcmeConfig::default()
+        });
+        let task = tokio::spawn(run_https_listener(
+            listener,
+            handle.clone(),
+            Router::new().route("/healthz", get(|| async { "ok" })),
+            acme.clone(),
+            directory.clone(),
+            ready.clone(),
+            address,
+        ));
+
+        timeout(Duration::from_secs(3), async {
+            while !ready.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("HTTPS listener should become ready");
+        let response = Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap()
+            .get(format!("https://{address}/healthz"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), "ok");
+
+        let renewed = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("generate renewed test certificate");
+        let renewed_pem = renewed.cert.pem();
+        fs::write(directory.join("fullchain.pem"), &renewed_pem).unwrap();
+        fs::write(
+            directory.join("privkey.pem"),
+            renewed.signing_key.serialize_pem(),
+        )
+        .unwrap();
+        acme.notify_certificate_update();
+        let renewed_certificate = Certificate::from_pem(renewed_pem.as_bytes()).unwrap();
+        let renewed_client = Client::builder()
+            .no_proxy()
+            .add_root_certificate(renewed_certificate)
+            .build()
+            .unwrap();
+        timeout(Duration::from_secs(3), async {
+            loop {
+                if renewed_client
+                    .get(format!("https://localhost:{}/healthz", address.port()))
+                    .send()
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("renewed certificate should be hot-reloaded");
+
+        handle.shutdown();
+        timeout(Duration::from_secs(3), task)
+            .await
+            .expect("HTTPS listener should stop")
+            .unwrap()
+            .unwrap();
+        let _ = fs::remove_dir_all(directory);
     }
 
     async fn routing_test_state(mode: &str) -> (AppState, database::UserAccount) {
@@ -4157,6 +5411,14 @@ mod tests {
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
+            geoip: Arc::new(GeoIpService::new(
+                false,
+                "missing-v4.xdb".into(),
+                "missing-v6.xdb".into(),
+            )),
+            ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
+            acme: test_acme_manager(),
+            acme_environment_managed: false,
         };
         (state, user)
     }
@@ -4269,6 +5531,53 @@ mod tests {
             };
             assert!(build_upstream_client(&config).is_ok(), "proxy URL {url}");
         }
+    }
+
+    #[test]
+    fn upstream_client_loads_an_additional_pem_ca_bundle() {
+        const PEM_CA: &[u8] = br#"-----BEGIN CERTIFICATE-----
+MIIBtjCCAVugAwIBAgITBmyf1XSXNmY/Owua2eiedgPySjAKBggqhkjOPQQDAjA5
+MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRkwFwYDVQQDExBBbWF6b24g
+Um9vdCBDQSAzMB4XDTE1MDUyNjAwMDAwMFoXDTQwMDUyNjAwMDAwMFowOTELMAkG
+A1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEZMBcGA1UEAxMQQW1hem9uIFJvb3Qg
+Q0EgMzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABCmXp8ZBf8ANm+gBG1bG8lKl
+ui2yEujSLtf6ycXYqm0fc4E7O5hrOXwzpcVOho6AF2hiRVd9RFgdszflZwjrZt6j
+QjBAMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBSr
+ttvXBp43rDCGB5Fwx5zEGbF4wDAKBggqhkjOPQQDAgNJADBGAiEA4IWSoxe3jfkr
+BqWTrBqYaGFy+uGh0PsceGCmQ5nFuMQCIQCcAu/xlJyzlvnrxir4tiz+OpAUFteM
+YyRIHN8wfdVoOw==
+-----END CERTIFICATE-----
+"#;
+        let path = std::env::temp_dir().join(format!(
+            "mirrorproxy-upstream-ca-{}.pem",
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(&path, PEM_CA).unwrap();
+        let config = Config {
+            upstream_tls: config::UpstreamTlsConfig {
+                ca_certificates: vec![path.to_string_lossy().into_owned()],
+                insecure_skip_verify: false,
+            },
+            ..Config::default()
+        };
+
+        let result = build_upstream_client(&config);
+        fs::remove_file(path).unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn control_plane_client_ignores_upstream_tls_overrides() {
+        let config = Config {
+            upstream_tls: config::UpstreamTlsConfig {
+                ca_certificates: vec!["/definitely/missing/mirrorproxy-upstream-ca.pem".to_string()],
+                insecure_skip_verify: true,
+            },
+            ..Config::default()
+        };
+
+        assert!(build_upstream_client(&config).is_err());
+        assert!(build_control_plane_client(&config).is_ok());
     }
 
     #[tokio::test]
@@ -4578,6 +5887,9 @@ mod tests {
         assert!(entries
             .iter()
             .any(|(key, value)| key == "outbound_proxy.enabled" && value == "false"));
+        assert!(entries.iter().any(|(key, value)| {
+            key == "upstream_tls.insecure_skip_verify" && value == "false"
+        }));
         assert!(entries
             .iter()
             .any(|(key, value)| key == "upstreams.pypi_files"
@@ -4643,6 +5955,15 @@ mod tests {
         let outbound_proxy =
             plan_config_set(&config, "outbound_proxy.url", "socks5h://127.0.0.1:1080").unwrap();
         assert_eq!(outbound_proxy.toml_path, "outbound_proxy.url");
+
+        let ca_certificates = plan_config_set(
+            &config,
+            "upstream_tls.ca_certificates",
+            "/etc/mirrorproxy/ca/company.pem",
+        )
+        .unwrap();
+        assert_eq!(ca_certificates.toml_path, "upstream_tls.ca_certificates");
+        assert!(plan_config_set(&config, "upstream_tls.insecure_skip_verify", "true").is_ok());
     }
 
     #[test]
@@ -5011,6 +6332,14 @@ on_exceeded = "stop_proxy"
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
+            geoip: Arc::new(GeoIpService::new(
+                false,
+                "missing-v4.xdb".into(),
+                "missing-v6.xdb".into(),
+            )),
+            ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
+            acme: test_acme_manager(),
+            acme_environment_managed: false,
         };
         let session = database
             .login(&credentials.username, &credentials.password)
@@ -5032,6 +6361,7 @@ on_exceeded = "stop_proxy"
             username: Some("proxy-user".to_string()),
             password: Some("proxy-password".to_string()),
         };
+        next_config.upstream_tls.insecure_skip_verify = true;
 
         let response = update_admin_config(headers, State(state.clone()), Json(next_config)).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -5044,6 +6374,10 @@ on_exceeded = "stop_proxy"
             serde_json::Value::Null
         );
         assert_eq!(response["config"]["outbound_proxy"]["has_password"], true);
+        assert_eq!(
+            response["config"]["upstream_tls"]["insecure_skip_verify"],
+            true
+        );
         assert_eq!(state.config().public_base_url, "https://mirror.example");
         assert_eq!(state.config().enabled_proxies, ["npm"]);
 
@@ -5057,6 +6391,92 @@ on_exceeded = "stop_proxy"
             reloaded.outbound_proxy.password.as_deref(),
             Some("proxy-password")
         );
+        assert!(reloaded.upstream_tls.insecure_skip_verify);
+    }
+
+    #[tokio::test]
+    async fn super_admin_updates_acme_settings_without_exposing_or_erasing_secrets() {
+        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let credentials = credentials.unwrap();
+        let acme_settings = AcmeConfig {
+            enabled: true,
+            email: "admin@example.com".to_string(),
+            domains: vec!["example.com".to_string(), "*.example.com".to_string()],
+            challenge: "dns-01".to_string(),
+            dns: config::AcmeDnsConfig {
+                provider: "cloudflare".to_string(),
+                cloudflare_zone_id: "zone-id".to_string(),
+                cloudflare_api_token: "secret-token".to_string(),
+                ..config::AcmeDnsConfig::default()
+            },
+            ..AcmeConfig::default()
+        };
+        database
+            .save_acme_settings("system", &acme_settings)
+            .await
+            .unwrap();
+        let state = AppState {
+            config: Arc::new(RwLock::new(Config {
+                acme: acme_settings.clone(),
+                ..Config::default()
+            })),
+            database: Arc::new(database.clone()),
+            client: Arc::new(RwLock::new(Client::new())),
+            rate_limiter: Arc::new(RateLimiter::new()),
+            admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+            webauthn: Arc::new(RwLock::new(None)),
+            observability: Arc::new(Observability::new().unwrap()),
+            geoip: Arc::new(GeoIpService::new(
+                false,
+                "missing-v4.xdb".into(),
+                "missing-v6.xdb".into(),
+            )),
+            ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
+            acme: test_acme_manager(),
+            acme_environment_managed: false,
+        };
+        let session = database
+            .login(&credentials.username, &credentials.password)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {}", session.token).parse().unwrap(),
+        );
+
+        let response = admin_acme_config(headers.clone(), State(state.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["config"]["dns"]["has_cloudflare_api_token"], true);
+        assert!(value["config"]["dns"].get("cloudflare_api_token").is_none());
+        assert!(!String::from_utf8_lossy(&body).contains("secret-token"));
+
+        let mut update = acme_settings;
+        update.domains.push("mirror.example.com".to_string());
+        update.dns.cloudflare_api_token.clear();
+        let response = update_admin_acme_config(headers, State(state.clone()), Json(update)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["restart_required"], true);
+        assert_eq!(
+            database
+                .acme_settings()
+                .await
+                .unwrap()
+                .unwrap()
+                .dns
+                .cloudflare_api_token,
+            "secret-token"
+        );
+        assert_eq!(state.config().acme.domains.len(), 3);
     }
 
     #[tokio::test]
@@ -5078,11 +6498,13 @@ on_exceeded = "stop_proxy"
                 path: "/npm/react",
                 status_code: 200,
                 response_bytes: 256,
+                delivered_response_bytes: 256,
                 stream_error: false,
                 reserved_bytes: 0,
                 user_id: None,
                 group_id: None,
                 request_event_retention_days: 30,
+                location: &GeoLocation::default(),
             })
             .await
             .unwrap();
@@ -5094,6 +6516,14 @@ on_exceeded = "stop_proxy"
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
+            geoip: Arc::new(GeoIpService::new(
+                false,
+                "missing-v4.xdb".into(),
+                "missing-v6.xdb".into(),
+            )),
+            ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
+            acme: test_acme_manager(),
+            acme_environment_managed: false,
         };
         let session = database
             .login(&credentials.username, &credentials.password)
@@ -5131,6 +6561,14 @@ on_exceeded = "stop_proxy"
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
+            geoip: Arc::new(GeoIpService::new(
+                false,
+                "missing-v4.xdb".into(),
+                "missing-v6.xdb".into(),
+            )),
+            ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
+            acme: test_acme_manager(),
+            acme_environment_managed: false,
         };
 
         let unauthenticated = admin_audit_log(
@@ -5185,6 +6623,14 @@ on_exceeded = "stop_proxy"
             admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
             webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
+            geoip: Arc::new(GeoIpService::new(
+                false,
+                "missing-v4.xdb".into(),
+                "missing-v6.xdb".into(),
+            )),
+            ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
+            acme: test_acme_manager(),
+            acme_environment_managed: false,
         };
         let session = database
             .login(&credentials.username, &credentials.password)
@@ -5799,6 +7245,7 @@ on_exceeded = "stop_proxy"
             None,
             None,
             30,
+            GeoLocation::default(),
         );
 
         assert_eq!(
@@ -5840,6 +7287,7 @@ on_exceeded = "stop_proxy"
             None,
             None,
             30,
+            GeoLocation::default(),
         );
 
         assert_eq!(
@@ -5862,6 +7310,62 @@ on_exceeded = "stop_proxy"
         assert!(day.starts_with(&month));
         assert_eq!(day.len(), 10);
         assert_eq!(month.len(), 7);
+    }
+
+    #[test]
+    fn resolves_client_ip_only_through_trusted_proxy_chain() {
+        let config = Config {
+            trusted_proxies: vec!["127.0.0.1".into(), "10.0.0.0/8".into()],
+            ..Config::default()
+        };
+        let mut request = Request::builder()
+            .header("x-forwarded-for", "198.51.100.8, 10.2.0.4")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo("127.0.0.1:4000".parse::<SocketAddr>().unwrap()));
+        assert_eq!(
+            resolve_client_ip(&request, &config),
+            "198.51.100.8".parse::<IpAddr>().unwrap()
+        );
+
+        request.extensions_mut().insert(ConnectInfo(
+            "192.0.2.20:4000".parse::<SocketAddr>().unwrap(),
+        ));
+        assert_eq!(
+            resolve_client_ip(&request, &config),
+            "192.0.2.20".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn malformed_forwarded_chain_falls_back_to_peer() {
+        let config = Config::default();
+        let mut request = Request::builder()
+            .header("x-forwarded-for", "spoofed-value")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo("127.0.0.1:4000".parse::<SocketAddr>().unwrap()));
+        assert_eq!(
+            resolve_client_ip(&request, &config),
+            IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        );
+    }
+
+    #[test]
+    fn forwarded_addresses_accept_caddy_remote_with_port() {
+        assert_eq!(
+            parse_forwarded_ip("198.51.100.8:43120"),
+            Some("198.51.100.8".parse().unwrap())
+        );
+        assert_eq!(
+            parse_forwarded_ip("[2001:db8::8]:43120"),
+            Some("2001:db8::8".parse().unwrap())
+        );
+        assert_eq!(parse_forwarded_ip("invalid:43120"), None);
     }
 
     #[tokio::test]
@@ -6081,8 +7585,8 @@ on_exceeded = "stop_proxy"
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["total"], 59);
-        assert_eq!(value["unknown"], 59);
+        assert_eq!(value["total"], 60);
+        assert_eq!(value["unknown"], 60);
         assert_eq!(value["unhealthy"], 0);
         assert_eq!(value["items"].as_array().unwrap().len(), 0);
     }
