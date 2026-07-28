@@ -22,16 +22,18 @@ jobs:
       - uses: actions/checkout@v5
       - name: Publish canonical Wiki pages
         env:
-          GH_TOKEN: ${{ github.token }}
+          # GITHUB_TOKEN works for a repository Wiki after it has been
+          # initialized. Set WIKI_TOKEN to a fine-grained PAT with repository
+          # Contents read/write if an organization policy restricts the
+          # GitHub Actions app from writing the Wiki repository.
+          GH_TOKEN: ${{ secrets.WIKI_TOKEN || github.token }}
         run: |
           wiki_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
-          if git clone "$wiki_url" wiki-repository; then
-            find wiki-repository -maxdepth 1 -type f -name '*.md' -delete
-          else
-            mkdir wiki-repository
-            git -C wiki-repository init
-            git -C wiki-repository remote add origin "$wiki_url"
+          if ! git clone "$wiki_url" wiki-repository; then
+            echo "::error title=GitHub Wiki is not initialized::Open the repository Wiki in GitHub and create the first Home page once. GitHub creates the .wiki.git repository only after that initial page exists; then rerun this workflow."
+            exit 1
           fi
+          find wiki-repository -maxdepth 1 -type f -name '*.md' -delete
           cp docs/wiki/*.md wiki-repository/
           git -C wiki-repository config user.name github-actions[bot]
           git -C wiki-repository config user.email 41898282+github-actions[bot]@users.noreply.github.com
