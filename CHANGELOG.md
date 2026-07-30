@@ -29,7 +29,7 @@ follow semantic versioning.
 ### Delivery and verification
 
 - Added client-only Homebrew Tap publication, WinGet portable manifests, and a
-  signed GitHub Pages APT repository with `amd64`/`arm64` `mirrorproxy` packages.
+  signed APT repository branch with `amd64`/`arm64` `mirrorproxy` packages.
 - Added Debian/RPM packages, generated Homebrew/Scoop manifests, dependency
   audits, Rust coverage artifacts, and a real server/administrator smoke test.
 - Added console controls for cache operations, email/webhook alerts, adaptive
@@ -130,4 +130,4 @@ Multi-instance clustering and high availability are intentionally outside the
 
 [1.1.0]: https://github.com/inbjo/MirrorProxy/compare/v1.0.2...v1.1.0
 [1.2.0]: https://github.com/inbjo/MirrorProxy/compare/v1.1.0...v1.2.0
-[1.3.0]: https://github.com/inbjo/MirrorProxy/compare/v1.2.0...HEAD
+[1.3.0]: https://github.com/inbjo/MirrorProxy/compare/v1.2.0...v1.3.0
