@@ -17,6 +17,23 @@ ip2region 数据库保证 IP 定位快速且不向第三方发送请求。
 
 ## 安装客户端
 
+Linux 和 macOS 一键安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh | sh
+mirrorproxy --version
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
+mirrorproxy --version
+```
+
+安装脚本只安装独立客户端，会自动选择当前平台的 Release 资产并验证 SHA-256；也可以通过
+以下包管理器安装：
+
 ```bash
 # macOS / Linux（首次使用需先执行 brew tap inbjo/tap）
 brew install mirrorproxy

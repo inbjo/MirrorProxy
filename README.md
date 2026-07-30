@@ -19,6 +19,24 @@ access control; offline ip2region databases keep IP location private and fast.
 
 ## Install the client
 
+One-command installer for Linux and macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh | sh
+mirrorproxy --version
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
+mirrorproxy --version
+```
+
+The scripts install only the standalone client, select the current platform
+release automatically, and verify its SHA-256 checksum. Package-manager options
+are also available:
+
 ```bash
 # macOS / Linux (run `brew tap inbjo/tap` once first)
 brew install mirrorproxy
