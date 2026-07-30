@@ -1,12 +1,37 @@
 listen_addr = "127.0.0.1:3000"
 database_path = "mirrorproxy.sqlite3"
+# Optional, environment-only: MIRRORPROXY_MASTER_KEY=<32-byte hex or base64url>
+# Keep this stable and outside the database/data volume; losing it prevents
+# recovery of encrypted runtime, SMTP, OAuth, email, and ACME secret fields.
 public_base_url = "http://127.0.0.1:3000"
 forward_client_authorization = false
 enabled_proxies = ["github", "composer", "oci", "npm", "nvm", "opam", "go", "maven", "rubygems", "rustup", "nuget", "cpan", "cran", "hackage", "julia", "luarocks", "clojars", "cocoapods", "pub", "anaconda", "texlive", "winget", "elpa", "nix", "guix", "flatpak", "homebrew", "os", "crates", "pypi"]
 
+[site]
+title = "MirrorProxy"
+description = "MirrorProxy 自托管镜像加速服务，支持 GitHub、Docker/OCI、npm、PyPI、crates.io、Go Modules、Composer、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Homebrew，以及 Linux/BSD 系统与常用软件仓库。 Fast self-hosted package and source mirror proxy."
+keywords = ["MirrorProxy", "镜像加速", "软件源", "GitHub", "Docker", "OCI", "npm", "Go Modules", "Maven", "PyPI", "crates.io", "Homebrew", "Linux", "BSD", "软件仓库", "Composer", "RubyGems", "NuGet", "CPAN", "CRAN"]
+icon_url = "/favicon.svg"
+# Left side of the footer. Empty keeps the current hostname-based default. The
+# GitHub project link and service version on the right are intentionally fixed.
+footer_text = ""
+
+# Optional additional private entry point for administration and diagnostics.
+# Enabling it does not hide the authenticated administration routes on the
+# public listener.
+[management]
+enabled = false
+listen_addr = "127.0.0.1:3001"
+
+# Prometheus metrics are local-only by default even though the administration
+# console remains available on the public listener with login protection.
+[metrics]
+local_only = true
+
 [upstreams]
 # Every string field accepts one or more HTTP(S) endpoints separated by commas.
-# Requests try endpoints in order until one returns HTTP 200.
+# Safe requests try the next endpoint after transport errors, 404/408/429, or
+# 5xx responses. Protocol-success and authentication responses are preserved.
 github = "https://github.com"
 github_raw = "https://raw.githubusercontent.com"
 packagist = "https://repo.packagist.org"
@@ -59,6 +84,13 @@ pypi_files = "https://files.pythonhosted.org"
 [timeout]
 request_secs = 60
 
+# ordered preserves configured priority. adaptive keeps healthy low-latency
+# endpoints first and temporarily opens a circuit after repeated failures.
+[upstream_selection]
+strategy = "ordered"
+failure_threshold = 3
+cooldown_secs = 30
+
 # Optional single proxy for every mirror-upstream HTTP request. socks5 resolves
 # DNS locally; socks5h delegates DNS resolution to the proxy. The same settings
 # are available under Admin > Advanced settings and apply immediately. The
@@ -92,6 +124,11 @@ enabled = false
 directory = "mirrorproxy-cache"
 max_entry_mb = 8
 max_total_mb = 256
+# Used only when the upstream omits an explicit public max-age. Mutable package
+# indexes are revalidated after this interval with ETag or Last-Modified.
+default_ttl_secs = 300
+# Never trust an upstream cache lifetime longer than this local ceiling.
+max_ttl_secs = 86400
 
 # Offline ip2region XDB v3 databases. Missing or invalid files degrade regional
 # traffic to "Unknown" without stopping proxy or IP access-list enforcement.
@@ -151,6 +188,17 @@ request_event_retention_days = 30
 # Omit for unlimited. Individual user overrides and billing-group limits are
 # configured from /admin.
 # default_user_monthly_gb = 100
+
+# Generic JSON webhook notifications for approaching quota limits and unhealthy
+# upstream groups. Delivery is deduplicated for the configured cooldown window.
+[alerts]
+enabled = false
+webhook_url = ""
+email_enabled = false
+email_recipients = []
+quota_percent = 80
+source_failures = 3
+cooldown_secs = 3600
 
 # Optional accounting-only user subdomains. Configure wildcard DNS and TLS for
 # *.mirror.example.com before setting mode to "subdomain_required".

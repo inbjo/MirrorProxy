@@ -15,6 +15,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 (cd web && npm test && npm run build)
+./scripts/smoke-admin-api.sh target/debug/mirrorproxy-server
 ```
 
 The end-to-end client smoke uses isolated temporary package-manager homes and
@@ -26,6 +27,9 @@ bash scripts/smoke-clients.sh
 
 OS-client and Docker smoke tests are narrower environment checks. Passing
 language-ecosystem smoke must not be described as validation for every OS
-repository. The active roadmap is `docs/plan.md` and `docs/next.md`.
+repository. CI also generates Rust LCOV coverage and audits Rust/npm
+dependencies. Tagged releases publish archives, Debian/RPM packages, Homebrew
+and WinGet manifests, and a signed client APT repository. The active roadmap is `docs/plan.md` and
+`docs/next.md`; multi-instance operation remains outside the 1.3.0 scope.
 
 [简体中文](Development-and-Roadmap-zh-CN)

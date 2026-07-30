@@ -1,5 +1,6 @@
 mod acme;
 mod acme_dns;
+mod alerts;
 mod config;
 mod database;
 mod email;
@@ -7,8 +8,10 @@ mod geoip;
 mod oauth;
 mod observability;
 mod proxy;
+mod secrets;
 mod source_health;
 mod static_assets;
+mod upstream_selection;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -27,7 +30,7 @@ use anyhow::Context;
 use axum::{
     body::Body,
     extract::{connect_info::ConnectInfo, Path as AxumPath, Query, Request, State},
-    http::{header, uri::Authority, HeaderMap, HeaderValue, StatusCode, Uri},
+    http::{header, uri::Authority, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -52,7 +55,7 @@ use proxy::{
 };
 use reqwest::{Certificate, Client, ClientBuilder, NoProxy, Proxy, Url};
 use serde::{Deserialize, Serialize};
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -123,6 +126,24 @@ enum Command {
         #[command(subcommand)]
         command: AdminCommand,
     },
+    /// Validate configuration, database integrity, schema, and secret storage.
+    Doctor {
+        /// Emit a machine-readable JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a transactionally consistent SQLite backup.
+    Backup {
+        /// New backup file; existing files are never overwritten.
+        output: PathBuf,
+    },
+    /// Restore SQLite from a backup while retaining the replaced raw database.
+    Restore {
+        input: PathBuf,
+        /// Confirm that the service has been stopped and the active database may be replaced.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -157,10 +178,11 @@ pub struct AppState {
     ip_access_policy: Arc<RwLock<IpAccessPolicy>>,
     acme: Arc<acme::AcmeManager>,
     acme_environment_managed: bool,
+    upstream_selector: Arc<upstream_selection::UpstreamSelector>,
 }
 
 pub struct RateLimiter {
-    window: Mutex<VecDeque<Instant>>,
+    windows: Mutex<HashMap<String, VecDeque<Instant>>>,
 }
 
 pub struct AdminLoginRateLimiter {
@@ -269,6 +291,38 @@ async fn main() -> anyhow::Result<()> {
             let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
             return run_admin_command(command, &config).await;
         }
+        Some(Command::Doctor { json }) => {
+            let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
+            let (database, _) = Database::open(&config.database_path).await?;
+            let health = database.health(&config.database_path).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&health)?);
+            } else {
+                println!("configuration: ok");
+                println!("database: {}", health.integrity);
+                println!("schema_version: {}", health.schema_version);
+                println!(
+                    "secrets_at_rest: {}",
+                    if health.encrypted_at_rest {
+                        "encrypted"
+                    } else {
+                        "plaintext (set MIRRORPROXY_MASTER_KEY to migrate)"
+                    }
+                );
+            }
+            return Ok(());
+        }
+        Some(Command::Backup { output }) => {
+            let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
+            let (database, _) = Database::open(&config.database_path).await?;
+            database.backup(&output).await?;
+            println!("backup: {}", output.display());
+            return Ok(());
+        }
+        Some(Command::Restore { input, force }) => {
+            let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
+            return restore_database(&config.database_path, &input, force).await;
+        }
         Some(Command::Install {
             unit_path,
             service_user,
@@ -301,6 +355,71 @@ async fn main() -> anyhow::Result<()> {
     } else {
         serve_http(application).await
     }
+}
+
+async fn restore_database(database_path: &str, input: &Path, force: bool) -> anyhow::Result<()> {
+    if !force {
+        anyhow::bail!("restore requires --force after stopping the MirrorProxy service");
+    }
+    if database_path == ":memory:" {
+        anyhow::bail!("cannot restore an in-memory database");
+    }
+    let target = Path::new(database_path);
+    if !input.is_file() {
+        anyhow::bail!("backup file does not exist: {}", input.display());
+    }
+    if target == input {
+        anyhow::bail!("backup and active database paths must be different");
+    }
+    let suffix = Utc::now().timestamp();
+    let temporary = target.with_extension(format!("restore-{suffix}.tmp"));
+    fs::copy(input, &temporary).with_context(|| {
+        format!(
+            "failed to stage backup {} at {}",
+            input.display(),
+            temporary.display()
+        )
+    })?;
+    {
+        let (candidate, _) = Database::open(
+            temporary
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("database path must be valid UTF-8"))?,
+        )
+        .await
+        .context("backup validation failed")?;
+        let health = candidate.health(&temporary.display().to_string()).await?;
+        if health.integrity != "ok" {
+            anyhow::bail!("backup integrity check failed: {}", health.integrity);
+        }
+    }
+
+    if target.exists() {
+        let (active, _) = Database::open(database_path).await?;
+        let logical_backup = target.with_extension(format!("pre-restore-{suffix}.sqlite3"));
+        active.backup(&logical_backup).await?;
+        drop(active);
+        let raw_backup = target.with_extension(format!("pre-restore-{suffix}.raw"));
+        fs::rename(target, &raw_backup).with_context(|| {
+            format!(
+                "failed to retain active database as {}",
+                raw_backup.display()
+            )
+        })?;
+        for extension in ["wal", "shm"] {
+            let sidecar = PathBuf::from(format!("{}-{extension}", target.display()));
+            if sidecar.exists() {
+                let retained = PathBuf::from(format!("{}.pre-restore-{suffix}", sidecar.display()));
+                fs::rename(&sidecar, retained)?;
+            }
+        }
+        println!("previous_backup: {}", logical_backup.display());
+        println!("previous_raw: {}", raw_backup.display());
+    }
+    fs::rename(&temporary, target)
+        .with_context(|| format!("failed to activate restored database {}", target.display()))?;
+    println!("restored: {}", target.display());
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -478,15 +597,56 @@ async fn serve_http(mut application: BuiltApplication) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     application.start_acme_worker();
     tracing::info!(%addr, "starting MirrorProxy HTTP service");
-    axum::serve(
+    let public_router = application.router.clone();
+    let public_server = axum::serve(
         listener,
-        application
-            .router
-            .into_make_service_with_connect_info::<SocketAddr>(),
+        public_router.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+    .with_graceful_shutdown(shutdown_signal());
+    if application.config.management.enabled {
+        let management_addr = application
+            .config
+            .management
+            .listen_addr
+            .parse::<SocketAddr>()
+            .context("validated management listener became invalid")?;
+        let management_listener = tokio::net::TcpListener::bind(management_addr)
+            .await
+            .with_context(|| format!("failed to bind management listener {management_addr}"))?;
+        tracing::info!(%management_addr, "starting private MirrorProxy management service");
+        let management_server = axum::serve(
+            management_listener,
+            application
+                .router
+                .layer(middleware::from_fn(management_plane_guard))
+                .into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal());
+        tokio::try_join!(public_server, management_server)?;
+    } else {
+        public_server.await?;
+    }
     Ok(())
+}
+
+fn is_management_path(path: &str) -> bool {
+    path == "/admin"
+        || path.starts_with("/admin/")
+        || path.starts_with("/api/admin/")
+        || path == "/metrics"
+}
+
+async fn management_plane_guard(request: axum::extract::Request, next: Next) -> Response {
+    let path = request.uri().path();
+    if !is_management_path(path)
+        && path != "/healthz"
+        && path != "/version"
+        && !path.starts_with("/assets/")
+        && path != "/favicon.svg"
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    next.run(request).await
 }
 
 #[derive(Clone)]
@@ -517,6 +677,34 @@ async fn serve_direct_https(mut application: BuiltApplication) -> anyhow::Result
         .with_context(|| format!("failed to bind direct HTTPS listener {https_addr}"))?;
     https_listener.set_nonblocking(true)?;
 
+    let public_router = application.router.clone();
+    let mut management_task = if application.config.management.enabled {
+        let management_addr = application
+            .config
+            .management
+            .listen_addr
+            .parse::<SocketAddr>()
+            .context("validated management listener became invalid")?;
+        let listener = tokio::net::TcpListener::bind(management_addr)
+            .await
+            .with_context(|| format!("failed to bind management listener {management_addr}"))?;
+        let router = application
+            .router
+            .clone()
+            .layer(middleware::from_fn(management_plane_guard));
+        tracing::info!(%management_addr, "starting private MirrorProxy management service");
+        Some(tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+        }))
+    } else {
+        None
+    };
+
     let https_ready = Arc::new(AtomicBool::new(false));
     let http_router = if application.config.acme.redirect_http_to_https {
         Router::new()
@@ -532,7 +720,7 @@ async fn serve_direct_https(mut application: BuiltApplication) -> anyhow::Result
                 https_ready: https_ready.clone(),
             })
     } else {
-        application.router.clone()
+        public_router.clone()
     };
 
     let http_handle = axum_server::Handle::new();
@@ -541,7 +729,7 @@ async fn serve_direct_https(mut application: BuiltApplication) -> anyhow::Result
     let https_server_handle = https_handle.clone();
     let acme = application.state.acme.clone();
     let storage_directory = PathBuf::from(&application.config.acme.storage_directory);
-    let https_router = application.router.clone();
+    let https_router = public_router;
     let https_ready_for_shutdown = https_ready.clone();
 
     application.start_acme_worker();
@@ -567,12 +755,21 @@ async fn serve_direct_https(mut application: BuiltApplication) -> anyhow::Result
         result = &mut http_task => {
             https_handle.shutdown();
             https_task.abort();
+            if let Some(task) = &management_task { task.abort(); }
             flatten_server_task("HTTP", result)
         }
         result = &mut https_task => {
             http_handle.shutdown();
             http_task.abort();
+            if let Some(task) = &management_task { task.abort(); }
             flatten_server_task("HTTPS", result)
+        }
+        result = async { management_task.as_mut().expect("guarded management task").await }, if management_task.is_some() => {
+            http_handle.shutdown();
+            https_handle.shutdown();
+            http_task.abort();
+            https_task.abort();
+            result.context("management server task failed")?.context("management server failed")
         }
         _ = shutdown_signal() => {
             http_handle.graceful_shutdown(Some(Duration::from_secs(30)));
@@ -586,6 +783,7 @@ async fn serve_direct_https(mut application: BuiltApplication) -> anyhow::Result
             }).await;
             http_task.abort();
             https_task.abort();
+            if let Some(task) = &management_task { task.abort(); }
             Ok(())
         }
     }
@@ -749,7 +947,7 @@ fn run_config_command(
             if let Some(key) = key {
                 let value = config_value(config, &key)
                     .ok_or_else(|| anyhow::anyhow!("unknown config key '{key}'"))?;
-                println!("{value}");
+                println!("{}", config_cli_value(&key, &value));
             } else {
                 for (key, value) in config_entries(config) {
                     println!("{key} = {value}");
@@ -763,8 +961,14 @@ fn run_config_command(
         } => {
             let change = plan_config_set(config, &key, &value)?;
             println!("key: {}", change.key);
-            println!("current: {}", change.current_value);
-            println!("next: {}", change.next_value);
+            println!(
+                "current: {}",
+                config_cli_value(&change.key, &change.current_value)
+            );
+            println!(
+                "next: {}",
+                config_cli_value(&change.key, &change.next_value)
+            );
             println!("toml_path: {}", change.toml_path);
             if dry_run {
                 println!("dry_run: true");
@@ -783,6 +987,14 @@ fn run_config_command(
     }
 
     Ok(())
+}
+
+fn config_cli_value(key: &str, value: &str) -> String {
+    if key == "alerts.webhook_url" && !value.is_empty() {
+        "[redacted]".to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 async fn run_admin_command(command: AdminCommand, config: &Config) -> anyhow::Result<()> {
@@ -853,9 +1065,11 @@ fn set_toml_value(document: &mut toml::Value, key: &str, value: &str) -> anyhow:
         ConfigValueKind::Bool => toml::Value::Boolean(value.parse()?),
         ConfigValueKind::U64 | ConfigValueKind::PositiveU64 => toml::Value::Integer(value.parse()?),
         ConfigValueKind::PositiveU32 => toml::Value::Integer(i64::from(value.parse::<u32>()?)),
-        ConfigValueKind::OptionalHttpUrl
+        ConfigValueKind::String
+        | ConfigValueKind::OptionalHttpUrl
         | ConfigValueKind::ProxyUrl
         | ConfigValueKind::NonEmpty
+        | ConfigValueKind::UpstreamStrategy
         | ConfigValueKind::QuotaAction => toml::Value::String(value.to_string()),
         ConfigValueKind::HttpUrlList => toml::Value::String(value.to_string()),
         ConfigValueKind::StringList | ConfigValueKind::TrustedProxyList => toml::Value::Array(
@@ -930,6 +1144,7 @@ struct ConfigSetSpec {
 #[derive(Clone, Copy)]
 enum ConfigValueKind {
     Bool,
+    String,
     OptionalHttpUrl,
     HttpUrlList,
     ProxyUrl,
@@ -939,6 +1154,7 @@ enum ConfigValueKind {
     PositiveU32,
     PositiveU64,
     QuotaAction,
+    UpstreamStrategy,
     TrustedProxyList,
 }
 
@@ -954,10 +1170,42 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
     let (key, toml_path, value_kind) = match key {
         "database_path" => ("database_path", "database_path", ConfigValueKind::NonEmpty),
         "listen_addr" => ("listen_addr", "listen_addr", ConfigValueKind::NonEmpty),
+        "management.enabled" => (
+            "management.enabled",
+            "management.enabled",
+            ConfigValueKind::Bool,
+        ),
+        "management.listen_addr" => (
+            "management.listen_addr",
+            "management.listen_addr",
+            ConfigValueKind::NonEmpty,
+        ),
+        "metrics.local_only" => (
+            "metrics.local_only",
+            "metrics.local_only",
+            ConfigValueKind::Bool,
+        ),
         "public_base_url" => (
             "public_base_url",
             "public_base_url",
             ConfigValueKind::OptionalHttpUrl,
+        ),
+        "site.title" => ("site.title", "site.title", ConfigValueKind::NonEmpty),
+        "site.description" => (
+            "site.description",
+            "site.description",
+            ConfigValueKind::String,
+        ),
+        "site.keywords" => (
+            "site.keywords",
+            "site.keywords",
+            ConfigValueKind::StringList,
+        ),
+        "site.icon_url" => ("site.icon_url", "site.icon_url", ConfigValueKind::NonEmpty),
+        "site.footer_text" => (
+            "site.footer_text",
+            "site.footer_text",
+            ConfigValueKind::String,
         ),
         "trusted_proxies" => (
             "trusted_proxies",
@@ -999,6 +1247,21 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             "timeout.request_secs",
             ConfigValueKind::PositiveU64,
         ),
+        "upstream_selection.strategy" => (
+            "upstream_selection.strategy",
+            "upstream_selection.strategy",
+            ConfigValueKind::UpstreamStrategy,
+        ),
+        "upstream_selection.failure_threshold" => (
+            "upstream_selection.failure_threshold",
+            "upstream_selection.failure_threshold",
+            ConfigValueKind::PositiveU32,
+        ),
+        "upstream_selection.cooldown_secs" => (
+            "upstream_selection.cooldown_secs",
+            "upstream_selection.cooldown_secs",
+            ConfigValueKind::PositiveU64,
+        ),
         "rate_limit.enabled" => (
             "rate_limit.enabled",
             "rate_limit.enabled",
@@ -1025,6 +1288,16 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             "cache.max_total_mb",
             ConfigValueKind::PositiveU64,
         ),
+        "cache.default_ttl_secs" => (
+            "cache.default_ttl_secs",
+            "cache.default_ttl_secs",
+            ConfigValueKind::PositiveU64,
+        ),
+        "cache.max_ttl_secs" => (
+            "cache.max_ttl_secs",
+            "cache.max_ttl_secs",
+            ConfigValueKind::PositiveU64,
+        ),
         "quota.enabled" => ("quota.enabled", "quota.enabled", ConfigValueKind::Bool),
         "quota.bidirectional_accounting" => (
             "quota.bidirectional_accounting",
@@ -1046,6 +1319,37 @@ fn config_set_spec(key: &str) -> Option<ConfigSetSpec> {
             "quota.request_event_retention_days",
             "quota.request_event_retention_days",
             ConfigValueKind::PositiveU32,
+        ),
+        "alerts.enabled" => ("alerts.enabled", "alerts.enabled", ConfigValueKind::Bool),
+        "alerts.webhook_url" => (
+            "alerts.webhook_url",
+            "alerts.webhook_url",
+            ConfigValueKind::OptionalHttpUrl,
+        ),
+        "alerts.email_enabled" => (
+            "alerts.email_enabled",
+            "alerts.email_enabled",
+            ConfigValueKind::Bool,
+        ),
+        "alerts.email_recipients" => (
+            "alerts.email_recipients",
+            "alerts.email_recipients",
+            ConfigValueKind::StringList,
+        ),
+        "alerts.quota_percent" => (
+            "alerts.quota_percent",
+            "alerts.quota_percent",
+            ConfigValueKind::PositiveU32,
+        ),
+        "alerts.source_failures" => (
+            "alerts.source_failures",
+            "alerts.source_failures",
+            ConfigValueKind::PositiveU32,
+        ),
+        "alerts.cooldown_secs" => (
+            "alerts.cooldown_secs",
+            "alerts.cooldown_secs",
+            ConfigValueKind::PositiveU64,
         ),
         _ => return None,
     };
@@ -1106,7 +1410,7 @@ fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
             }
             .validate()?;
         }
-        ConfigValueKind::StringList => {}
+        ConfigValueKind::String | ConfigValueKind::StringList => {}
         ConfigValueKind::NonEmpty => {
             if value.trim().is_empty() {
                 anyhow::bail!("{key} cannot be empty");
@@ -1130,6 +1434,11 @@ fn validate_config_set_value(key: &str, value: &str) -> anyhow::Result<()> {
         ConfigValueKind::QuotaAction => {
             if !matches!(value, "stop_proxy" | "throttle") {
                 anyhow::bail!("{key} expects stop_proxy or throttle");
+            }
+        }
+        ConfigValueKind::UpstreamStrategy => {
+            if !matches!(value, "ordered" | "adaptive") {
+                anyhow::bail!("{key} expects ordered or adaptive");
             }
         }
         ConfigValueKind::TrustedProxyList => {
@@ -1158,7 +1467,15 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
     match key {
         "database_path" => Some(config.database_path.clone()),
         "listen_addr" => Some(config.listen_addr.clone()),
+        "management.enabled" => Some(config.management.enabled.to_string()),
+        "management.listen_addr" => Some(config.management.listen_addr.clone()),
+        "metrics.local_only" => Some(config.metrics.local_only.to_string()),
         "public_base_url" => Some(config.public_base_url.clone()),
+        "site.title" => Some(config.site.title.clone()),
+        "site.description" => Some(config.site.description.clone()),
+        "site.keywords" => Some(config.site.keywords.join(",")),
+        "site.icon_url" => Some(config.site.icon_url.clone()),
+        "site.footer_text" => Some(config.site.footer_text.clone()),
         "trusted_proxies" => Some(config.trusted_proxies.join(",")),
         "forward_client_authorization" => Some(config.forward_client_authorization.to_string()),
         "outbound_proxy.enabled" => Some(config.outbound_proxy.enabled.to_string()),
@@ -1170,12 +1487,21 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         }
         "enabled_proxies" => Some(config.enabled_proxies.join(",")),
         "timeout.request_secs" => Some(config.timeout.request_secs.to_string()),
+        "upstream_selection.strategy" => Some(config.upstream_selection.strategy.clone()),
+        "upstream_selection.failure_threshold" => {
+            Some(config.upstream_selection.failure_threshold.to_string())
+        }
+        "upstream_selection.cooldown_secs" => {
+            Some(config.upstream_selection.cooldown_secs.to_string())
+        }
         "rate_limit.enabled" => Some(config.rate_limit.enabled.to_string()),
         "rate_limit.requests_per_minute" => Some(config.rate_limit.requests_per_minute.to_string()),
         "cache.enabled" => Some(config.cache.enabled.to_string()),
         "cache.directory" => Some(config.cache.directory.clone()),
         "cache.max_entry_mb" => Some(config.cache.max_entry_mb.to_string()),
         "cache.max_total_mb" => Some(config.cache.max_total_mb.to_string()),
+        "cache.default_ttl_secs" => Some(config.cache.default_ttl_secs.to_string()),
+        "cache.max_ttl_secs" => Some(config.cache.max_ttl_secs.to_string()),
         "quota.enabled" => Some(config.quota.enabled.to_string()),
         "quota.bidirectional_accounting" => Some(config.quota.bidirectional_accounting.to_string()),
         "quota.monthly_gb" => Some(config.quota.monthly_gb.to_string()),
@@ -1184,6 +1510,13 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "quota.request_event_retention_days" => {
             Some(config.quota.request_event_retention_days.to_string())
         }
+        "alerts.enabled" => Some(config.alerts.enabled.to_string()),
+        "alerts.webhook_url" => Some(config.alerts.webhook_url.clone()),
+        "alerts.email_enabled" => Some(config.alerts.email_enabled.to_string()),
+        "alerts.email_recipients" => Some(config.alerts.email_recipients.join(",")),
+        "alerts.quota_percent" => Some(config.alerts.quota_percent.to_string()),
+        "alerts.source_failures" => Some(config.alerts.source_failures.to_string()),
+        "alerts.cooldown_secs" => Some(config.alerts.cooldown_secs.to_string()),
         "upstreams.github" => Some(config.upstreams.github.clone()),
         "upstreams.github_raw" => Some(config.upstreams.github_raw.clone()),
         "upstreams.packagist" => Some(config.upstreams.packagist.clone()),
@@ -1238,7 +1571,15 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
     let mut entries = [
         "database_path",
         "listen_addr",
+        "management.enabled",
+        "management.listen_addr",
+        "metrics.local_only",
         "public_base_url",
+        "site.title",
+        "site.description",
+        "site.keywords",
+        "site.icon_url",
+        "site.footer_text",
         "trusted_proxies",
         "forward_client_authorization",
         "outbound_proxy.enabled",
@@ -1248,18 +1589,29 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
         "upstream_tls.insecure_skip_verify",
         "enabled_proxies",
         "timeout.request_secs",
+        "upstream_selection.strategy",
+        "upstream_selection.failure_threshold",
+        "upstream_selection.cooldown_secs",
         "rate_limit.enabled",
         "rate_limit.requests_per_minute",
         "cache.enabled",
         "cache.directory",
         "cache.max_entry_mb",
         "cache.max_total_mb",
+        "cache.default_ttl_secs",
+        "cache.max_ttl_secs",
         "quota.enabled",
         "quota.bidirectional_accounting",
         "quota.monthly_gb",
         "quota.timezone",
         "quota.on_exceeded",
         "quota.request_event_retention_days",
+        "alerts.enabled",
+        "alerts.email_enabled",
+        "alerts.email_recipients",
+        "alerts.quota_percent",
+        "alerts.source_failures",
+        "alerts.cooldown_secs",
         "upstreams.github",
         "upstreams.github_raw",
         "upstreams.packagist",
@@ -1385,6 +1737,9 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
     let mut config = database
         .load_or_seed_runtime_config(service_config.clone())
         .await?;
+    config.site.upgrade_legacy_defaults();
+    // Listener topology is service-owned and only takes effect on restart.
+    config.management = service_config.management.clone();
     // Private upstream credentials remain service-owned. Environment variables
     // for the global outbound proxy deliberately override the persisted admin
     // setting at process startup for managed/container deployments.
@@ -1470,11 +1825,13 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
         ip_access_policy: Arc::new(RwLock::new(ip_access_policy)),
         acme,
         acme_environment_managed,
+        upstream_selector: Arc::new(upstream_selection::UpstreamSelector::default()),
     };
 
     email::spawn_email_outbox_worker(state.database.clone());
     if !cfg!(test) {
         source_health::spawn_worker(state.clone());
+        alerts::spawn_worker(state.clone());
     }
 
     let router = Router::new()
@@ -1541,6 +1898,10 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
             get(admin_config).put(update_admin_config),
         )
         .route("/admin/api/stats", get(admin_stats))
+        .route(
+            "/admin/api/cache",
+            get(admin_cache_stats).delete(admin_cache_purge),
+        )
         .route("/admin/api/geoip/status", get(admin_geoip_status))
         .route("/admin/api/geoip/lookup", post(admin_geoip_lookup))
         .route("/admin/api/geoip/update", post(admin_geoip_update))
@@ -1585,8 +1946,20 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
             get(list_billing_groups).post(create_billing_group),
         )
         .route(
+            "/admin/api/teams",
+            get(list_billing_groups).post(create_billing_group),
+        )
+        .route(
             "/admin/api/groups/{id}",
             axum::routing::put(update_billing_group),
+        )
+        .route(
+            "/admin/api/groups/{id}/target-access",
+            get(admin_group_target_access).put(update_group_target_access),
+        )
+        .route(
+            "/admin/api/teams/{id}/target-access",
+            get(admin_group_target_access).put(update_group_target_access),
         )
         .route(
             "/admin/api/users/{id}/routing-id/rotate",
@@ -1793,7 +2166,13 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
             state.clone(),
             strip_untrusted_forwarded_headers,
         ))
-        .layer(CorsLayer::permissive())
+        // Public metadata and mirror reads may be embedded by documentation
+        // sites. Mutating control-plane methods remain same-origin only.
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::HEAD]),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             observability_middleware,
@@ -2046,13 +2425,20 @@ fn initial_admin_credentials_log(
 impl RateLimiter {
     fn new() -> Self {
         Self {
-            window: Mutex::new(VecDeque::new()),
+            windows: Mutex::new(HashMap::new()),
         }
     }
 
-    fn check(&self, requests_per_minute: u32, now: Instant) -> bool {
+    fn check(&self, key: &str, requests_per_minute: u32, now: Instant) -> bool {
         let cutoff = now - Duration::from_secs(60);
-        let mut window = self.window.lock().expect("rate limit mutex poisoned");
+        let mut windows = self.windows.lock().expect("rate limit mutex poisoned");
+        windows.retain(|_, window| {
+            while window.front().is_some_and(|timestamp| *timestamp <= cutoff) {
+                window.pop_front();
+            }
+            !window.is_empty()
+        });
+        let window = windows.entry(key.to_string()).or_default();
         while window.front().is_some_and(|timestamp| *timestamp <= cutoff) {
             window.pop_front();
         }
@@ -2179,10 +2565,22 @@ async fn rate_limit_middleware(
     next: Next,
 ) -> Response {
     let config = state.config();
+    let path = request.uri().path().to_string();
+    let method = request.method().to_string();
+    let target_code = proxy_target_for_path(&path);
+    let rate_limit_key = target_code.map(|_| {
+        request
+            .extensions()
+            .get::<UserRoutingContext>()
+            .map(|context| format!("user:{}", context.user_id))
+            .unwrap_or_else(|| format!("ip:{}", resolve_client_ip(&request, &config)))
+    });
     if config.rate_limit.enabled
-        && !state
-            .rate_limiter
-            .check(config.rate_limit.requests_per_minute, Instant::now())
+        && rate_limit_key.as_ref().is_some_and(|key| {
+            !state
+                .rate_limiter
+                .check(key, config.rate_limit.requests_per_minute, Instant::now())
+        })
     {
         state.observability.observe_rejection("rate_limit");
         return (
@@ -2195,9 +2593,6 @@ async fn rate_limit_middleware(
             .into_response();
     }
 
-    let path = request.uri().path().to_string();
-    let method = request.method().to_string();
-    let target_code = proxy_target_for_path(&path);
     if let Some(target_code) = target_code {
         let client_ip = resolve_client_ip(&request, &config);
         let access_decision = state
@@ -2232,6 +2627,29 @@ async fn rate_limit_middleware(
         };
         let reservation_bytes = QUOTA_RESERVATION_BYTES.saturating_mul(accounting_multiplier);
         let user_context = request.extensions().get::<UserRoutingContext>().cloned();
+        if let Some(context) = &user_context {
+            match state
+                .database
+                .user_target_allowed(context.user_id, target_code)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    state.observability.observe_rejection("team_target_policy");
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({
+                            "error": "this mirror target is not enabled for the user's team"
+                        })),
+                    )
+                        .into_response();
+                }
+                Err(error) => {
+                    tracing::error!(%error, "team target policy lookup failed");
+                    return internal_error_response();
+                }
+            }
+        }
         let global_limit = config
             .quota
             .enabled
@@ -2310,11 +2728,14 @@ fn resolve_client_ip(request: &Request, config: &Config) -> IpAddr {
         .get::<ConnectInfo<SocketAddr>>()
         .map(|peer| peer.0.ip())
         .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    resolve_client_ip_from(peer, request.headers(), config)
+}
+
+fn resolve_client_ip_from(peer: IpAddr, headers: &HeaderMap, config: &Config) -> IpAddr {
     if !config.is_trusted_proxy(peer) {
         return peer;
     }
-    let Some(value) = request
-        .headers()
+    let Some(value) = headers
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
     else {
@@ -2753,7 +3174,17 @@ async fn version() -> impl IntoResponse {
     }))
 }
 
-async fn metrics(State(state): State<AppState>) -> Response {
+async fn metrics(
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+) -> Response {
+    let config = state.config();
+    let client_ip = resolve_client_ip_from(peer.ip(), &headers, &config);
+    if config.metrics.local_only && !client_ip.is_loopback() {
+        state.observability.observe_rejection("metrics_local_only");
+        return StatusCode::FORBIDDEN.into_response();
+    }
     match state.observability.encode() {
         Ok((content_type, output)) => {
             let content_type = HeaderValue::from_str(&content_type)
@@ -2779,6 +3210,7 @@ async fn metrics(State(state): State<AppState>) -> Response {
 #[derive(Serialize)]
 struct PublicConfig {
     public_base_url: String,
+    site: config::SiteConfig,
     enabled_proxies: Vec<String>,
     quota: PublicQuotaConfig,
     user_access: PublicUserAccessConfig,
@@ -2819,6 +3251,7 @@ async fn public_config(State(state): State<AppState>, headers: HeaderMap) -> imp
     };
     Json(PublicConfig {
         public_base_url: state.public_base_url(&headers),
+        site: config.site.clone(),
         enabled_proxies: config.enabled_proxies.clone(),
         quota: PublicQuotaConfig {
             enabled: config.quota.enabled,
@@ -2866,9 +3299,10 @@ async fn admin_login(
 async fn admin_cookie_login(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(request): Json<AdminLoginRequest>,
 ) -> Response {
-    let source = peer.ip().to_string();
+    let source = resolve_client_ip_from(peer.ip(), &headers, &state.config()).to_string();
     admin_login_response(&state, request, &source, true).await
 }
 
@@ -2916,6 +3350,7 @@ async fn admin_login_response(
                     .into_response();
             }
             state.admin_login_limiter.clear(&username_key);
+            state.admin_login_limiter.clear(&source_key);
             let cookie = admin_session_cookie(&session.token, SESSION_COOKIE_MAX_AGE_SECS);
             let mut response = Json(serde_json::json!({
                 "username": session.username,
@@ -2947,6 +3382,7 @@ async fn admin_login_response(
                     .into_response();
             }
             state.admin_login_limiter.clear(&username_key);
+            state.admin_login_limiter.clear(&source_key);
             Json(AdminLoginResponse {
                 token: session.token,
                 expires_at: session.expires_at,
@@ -3597,6 +4033,45 @@ async fn admin_config(headers: HeaderMap, State(state): State<AppState>) -> Resp
     }
 }
 
+async fn admin_cache_stats(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    match is_admin_authorized(&headers, &state).await {
+        Ok(true) => Json(proxy::disk_cache_stats(&state.config().cache)).into_response(),
+        Ok(false) => unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator cache authorization failed");
+            internal_error_response()
+        }
+    }
+}
+
+async fn admin_cache_purge(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let identity = match authenticated_admin(&headers, &state).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return unauthorized_response(),
+        Err(error) => {
+            tracing::error!(%error, "administrator cache authorization failed");
+            return internal_error_response();
+        }
+    };
+    match proxy::purge_disk_cache(&state.config().cache) {
+        Ok(removed) => {
+            let _ = state
+                .database
+                .append_audit_log(
+                    &identity.username,
+                    "cache_purged",
+                    &format!("{removed} files"),
+                )
+                .await;
+            Json(serde_json::json!({ "removed_files": removed })).into_response()
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to purge disk cache");
+            internal_error_response()
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct AdminConfigUpdateResponse {
     config: serde_json::Value,
@@ -3605,13 +4080,21 @@ struct AdminConfigUpdateResponse {
 
 fn admin_config_value(mut config: Config) -> serde_json::Value {
     let has_password = config.outbound_proxy.password.is_some();
+    let has_alert_webhook = !config.alerts.webhook_url.is_empty();
     config.outbound_proxy.password = None;
+    config.alerts.webhook_url.clear();
     let mut value = serde_json::to_value(config).expect("configuration is serializable");
     if let Some(outbound_proxy) = value
         .get_mut("outbound_proxy")
         .and_then(serde_json::Value::as_object_mut)
     {
         outbound_proxy.insert("has_password".into(), has_password.into());
+    }
+    if let Some(alerts) = value
+        .get_mut("alerts")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        alerts.insert("has_webhook_url".into(), has_alert_webhook.into());
     }
     value
 }
@@ -4266,6 +4749,11 @@ async fn update_admin_config(
     };
 
     let current = state.config();
+    if next_config.alerts.webhook_url.trim().is_empty()
+        && !current.alerts.webhook_url.trim().is_empty()
+    {
+        next_config.alerts.webhook_url = current.alerts.webhook_url.clone();
+    }
     if next_config
         .outbound_proxy
         .username
@@ -4282,6 +4770,24 @@ async fn update_admin_config(
     // ACME settings use a dedicated super-admin endpoint so secrets never pass
     // through the general runtime configuration API.
     next_config.acme = current.acme.clone();
+    if next_config.alerts.enabled && next_config.alerts.email_enabled {
+        match state.database.smtp_settings().await {
+            Ok(Some(settings)) if settings.enabled => {}
+            Ok(_) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "SMTP must be enabled before email alerts can be enabled"
+                    })),
+                )
+                    .into_response();
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to validate SMTP for email alerts");
+                return internal_error_response();
+            }
+        }
+    }
     if let Err(error) = next_config.validate() {
         return (
             StatusCode::BAD_REQUEST,
@@ -4292,12 +4798,13 @@ async fn update_admin_config(
     // Private per-upstream credentials remain service-owned.
     next_config.upstream_auth = current.upstream_auth.clone();
     if next_config.listen_addr != current.listen_addr
+        || next_config.management != current.management
         || next_config.database_path != current.database_path
     {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
-                "error": "listen_addr and database_path cannot be changed through the runtime API; update the service configuration and restart"
+                "error": "listener addresses and database_path cannot be changed through the runtime API; update the service configuration and restart"
             })),
         )
             .into_response();
@@ -4704,6 +5211,11 @@ struct BillingGroupRequest {
     monthly_gb: Option<u64>,
 }
 
+#[derive(Deserialize)]
+struct GroupTargetAccessRequest {
+    target_codes: Vec<String>,
+}
+
 async fn list_billing_groups(headers: HeaderMap, State(state): State<AppState>) -> Response {
     if let Err(response) = require_super_admin(&headers, &state).await {
         return response;
@@ -4779,6 +5291,64 @@ async fn update_billing_group(
             .into_response(),
         Err(error) => {
             tracing::error!(%error, "failed to update billing group");
+            internal_error_response()
+        }
+    }
+}
+
+async fn admin_group_target_access(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+) -> Response {
+    if let Err(response) = require_super_admin(&headers, &state).await {
+        return response;
+    }
+    match state.database.group_target_access(id).await {
+        Ok(Some(policy)) => Json(policy).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to load team target access");
+            internal_error_response()
+        }
+    }
+}
+
+async fn update_group_target_access(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+    Json(request): Json<GroupTargetAccessRequest>,
+) -> Response {
+    let identity = match require_super_admin(&headers, &state).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    let supported = Config::default().enabled_proxies;
+    let mut target_codes = request
+        .target_codes
+        .into_iter()
+        .map(|target| target.trim().to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    target_codes.sort();
+    target_codes.dedup();
+    if target_codes
+        .iter()
+        .any(|target| !supported.contains(target))
+    {
+        return bad_request_response(
+            "target_codes contains an unsupported proxy target".to_string(),
+        );
+    }
+    match state
+        .database
+        .set_group_target_access(&identity.username, id, &target_codes)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to update team target access");
             internal_error_response()
         }
     }
@@ -5319,12 +5889,14 @@ async fn fallback(
     State(state): State<AppState>,
     request: axum::extract::Request,
 ) -> impl IntoResponse {
-    let path = request.uri().path();
-    if github::is_github_proxy_path(path) {
+    let path = request.uri().path().to_string();
+    if github::is_github_proxy_path(&path) {
         return github::proxy(State(state), request).await.into_response();
     }
 
-    static_assets::serve(request.uri().path()).into_response()
+    let canonical_base_url = state.public_base_url(request.headers());
+    let site = state.config().site.clone();
+    static_assets::serve(&path, &site, &canonical_base_url).into_response()
 }
 
 async fn shutdown_signal() {
@@ -5425,6 +5997,7 @@ mod tests {
             ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
             acme: test_acme_manager(),
             acme_environment_managed: false,
+            upstream_selector: Arc::new(upstream_selection::UpstreamSelector::default()),
         };
         (state, credentials.unwrap())
     }
@@ -5639,6 +6212,7 @@ mod tests {
             ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
             acme: test_acme_manager(),
             acme_environment_managed: false,
+            upstream_selector: Arc::new(upstream_selection::UpstreamSelector::default()),
         };
         (state, user)
     }
@@ -6363,15 +6937,14 @@ on_exceeded = "stop_proxy"
             .unwrap();
         assert_eq!(health.status(), StatusCode::OK);
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/metrics")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
+        let mut request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
             .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:41000".parse::<SocketAddr>().unwrap(),
+        ));
+        let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response
             .headers()
@@ -6391,6 +6964,17 @@ on_exceeded = "stop_proxy"
             "mirrorproxy_http_requests_total{method=\"GET\",route=\"/healthz\",status=\"200\"} 1"
         ));
         assert!(!body.contains("must-not-appear"));
+
+        let mut remote_request = Request::builder()
+            .uri("/metrics")
+            .header("x-forwarded-for", "203.0.113.7")
+            .body(Body::empty())
+            .unwrap();
+        remote_request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:41001".parse::<SocketAddr>().unwrap(),
+        ));
+        let remote_response = app.oneshot(remote_request).await.unwrap();
+        assert_eq!(remote_response.status(), StatusCode::FORBIDDEN);
     }
 
     #[test]
@@ -6420,23 +7004,13 @@ on_exceeded = "stop_proxy"
 
         let first = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/healthz")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/cpan").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(first.status(), StatusCode::OK);
 
         let second = app
-            .oneshot(
-                Request::builder()
-                    .uri("/healthz")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/cpan").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -6446,6 +7020,58 @@ on_exceeded = "stop_proxy"
                 .get(axum::http::header::RETRY_AFTER)
                 .unwrap(),
             "60"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limit_does_not_block_health_or_other_clients() {
+        let app = build_router(Config {
+            rate_limit: crate::config::RateLimitConfig {
+                enabled: true,
+                requests_per_minute: 1,
+            },
+            ..Config::default()
+        })
+        .await
+        .unwrap();
+
+        let request = |uri: &'static str, peer: &str| {
+            let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+            request.extensions_mut().insert(ConnectInfo(
+                peer.parse::<SocketAddr>().expect("valid test peer"),
+            ));
+            request
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/cpan", "192.0.2.1:4000"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/cpan", "192.0.2.1:4001"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/cpan", "192.0.2.2:4000"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            app.oneshot(request("/healthz", "192.0.2.1:4002"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
         );
     }
 
@@ -6467,6 +7093,14 @@ on_exceeded = "stop_proxy"
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["public_base_url"], "https://mirror.example:8443");
+        assert_eq!(value["site"]["title"], "MirrorProxy");
+        assert_eq!(value["site"]["icon_url"], "/favicon.svg");
+        assert_eq!(value["site"]["footer_text"], "");
+        assert!(value["site"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Hackage"));
+        assert_eq!(value["site"]["keywords"].as_array().unwrap().len(), 20);
         assert_eq!(value["enabled_proxies"][0], "github");
         assert!(value["enabled_proxies"]
             .as_array()
@@ -6560,6 +7194,7 @@ on_exceeded = "stop_proxy"
             ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
             acme: test_acme_manager(),
             acme_environment_managed: false,
+            upstream_selector: Arc::new(upstream_selection::UpstreamSelector::default()),
         };
         let session = database
             .login(&credentials.username, &credentials.password)
@@ -6582,6 +7217,8 @@ on_exceeded = "stop_proxy"
             password: Some("proxy-password".to_string()),
         };
         next_config.upstream_tls.insecure_skip_verify = true;
+        next_config.alerts.enabled = true;
+        next_config.alerts.webhook_url = "https://hooks.example/private-token".to_string();
 
         let response = update_admin_config(headers, State(state.clone()), Json(next_config)).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -6594,6 +7231,8 @@ on_exceeded = "stop_proxy"
             serde_json::Value::Null
         );
         assert_eq!(response["config"]["outbound_proxy"]["has_password"], true);
+        assert_eq!(response["config"]["alerts"]["webhook_url"], "");
+        assert_eq!(response["config"]["alerts"]["has_webhook_url"], true);
         assert_eq!(
             response["config"]["upstream_tls"]["insecure_skip_verify"],
             true
@@ -6654,6 +7293,7 @@ on_exceeded = "stop_proxy"
             ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
             acme: test_acme_manager(),
             acme_environment_managed: false,
+            upstream_selector: Arc::new(upstream_selection::UpstreamSelector::default()),
         };
         let session = database
             .login(&credentials.username, &credentials.password)
@@ -6744,6 +7384,7 @@ on_exceeded = "stop_proxy"
             ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
             acme: test_acme_manager(),
             acme_environment_managed: false,
+            upstream_selector: Arc::new(upstream_selection::UpstreamSelector::default()),
         };
         let session = database
             .login(&credentials.username, &credentials.password)
@@ -6789,6 +7430,7 @@ on_exceeded = "stop_proxy"
             ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
             acme: test_acme_manager(),
             acme_environment_managed: false,
+            upstream_selector: Arc::new(upstream_selection::UpstreamSelector::default()),
         };
 
         let unauthenticated = admin_audit_log(
@@ -6851,6 +7493,7 @@ on_exceeded = "stop_proxy"
             ip_access_policy: Arc::new(RwLock::new(IpAccessPolicy::default())),
             acme: test_acme_manager(),
             acme_environment_managed: false,
+            upstream_selector: Arc::new(upstream_selection::UpstreamSelector::default()),
         };
         let session = database
             .login(&credentials.username, &credentials.password)
@@ -6930,6 +7573,7 @@ on_exceeded = "stop_proxy"
         let response = admin_cookie_login(
             State(state.clone()),
             ConnectInfo("127.0.0.1:41000".parse().unwrap()),
+            HeaderMap::new(),
             Json(AdminLoginRequest {
                 username: credentials.username.clone(),
                 password: credentials.password,
@@ -6979,6 +7623,7 @@ on_exceeded = "stop_proxy"
             let response = admin_cookie_login(
                 State(state.clone()),
                 ConnectInfo("192.0.2.10:41000".parse().unwrap()),
+                HeaderMap::new(),
                 Json(AdminLoginRequest {
                     username: credentials.username.clone(),
                     password: "wrong-password".to_string(),
@@ -6994,6 +7639,7 @@ on_exceeded = "stop_proxy"
         let response = admin_cookie_login(
             State(state),
             ConnectInfo("192.0.2.10:41001".parse().unwrap()),
+            HeaderMap::new(),
             Json(AdminLoginRequest {
                 username: credentials.username,
                 password: "still-wrong".to_string(),
@@ -7011,6 +7657,7 @@ on_exceeded = "stop_proxy"
             let response = admin_cookie_login(
                 State(state.clone()),
                 ConnectInfo(format!("192.0.2.11:{port}").parse().unwrap()),
+                HeaderMap::new(),
                 Json(AdminLoginRequest {
                     username: credentials.username.clone(),
                     password: credentials.password.clone(),
@@ -7033,6 +7680,7 @@ on_exceeded = "stop_proxy"
         let blocked = admin_cookie_login(
             State(state.clone()),
             ConnectInfo("192.0.2.12:41000".parse().unwrap()),
+            HeaderMap::new(),
             Json(AdminLoginRequest {
                 username: credentials.username.clone(),
                 password: credentials.password.clone(),
@@ -7045,6 +7693,7 @@ on_exceeded = "stop_proxy"
         let recovery = admin_cookie_login(
             State(state),
             ConnectInfo("192.0.2.12:41001".parse().unwrap()),
+            HeaderMap::new(),
             Json(AdminLoginRequest {
                 username: credentials.username,
                 password: credentials.password,
@@ -8147,8 +8796,20 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn serves_embedded_index() {
-        let app = build_router(Config::default()).await.unwrap();
+        let config = Config {
+            public_base_url: "https://mirror.example".to_string(),
+            site: config::SiteConfig {
+                title: "Mirror & Packages".to_string(),
+                description: "Fast <private> mirrors".to_string(),
+                keywords: vec!["mirror".to_string(), "packages".to_string()],
+                icon_url: "https://cdn.example/icon.png".to_string(),
+                footer_text: "Private mirror service".to_string(),
+            },
+            ..Config::default()
+        };
+        let app = build_router(config).await.unwrap();
         let response = app
+            .clone()
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -8162,6 +8823,24 @@ on_exceeded = "stop_proxy"
             "no-cache"
         );
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("MirrorProxy"));
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("<title>Mirror &amp; Packages</title>"));
+        assert!(body.contains("content=\"Fast &lt;private&gt; mirrors\""));
+        assert!(body.contains("content=\"mirror, packages\""));
+        assert!(body.contains("href=\"https://cdn.example/icon.png\""));
+        assert!(body.contains("href=\"https://mirror.example\""));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/admin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body)
+            .contains("<meta name=\"robots\" content=\"noindex,nofollow\""));
     }
 }

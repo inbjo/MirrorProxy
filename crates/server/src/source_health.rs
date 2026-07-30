@@ -659,6 +659,9 @@ mod tests {
             )),
             acme: crate::test_acme_manager(),
             acme_environment_managed: false,
+            upstream_selector: std::sync::Arc::new(
+                crate::upstream_selection::UpstreamSelector::default(),
+            ),
         };
         let probe = PROBES
             .iter()
@@ -719,6 +722,9 @@ mod tests {
             )),
             acme: crate::test_acme_manager(),
             acme_environment_managed: false,
+            upstream_selector: std::sync::Arc::new(
+                crate::upstream_selection::UpstreamSelector::default(),
+            ),
         };
         let probe = PROBES
             .iter()

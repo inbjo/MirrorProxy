@@ -150,6 +150,7 @@ mod tests {
             ip_access_policy: Arc::new(RwLock::new(crate::geoip::IpAccessPolicy::default())),
             acme_environment_managed: false,
             acme: crate::test_acme_manager(),
+            upstream_selector: Arc::new(crate::upstream_selection::UpstreamSelector::default()),
         }
     }
 

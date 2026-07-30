@@ -17,6 +17,23 @@ registries, developer toolchains, and operating-system repositories. SQLite
 provides accounts, quotas, traffic accounting, regional reports, and IP/CIDR
 access control; offline ip2region databases keep IP location private and fast.
 
+## Install the client
+
+```bash
+# macOS / Linux (run `brew tap inbjo/tap` once first)
+brew install mirrorproxy
+
+# Debian / Ubuntu (add the signed MirrorProxy APT repository once first)
+sudo apt install mirrorproxy
+```
+
+```powershell
+winget install --id Inbjo.MirrorProxy --exact
+```
+
+See [Client distribution](https://github.com/inbjo/MirrorProxy/wiki/Distribution)
+for the one-time tap and APT setup and current WinGet availability.
+
 ## Documentation
 
 - [Wiki home](https://github.com/inbjo/MirrorProxy/wiki)

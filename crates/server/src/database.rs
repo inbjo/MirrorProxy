@@ -22,6 +22,7 @@ use webauthn_rs::prelude::{AuthenticationResult, Passkey};
 
 use crate::config::{AcmeConfig, Config};
 use crate::geoip::GeoLocation;
+use crate::secrets::SecretCipher;
 
 const SESSION_LIFETIME_SECS: i64 = 24 * 60 * 60;
 const ADMIN_LOGIN_FAILURE_LIMIT: i64 = 5;
@@ -29,10 +30,20 @@ const ADMIN_LOGIN_LOCK_SECS: i64 = 15 * 60;
 const WEBAUTHN_CHALLENGE_LIFETIME_SECS: i64 = 5 * 60;
 const ROUTING_ID_INSERT_ATTEMPTS: usize = 16;
 const USER_SESSION_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
+
+#[derive(Debug, Serialize)]
+pub struct DatabaseHealth {
+    pub path: String,
+    pub integrity: String,
+    pub schema_version: i64,
+    pub encrypted_at_rest: bool,
+}
 
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
+    secrets: SecretCipher,
 }
 
 pub struct InitialAdminCredentials {
@@ -297,6 +308,12 @@ pub struct BillingGroup {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct GroupTargetAccess {
+    pub group_id: i64,
+    pub target_codes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct UserBillingProfile {
     pub user_id: i64,
     pub group_id: Option<i64>,
@@ -413,19 +430,32 @@ impl Database {
             .connect_with(options)
             .await
             .context("failed to open SQLite database")?;
-        let database = Self { pool };
+        if database_path != ":memory:" {
+            harden_private_file(Path::new(database_path))?;
+        }
+        let database = Self {
+            pool,
+            secrets: SecretCipher::from_env()?,
+        };
         database.migrate().await?;
+        database.encrypt_plaintext_secrets().await?;
         let credentials = database.ensure_initial_admin().await?;
         Ok((database, credentials))
     }
 
     async fn migrate(&self) -> anyhow::Result<()> {
-        for statement in MIGRATIONS {
+        sqlx::query(MIGRATIONS[0])
+            .execute(&self.pool)
+            .await
+            .context("failed to enable SQLite WAL mode")?;
+        let mut transaction = self.pool.begin().await?;
+        for statement in &MIGRATIONS[1..] {
             sqlx::query(statement)
-                .execute(&self.pool)
+                .execute(&mut *transaction)
                 .await
                 .context("failed to apply SQLite migration")?;
         }
+        transaction.commit().await?;
         let has_reservation_column = sqlx::query("PRAGMA table_info(traffic_monthly)")
             .fetch_all(&self.pool)
             .await?
@@ -442,6 +472,170 @@ impl Database {
         self.ensure_admin_columns().await?;
         self.ensure_plaintext_secret_columns().await?;
         self.ensure_email_outbox_columns().await?;
+        sqlx::query("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, 'v1.3-baseline', ?)")
+            .bind(CURRENT_SCHEMA_VERSION)
+            .bind(unix_timestamp())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn health(&self, path: &str) -> anyhow::Result<DatabaseHealth> {
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&self.pool)
+            .await
+            .context("failed to run SQLite integrity_check")?;
+        let schema_version: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(DatabaseHealth {
+            path: path.to_string(),
+            integrity,
+            schema_version,
+            encrypted_at_rest: self.secrets.is_enabled(),
+        })
+    }
+
+    pub async fn backup(&self, output: &Path) -> anyhow::Result<()> {
+        if output.exists() {
+            anyhow::bail!("backup destination already exists: {}", output.display());
+        }
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create backup directory {}", parent.display())
+            })?;
+        }
+        let output = output
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("backup path must be valid UTF-8"))?;
+        sqlx::query("VACUUM INTO ?")
+            .bind(output)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("failed to create SQLite backup {output}"))?;
+        harden_private_file(Path::new(output))?;
+        Ok(())
+    }
+
+    async fn encrypt_plaintext_secrets(&self) -> anyhow::Result<()> {
+        if !self.secrets.is_enabled() {
+            let encrypted: i64 = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM settings WHERE value LIKE 'enc:v1:%') OR EXISTS(SELECT 1 FROM smtp_settings WHERE password LIKE 'enc:v1:%') OR EXISTS(SELECT 1 FROM auth_providers WHERE client_secret LIKE 'enc:v1:%') OR EXISTS(SELECT 1 FROM user_auth_flows WHERE payload LIKE 'enc:v1:%') OR EXISTS(SELECT 1 FROM email_outbox WHERE body LIKE 'enc:v1:%' OR html_body LIKE 'enc:v1:%') OR EXISTS(SELECT 1 FROM acme_settings WHERE cloudflare_api_token LIKE 'enc:v1:%' OR cloudflare_api_key LIKE 'enc:v1:%' OR aliyun_access_key_secret LIKE 'enc:v1:%' OR tencent_secret_key LIKE 'enc:v1:%' OR route53_secret_access_key LIKE 'enc:v1:%' OR webhook_bearer_token LIKE 'enc:v1:%')",
+            )
+            .fetch_one(&self.pool)
+            .await?;
+            if encrypted != 0 {
+                anyhow::bail!(
+                    "database contains encrypted secrets; set MIRRORPROXY_MASTER_KEY to the original key"
+                );
+            }
+            return Ok(());
+        }
+        let mut transaction = self.pool.begin().await?;
+
+        if let Some(row) = sqlx::query("SELECT password FROM smtp_settings WHERE singleton = 1")
+            .fetch_optional(&mut *transaction)
+            .await?
+        {
+            let value: Option<String> = row.try_get("password")?;
+            sqlx::query("UPDATE smtp_settings SET password = ? WHERE singleton = 1")
+                .bind(
+                    self.secrets
+                        .seal_optional("smtp_settings.password", value.as_deref())?,
+                )
+                .execute(&mut *transaction)
+                .await?;
+        }
+
+        for row in sqlx::query("SELECT id, client_secret FROM auth_providers")
+            .fetch_all(&mut *transaction)
+            .await?
+        {
+            let id: i64 = row.try_get("id")?;
+            let value: Option<String> = row.try_get("client_secret")?;
+            sqlx::query("UPDATE auth_providers SET client_secret = ? WHERE id = ?")
+                .bind(
+                    self.secrets
+                        .seal_optional("auth_providers.client_secret", value.as_deref())?,
+                )
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+
+        for row in sqlx::query("SELECT state_hash, payload FROM user_auth_flows")
+            .fetch_all(&mut *transaction)
+            .await?
+        {
+            let state_hash: String = row.try_get("state_hash")?;
+            let value: String = row.try_get("payload")?;
+            sqlx::query("UPDATE user_auth_flows SET payload = ? WHERE state_hash = ?")
+                .bind(self.secrets.seal("user_auth_flows.payload", &value)?)
+                .bind(state_hash)
+                .execute(&mut *transaction)
+                .await?;
+        }
+
+        for row in sqlx::query("SELECT id, body, html_body FROM email_outbox")
+            .fetch_all(&mut *transaction)
+            .await?
+        {
+            let id: i64 = row.try_get("id")?;
+            let body: String = row.try_get("body")?;
+            let html: Option<String> = row.try_get("html_body")?;
+            sqlx::query("UPDATE email_outbox SET body = ?, html_body = ? WHERE id = ?")
+                .bind(self.secrets.seal("email_outbox.body", &body)?)
+                .bind(
+                    self.secrets
+                        .seal_optional("email_outbox.html_body", html.as_deref())?,
+                )
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+
+        if let Some(row) = sqlx::query("SELECT value FROM settings WHERE key = 'runtime_config'")
+            .fetch_optional(&mut *transaction)
+            .await?
+        {
+            let value: String = row.try_get("value")?;
+            sqlx::query("UPDATE settings SET value = ? WHERE key = 'runtime_config'")
+                .bind(self.secrets.seal("settings.runtime_config", &value)?)
+                .execute(&mut *transaction)
+                .await?;
+        }
+
+        if let Some(row) = sqlx::query("SELECT cloudflare_api_token, cloudflare_api_key, cloudflare_email, aliyun_access_key_id, aliyun_access_key_secret, tencent_secret_id, tencent_secret_key, route53_access_key_id, route53_secret_access_key, route53_session_token, webhook_bearer_token FROM acme_settings WHERE singleton = 1")
+            .fetch_optional(&mut *transaction)
+            .await?
+        {
+            let columns = [
+                ("acme.cloudflare_api_token", "cloudflare_api_token"),
+                ("acme.cloudflare_api_key", "cloudflare_api_key"),
+                ("acme.cloudflare_email", "cloudflare_email"),
+                ("acme.aliyun_access_key_id", "aliyun_access_key_id"),
+                ("acme.aliyun_access_key_secret", "aliyun_access_key_secret"),
+                ("acme.tencent_secret_id", "tencent_secret_id"),
+                ("acme.tencent_secret_key", "tencent_secret_key"),
+                ("acme.route53_access_key_id", "route53_access_key_id"),
+                ("acme.route53_secret_access_key", "route53_secret_access_key"),
+                ("acme.route53_session_token", "route53_session_token"),
+                ("acme.webhook_bearer_token", "webhook_bearer_token"),
+            ];
+            let mut encrypted = Vec::with_capacity(columns.len());
+            for (context, column) in columns {
+                encrypted.push(self.secrets.seal(context, &row.try_get::<String, _>(column)?)?);
+            }
+            sqlx::query("UPDATE acme_settings SET cloudflare_api_token=?, cloudflare_api_key=?, cloudflare_email=?, aliyun_access_key_id=?, aliyun_access_key_secret=?, tencent_secret_id=?, tencent_secret_key=?, route53_access_key_id=?, route53_secret_access_key=?, route53_session_token=?, webhook_bearer_token=? WHERE singleton=1")
+                .bind(&encrypted[0]).bind(&encrypted[1]).bind(&encrypted[2])
+                .bind(&encrypted[3]).bind(&encrypted[4]).bind(&encrypted[5])
+                .bind(&encrypted[6]).bind(&encrypted[7]).bind(&encrypted[8])
+                .bind(&encrypted[9]).bind(&encrypted[10])
+                .execute(&mut *transaction).await?;
+        }
+
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -1869,17 +2063,17 @@ impl Database {
 
     pub async fn list_auth_providers(&self) -> anyhow::Result<Vec<AuthProvider>> {
         sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers ORDER BY display_name")
-            .fetch_all(&self.pool).await?.into_iter().map(auth_provider_from_row).collect()
+            .fetch_all(&self.pool).await?.into_iter().map(|row| auth_provider_from_row(row, &self.secrets)).collect()
     }
 
     pub async fn auth_provider_by_slug(&self, slug: &str) -> anyhow::Result<Option<AuthProvider>> {
         sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers WHERE slug = ? COLLATE NOCASE")
-            .bind(slug).fetch_optional(&self.pool).await?.map(auth_provider_from_row).transpose()
+            .bind(slug).fetch_optional(&self.pool).await?.map(|row| auth_provider_from_row(row, &self.secrets)).transpose()
     }
 
     pub async fn auth_provider_by_id(&self, id: i64) -> anyhow::Result<Option<AuthProvider>> {
         sqlx::query("SELECT id, slug, display_name, kind, preset, enabled, client_id, client_secret, issuer_url, authorization_url, token_url, userinfo_url, emails_url, scopes_json, subject_field, email_field, email_verified_field, display_name_field, allow_registration, auto_link_by_email FROM auth_providers WHERE id = ?")
-            .bind(id).fetch_optional(&self.pool).await?.map(auth_provider_from_row).transpose()
+            .bind(id).fetch_optional(&self.pool).await?.map(|row| auth_provider_from_row(row, &self.secrets)).transpose()
     }
 
     pub async fn save_auth_provider(
@@ -1898,7 +2092,10 @@ impl Database {
                 .transpose()?
                 .flatten()
         } else {
-            provider.client_secret.clone()
+            self.secrets.seal_optional(
+                "auth_providers.client_secret",
+                provider.client_secret.as_deref(),
+            )?
         };
         let scopes = serde_json::to_string(&provider.scopes)?;
         let mut transaction = self.pool.begin().await?;
@@ -1971,7 +2168,7 @@ impl Database {
             .execute(&self.pool)
             .await?;
         sqlx::query("INSERT INTO user_auth_flows (state_hash, provider_id, payload, mode, user_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-            .bind(hash_token(state)).bind(provider_id).bind(payload).bind(mode).bind(user_id).bind(expires_at).bind(now).execute(&self.pool).await?;
+            .bind(hash_token(state)).bind(provider_id).bind(self.secrets.seal("user_auth_flows.payload", payload)?).bind(mode).bind(user_id).bind(expires_at).bind(now).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -1996,7 +2193,10 @@ impl Database {
         transaction.commit().await?;
         Ok(Some(StoredAuthFlow {
             provider_id: row.try_get("provider_id")?,
-            payload: row.try_get("payload")?,
+            payload: self.secrets.open(
+                "user_auth_flows.payload",
+                &row.try_get::<String, _>("payload")?,
+            )?,
             mode: row.try_get("mode")?,
             user_id: row.try_get("user_id")?,
         }))
@@ -2074,23 +2274,20 @@ impl Database {
     }
 
     pub async fn smtp_settings(&self) -> anyhow::Result<Option<SmtpSettings>> {
-        sqlx::query("SELECT enabled, host, port, security, username, password, from_name, from_address FROM smtp_settings WHERE singleton = 1")
-            .fetch_optional(&self.pool)
-            .await?
-            .map(|row| {
-                Ok::<_, sqlx::Error>(SmtpSettings {
-                    enabled: row.try_get("enabled")?,
-                    host: row.try_get("host")?,
-                    port: row.try_get::<i64, _>("port")? as u16,
-                    security: row.try_get("security")?,
-                    username: row.try_get("username")?,
-                    password: row.try_get("password")?,
-                    from_name: row.try_get("from_name")?,
-                    from_address: row.try_get("from_address")?,
-                })
-            })
-            .transpose()
-            .map_err(Into::into)
+        let Some(row) = sqlx::query("SELECT enabled, host, port, security, username, password, from_name, from_address FROM smtp_settings WHERE singleton = 1")
+            .fetch_optional(&self.pool).await? else { return Ok(None); };
+        Ok(Some(SmtpSettings {
+            enabled: row.try_get("enabled")?,
+            host: row.try_get("host")?,
+            port: row.try_get::<i64, _>("port")? as u16,
+            security: row.try_get("security")?,
+            username: row.try_get("username")?,
+            password: self
+                .secrets
+                .open_optional("smtp_settings.password", row.try_get("password")?)?,
+            from_name: row.try_get("from_name")?,
+            from_address: row.try_get("from_address")?,
+        }))
     }
 
     pub async fn save_smtp_settings(
@@ -2107,6 +2304,9 @@ impl Database {
         } else {
             settings.password.clone()
         };
+        let password = self
+            .secrets
+            .seal_optional("smtp_settings.password", password.as_deref())?;
         let mut transaction = self.pool.begin().await?;
         sqlx::query("INSERT INTO smtp_settings (singleton, enabled, host, port, security, username, password, from_name, from_address, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET enabled=excluded.enabled, host=excluded.host, port=excluded.port, security=excluded.security, username=excluded.username, password=excluded.password, from_name=excluded.from_name, from_address=excluded.from_address, updated_at=excluded.updated_at")
             .bind(settings.enabled)
@@ -2133,7 +2333,7 @@ impl Database {
         sqlx::query("SELECT settings_json, cloudflare_api_token, cloudflare_api_key, cloudflare_email, aliyun_access_key_id, aliyun_access_key_secret, tencent_secret_id, tencent_secret_key, route53_access_key_id, route53_secret_access_key, route53_session_token, webhook_bearer_token FROM acme_settings WHERE singleton = 1")
             .fetch_optional(&self.pool)
             .await?
-            .map(acme_config_from_row)
+            .map(|row| acme_config_from_row(row, &self.secrets))
             .transpose()
     }
 
@@ -2158,17 +2358,17 @@ impl Database {
         let mut transaction = self.pool.begin().await?;
         sqlx::query("INSERT INTO acme_settings (singleton, settings_json, cloudflare_api_token, cloudflare_api_key, cloudflare_email, aliyun_access_key_id, aliyun_access_key_secret, tencent_secret_id, tencent_secret_key, route53_access_key_id, route53_secret_access_key, route53_session_token, webhook_bearer_token, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET settings_json=excluded.settings_json, cloudflare_api_token=excluded.cloudflare_api_token, cloudflare_api_key=excluded.cloudflare_api_key, cloudflare_email=excluded.cloudflare_email, aliyun_access_key_id=excluded.aliyun_access_key_id, aliyun_access_key_secret=excluded.aliyun_access_key_secret, tencent_secret_id=excluded.tencent_secret_id, tencent_secret_key=excluded.tencent_secret_key, route53_access_key_id=excluded.route53_access_key_id, route53_secret_access_key=excluded.route53_secret_access_key, route53_session_token=excluded.route53_session_token, webhook_bearer_token=excluded.webhook_bearer_token, updated_at=excluded.updated_at")
             .bind(settings_json)
-            .bind(&settings.dns.cloudflare_api_token)
-            .bind(&settings.dns.cloudflare_api_key)
-            .bind(&settings.dns.cloudflare_email)
-            .bind(&settings.dns.aliyun_access_key_id)
-            .bind(&settings.dns.aliyun_access_key_secret)
-            .bind(&settings.dns.tencent_secret_id)
-            .bind(&settings.dns.tencent_secret_key)
-            .bind(&settings.dns.route53_access_key_id)
-            .bind(&settings.dns.route53_secret_access_key)
-            .bind(&settings.dns.route53_session_token)
-            .bind(&settings.dns.webhook_bearer_token)
+            .bind(self.secrets.seal("acme.cloudflare_api_token", &settings.dns.cloudflare_api_token)?)
+            .bind(self.secrets.seal("acme.cloudflare_api_key", &settings.dns.cloudflare_api_key)?)
+            .bind(self.secrets.seal("acme.cloudflare_email", &settings.dns.cloudflare_email)?)
+            .bind(self.secrets.seal("acme.aliyun_access_key_id", &settings.dns.aliyun_access_key_id)?)
+            .bind(self.secrets.seal("acme.aliyun_access_key_secret", &settings.dns.aliyun_access_key_secret)?)
+            .bind(self.secrets.seal("acme.tencent_secret_id", &settings.dns.tencent_secret_id)?)
+            .bind(self.secrets.seal("acme.tencent_secret_key", &settings.dns.tencent_secret_key)?)
+            .bind(self.secrets.seal("acme.route53_access_key_id", &settings.dns.route53_access_key_id)?)
+            .bind(self.secrets.seal("acme.route53_secret_access_key", &settings.dns.route53_secret_access_key)?)
+            .bind(self.secrets.seal("acme.route53_session_token", &settings.dns.route53_session_token)?)
+            .bind(self.secrets.seal("acme.webhook_bearer_token", &settings.dns.webhook_bearer_token)?)
             .bind(now)
             .execute(&mut *transaction)
             .await?;
@@ -2347,8 +2547,12 @@ impl Database {
         html_body: Option<&str>,
     ) -> anyhow::Result<i64> {
         let now = unix_timestamp();
+        let encrypted_body = self.secrets.seal("email_outbox.body", body)?;
+        let encrypted_html = self
+            .secrets
+            .seal_optional("email_outbox.html_body", html_body)?;
         let result = sqlx::query("INSERT INTO email_outbox (recipient, subject, body, html_body, next_attempt_at, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-            .bind(normalize_email(recipient)).bind(subject).bind(body).bind(html_body).bind(now).bind(now).execute(&self.pool).await?;
+            .bind(normalize_email(recipient)).bind(subject).bind(encrypted_body).bind(encrypted_html).bind(now).bind(now).execute(&self.pool).await?;
         Ok(result.last_insert_rowid())
     }
 
@@ -2393,10 +2597,24 @@ impl Database {
     }
 
     pub async fn pending_outbox(&self, limit: u32) -> anyhow::Result<Vec<OutboxMessage>> {
-        sqlx::query("SELECT id, recipient, subject, body, html_body, attempts FROM email_outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?")
-            .bind(unix_timestamp()).bind(i64::from(limit)).fetch_all(&self.pool).await?
-            .into_iter().map(|row| Ok(OutboxMessage { id: row.try_get("id")?, recipient: row.try_get("recipient")?, subject: row.try_get("subject")?, body: row.try_get("body")?, html_body: row.try_get("html_body")?, attempts: row.try_get::<i64, _>("attempts")? as u32 }))
-            .collect::<Result<Vec<_>, sqlx::Error>>().map_err(Into::into)
+        let rows = sqlx::query("SELECT id, recipient, subject, body, html_body, attempts FROM email_outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?")
+            .bind(unix_timestamp()).bind(i64::from(limit)).fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(OutboxMessage {
+                    id: row.try_get("id")?,
+                    recipient: row.try_get("recipient")?,
+                    subject: row.try_get("subject")?,
+                    body: self
+                        .secrets
+                        .open("email_outbox.body", &row.try_get::<String, _>("body")?)?,
+                    html_body: self
+                        .secrets
+                        .open_optional("email_outbox.html_body", row.try_get("html_body")?)?,
+                    attempts: row.try_get::<i64, _>("attempts")? as u32,
+                })
+            })
+            .collect()
     }
 
     pub async fn mark_outbox_sent(&self, id: i64) -> anyhow::Result<()> {
@@ -2450,7 +2668,10 @@ impl Database {
                 .await?;
             return Ok(fallback);
         };
-        let value: String = row.try_get("value")?;
+        let value: String = self.secrets.open(
+            "settings.runtime_config",
+            &row.try_get::<String, _>("value")?,
+        )?;
         let config: Config =
             serde_json::from_str(&value).context("stored runtime configuration is invalid JSON")?;
         config
@@ -2465,7 +2686,9 @@ impl Database {
         config: &Config,
         action: &str,
     ) -> anyhow::Result<()> {
-        let value = serde_json::to_string(config)?;
+        let value = self
+            .secrets
+            .seal("settings.runtime_config", &serde_json::to_string(config)?)?;
         let now = unix_timestamp();
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
@@ -2572,6 +2795,92 @@ impl Database {
             .bind(now).bind(actor).bind(format!("group_id={id}")).execute(&mut *transaction).await?;
         transaction.commit().await?;
         Ok(true)
+    }
+
+    pub async fn group_target_access(
+        &self,
+        group_id: i64,
+    ) -> anyhow::Result<Option<GroupTargetAccess>> {
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM groups WHERE id = ? AND kind = 'billing'",
+        )
+        .bind(group_id)
+        .fetch_one(&self.pool)
+        .await?
+            > 0;
+        if !exists {
+            return Ok(None);
+        }
+        let target_codes = sqlx::query_scalar::<_, String>(
+            "SELECT target_code FROM group_target_access WHERE group_id = ? ORDER BY target_code",
+        )
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(Some(GroupTargetAccess {
+            group_id,
+            target_codes,
+        }))
+    }
+
+    pub async fn set_group_target_access(
+        &self,
+        actor: &str,
+        group_id: i64,
+        target_codes: &[String],
+    ) -> anyhow::Result<bool> {
+        let now = unix_timestamp();
+        let mut transaction = self.pool.begin().await?;
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM groups WHERE id = ? AND kind = 'billing'",
+        )
+        .bind(group_id)
+        .fetch_one(&mut *transaction)
+        .await?
+            > 0;
+        if !exists {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM group_target_access WHERE group_id = ?")
+            .bind(group_id)
+            .execute(&mut *transaction)
+            .await?;
+        for target_code in target_codes {
+            sqlx::query(
+                "INSERT INTO group_target_access (group_id, target_code, created_at) VALUES (?, ?, ?)",
+            )
+            .bind(group_id)
+            .bind(target_code)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        sqlx::query("INSERT INTO config_audit_log (created_at, username, action, detail) VALUES (?, ?, 'group_target_access_updated', ?)")
+            .bind(now)
+            .bind(actor)
+            .bind(format!("group_id={group_id}, targets={}", target_codes.join(",")))
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn user_target_allowed(
+        &self,
+        user_id: i64,
+        target_code: &str,
+    ) -> anyhow::Result<bool> {
+        let row = sqlx::query(
+            "SELECT COUNT(a.target_code) AS configured, SUM(CASE WHEN a.target_code = ? THEN 1 ELSE 0 END) AS matched FROM group_members m JOIN groups g ON g.id = m.group_id AND g.kind = 'billing' LEFT JOIN group_target_access a ON a.group_id = g.id WHERE m.user_id = ? AND m.is_billing = 1 GROUP BY g.id",
+        )
+        .bind(target_code)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(true);
+        };
+        Ok(row.try_get::<i64, _>("configured")? == 0 || row.try_get::<i64, _>("matched")? > 0)
     }
 
     pub async fn set_user_billing_profile(
@@ -3179,6 +3488,26 @@ fn ensure_parent_directory(database_path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn harden_private_file(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(path)
+            .with_context(|| format!("failed to inspect private file {}", path.display()))?
+            .permissions();
+        if permissions.mode() & 0o077 != 0 {
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(path, permissions).with_context(|| {
+                format!(
+                    "failed to restrict private file {} to mode 0600",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 fn hash_password(password: &str) -> anyhow::Result<String> {
     let salt = SaltString::generate(&mut OsRng);
     Ok(Argon2::default()
@@ -3214,7 +3543,7 @@ fn normalize_email(email: &str) -> String {
     email.trim().to_ascii_lowercase()
 }
 
-fn auth_provider_from_row(row: SqliteRow) -> anyhow::Result<AuthProvider> {
+fn auth_provider_from_row(row: SqliteRow, secrets: &SecretCipher) -> anyhow::Result<AuthProvider> {
     let scopes_json: String = row.try_get("scopes_json")?;
     Ok(AuthProvider {
         id: row.try_get("id")?,
@@ -3224,7 +3553,10 @@ fn auth_provider_from_row(row: SqliteRow) -> anyhow::Result<AuthProvider> {
         preset: row.try_get("preset")?,
         enabled: row.try_get("enabled")?,
         client_id: row.try_get("client_id")?,
-        client_secret: row.try_get("client_secret")?,
+        client_secret: secrets.open_optional(
+            "auth_providers.client_secret",
+            row.try_get("client_secret")?,
+        )?,
         issuer_url: row.try_get("issuer_url")?,
         authorization_url: row.try_get("authorization_url")?,
         token_url: row.try_get("token_url")?,
@@ -3240,21 +3572,69 @@ fn auth_provider_from_row(row: SqliteRow) -> anyhow::Result<AuthProvider> {
     })
 }
 
-fn acme_config_from_row(row: SqliteRow) -> anyhow::Result<AcmeConfig> {
+fn acme_config_from_row(row: SqliteRow, secrets: &SecretCipher) -> anyhow::Result<AcmeConfig> {
     let settings_json: String = row.try_get("settings_json")?;
     let mut settings: AcmeConfig =
         serde_json::from_str(&settings_json).context("stored ACME settings are not valid JSON")?;
-    settings.dns.cloudflare_api_token = row.try_get("cloudflare_api_token")?;
-    settings.dns.cloudflare_api_key = row.try_get("cloudflare_api_key")?;
-    settings.dns.cloudflare_email = row.try_get("cloudflare_email")?;
-    settings.dns.aliyun_access_key_id = row.try_get("aliyun_access_key_id")?;
-    settings.dns.aliyun_access_key_secret = row.try_get("aliyun_access_key_secret")?;
-    settings.dns.tencent_secret_id = row.try_get("tencent_secret_id")?;
-    settings.dns.tencent_secret_key = row.try_get("tencent_secret_key")?;
-    settings.dns.route53_access_key_id = row.try_get("route53_access_key_id")?;
-    settings.dns.route53_secret_access_key = row.try_get("route53_secret_access_key")?;
-    settings.dns.route53_session_token = row.try_get("route53_session_token")?;
-    settings.dns.webhook_bearer_token = row.try_get("webhook_bearer_token")?;
+    for (context, column, target) in [
+        (
+            "acme.cloudflare_api_token",
+            "cloudflare_api_token",
+            &mut settings.dns.cloudflare_api_token,
+        ),
+        (
+            "acme.cloudflare_api_key",
+            "cloudflare_api_key",
+            &mut settings.dns.cloudflare_api_key,
+        ),
+        (
+            "acme.cloudflare_email",
+            "cloudflare_email",
+            &mut settings.dns.cloudflare_email,
+        ),
+        (
+            "acme.aliyun_access_key_id",
+            "aliyun_access_key_id",
+            &mut settings.dns.aliyun_access_key_id,
+        ),
+        (
+            "acme.aliyun_access_key_secret",
+            "aliyun_access_key_secret",
+            &mut settings.dns.aliyun_access_key_secret,
+        ),
+        (
+            "acme.tencent_secret_id",
+            "tencent_secret_id",
+            &mut settings.dns.tencent_secret_id,
+        ),
+        (
+            "acme.tencent_secret_key",
+            "tencent_secret_key",
+            &mut settings.dns.tencent_secret_key,
+        ),
+        (
+            "acme.route53_access_key_id",
+            "route53_access_key_id",
+            &mut settings.dns.route53_access_key_id,
+        ),
+        (
+            "acme.route53_secret_access_key",
+            "route53_secret_access_key",
+            &mut settings.dns.route53_secret_access_key,
+        ),
+        (
+            "acme.route53_session_token",
+            "route53_session_token",
+            &mut settings.dns.route53_session_token,
+        ),
+        (
+            "acme.webhook_bearer_token",
+            "webhook_bearer_token",
+            &mut settings.dns.webhook_bearer_token,
+        ),
+    ] {
+        *target = secrets.open(context, &row.try_get::<String, _>(column)?)?;
+    }
     Ok(settings)
 }
 
@@ -3326,6 +3706,7 @@ fn unix_timestamp() -> i64 {
 
 const MIGRATIONS: &[&str] = &[
     "PRAGMA journal_mode = WAL",
+    "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS admin_users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'super_admin', disabled INTEGER NOT NULL DEFAULT 0, failed_login_count INTEGER NOT NULL DEFAULT 0, locked_until INTEGER, user_handle TEXT UNIQUE, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS admin_sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, auth_method TEXT NOT NULL DEFAULT 'password', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, FOREIGN KEY(username) REFERENCES admin_users(username) ON DELETE CASCADE)",
@@ -3337,6 +3718,7 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'billing', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS group_members (group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, is_billing INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, PRIMARY KEY(group_id, user_id), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS group_quota_settings (group_id INTEGER PRIMARY KEY, monthly_limit_bytes INTEGER, updated_at INTEGER NOT NULL, FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS group_target_access (group_id INTEGER NOT NULL, target_code TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(group_id, target_code), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS user_quota_overrides (user_id INTEGER PRIMARY KEY, mode TEXT NOT NULL, monthly_limit_bytes INTEGER, updated_at INTEGER NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS user_traffic_daily (day TEXT NOT NULL, user_id INTEGER NOT NULL, target_code TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, user_id, target_code), FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS user_traffic_monthly (month TEXT NOT NULL, user_id INTEGER NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, response_bytes INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(month, user_id), FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
@@ -3738,7 +4120,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn smtp_password_and_outbox_body_are_stored_as_plaintext() {
+    async fn legacy_mode_keeps_secrets_readable_without_a_master_key() {
         let (database, _) = Database::open(":memory:").await.unwrap();
         database
             .save_smtp_settings(
@@ -3772,6 +4154,132 @@ mod tests {
             .unwrap();
         assert_eq!(password, "smtp-secret");
         assert_eq!(body, "plain body");
+    }
+
+    #[tokio::test]
+    async fn master_key_encrypts_sensitive_database_fields_and_reads_them_back() {
+        let (mut database, _) = Database::open(":memory:").await.unwrap();
+        database.secrets = SecretCipher::from_test_key([11_u8; 32]);
+        database
+            .save_smtp_settings(
+                "admin",
+                &SmtpSettings {
+                    enabled: true,
+                    host: "smtp.example.com".to_string(),
+                    port: 587,
+                    security: "starttls".to_string(),
+                    username: Some("mailer".to_string()),
+                    password: Some("smtp-secret".to_string()),
+                    from_name: "MirrorProxy".to_string(),
+                    from_address: "mirror@example.com".to_string(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        database
+            .enqueue_email(
+                "person@example.com",
+                "Subject",
+                "plain body",
+                Some("<p>plain body</p>"),
+            )
+            .await
+            .unwrap();
+        let provider_id = database
+            .save_auth_provider(
+                "admin",
+                &test_auth_provider("github", "oauth-secret"),
+                false,
+            )
+            .await
+            .unwrap();
+        database
+            .store_user_auth_flow(
+                "state",
+                provider_id,
+                "flow-secret",
+                "login",
+                None,
+                unix_timestamp() + 60,
+            )
+            .await
+            .unwrap();
+
+        for query in [
+            "SELECT password FROM smtp_settings",
+            "SELECT body FROM email_outbox",
+            "SELECT client_secret FROM auth_providers",
+            "SELECT payload FROM user_auth_flows",
+        ] {
+            let stored: String = sqlx::query_scalar(query)
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+            assert!(stored.starts_with("enc:v1:"));
+        }
+        assert_eq!(
+            database
+                .smtp_settings()
+                .await
+                .unwrap()
+                .unwrap()
+                .password
+                .as_deref(),
+            Some("smtp-secret")
+        );
+        assert_eq!(
+            database.pending_outbox(1).await.unwrap()[0].body,
+            "plain body"
+        );
+        assert_eq!(
+            database
+                .auth_provider_by_id(provider_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .client_secret
+                .as_deref(),
+            Some("oauth-secret")
+        );
+        assert_eq!(
+            database
+                .take_user_auth_flow("state")
+                .await
+                .unwrap()
+                .unwrap()
+                .payload,
+            "flow-secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn records_schema_version_and_creates_consistent_backup() {
+        let root = std::env::temp_dir().join(format!(
+            "mirrorproxy-backup-test-{}-{}",
+            std::process::id(),
+            unix_timestamp()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.sqlite3");
+        let backup = root.join("backup.sqlite3");
+        let (database, _) = Database::open(source.to_str().unwrap()).await.unwrap();
+        let health = database.health(source.to_str().unwrap()).await.unwrap();
+        assert_eq!(health.integrity, "ok");
+        assert_eq!(health.schema_version, CURRENT_SCHEMA_VERSION);
+        database.backup(&backup).await.unwrap();
+        drop(database);
+        let (restored, _) = Database::open(backup.to_str().unwrap()).await.unwrap();
+        assert_eq!(
+            restored
+                .health(backup.to_str().unwrap())
+                .await
+                .unwrap()
+                .integrity,
+            "ok"
+        );
+        drop(restored);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -4198,6 +4706,43 @@ mod tests {
                 .await
                 .unwrap(),
             HierarchicalReservationOutcome::Reserved { group_id: None }
+        );
+    }
+
+    #[tokio::test]
+    async fn team_target_access_defaults_open_and_enforces_an_allowlist() {
+        let (database, _) = Database::open(":memory:").await.unwrap();
+        let user = database
+            .create_user("admin", "team@example.com", "Team User", 12)
+            .await
+            .unwrap()
+            .unwrap();
+        let group = database
+            .create_billing_group("admin", "Restricted Team", None)
+            .await
+            .unwrap()
+            .unwrap();
+        database
+            .set_user_billing_profile("admin", user.id, Some(group.id), "default", None)
+            .await
+            .unwrap();
+        assert!(database.user_target_allowed(user.id, "npm").await.unwrap());
+        database
+            .set_group_target_access("admin", group.id, &["npm".to_string()])
+            .await
+            .unwrap();
+        assert!(database.user_target_allowed(user.id, "npm").await.unwrap());
+        assert!(!database.user_target_allowed(user.id, "pypi").await.unwrap());
+        assert_eq!(
+            database
+                .group_target_access(group.id)
+                .await
+                .unwrap()
+                .unwrap(),
+            GroupTargetAccess {
+                group_id: group.id,
+                target_codes: vec!["npm".to_string()],
+            }
         );
     }
 

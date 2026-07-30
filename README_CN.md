@@ -15,6 +15,22 @@ Windows、macOS 和 Linux 上管理软件源。
 软件源。SQLite 提供账号、配额、流量统计、地域报表和 IP/CIDR 访问控制；离线
 ip2region 数据库保证 IP 定位快速且不向第三方发送请求。
 
+## 安装客户端
+
+```bash
+# macOS / Linux（首次使用需先执行 brew tap inbjo/tap）
+brew install mirrorproxy
+
+# Debian / Ubuntu（首次使用需先添加 MirrorProxy APT 仓库）
+sudo apt install mirrorproxy
+```
+
+```powershell
+winget install --id Inbjo.MirrorProxy --exact
+```
+
+首次添加 Tap、APT 签名仓库和 WinGet 上架状态见[客户端分发与安装](https://github.com/inbjo/MirrorProxy/wiki/Distribution-zh-CN)。
+
 ## 文档导航
 
 - [Wiki 首页](https://github.com/inbjo/MirrorProxy/wiki/Home-zh-CN)

@@ -3,6 +3,48 @@
 All notable changes to MirrorProxy are documented in this file. Release tags
 follow semantic versioning.
 
+## [1.3.0] - 2026-07-30
+
+### Reliability and cache
+
+- Reworked the disk cache around bounded freshness, upstream `Cache-Control`,
+  `Vary`, ETag/Last-Modified revalidation, capacity eviction, live statistics,
+  and an audited administrator purge action.
+- Restricted fallback to transport failures and retryable HTTP statuses, and
+  added optional adaptive upstream selection using circuit state and latency.
+- Changed request limiting from one process-wide queue to independent user or
+  client-IP windows while excluding health and control endpoints.
+
+### Security and operations
+
+- Added versioned SQLite schema tracking, integrity checks, `doctor`, consistent
+  `backup`, guarded `restore`, restrictive file modes, and XChaCha20-Poly1305
+  encryption for persisted secrets through `MIRRORPROXY_MASTER_KEY`.
+- Added an optional private management listener without hiding the public
+  administration entry, localhost-only metrics by default, durable account
+  lockout plus per-user/per-source login throttling, quota/upstream webhook and
+  SMTP email alerts, configurable server-rendered site title/SEO/favicon/footer copy, and
+  per-team project mirror-target allowlists.
+
+### Delivery and verification
+
+- Added client-only Homebrew Tap publication, WinGet portable manifests, and a
+  signed GitHub Pages APT repository with `amd64`/`arm64` `mirrorproxy` packages.
+- Added Debian/RPM packages, generated Homebrew/Scoop manifests, dependency
+  audits, Rust coverage artifacts, and a real server/administrator smoke test.
+- Added console controls for cache operations, email/webhook alerts, adaptive
+  routing, site identity/SEO/footer copy, and team access; corrected native-HTTPS
+  checkbox, cache action, strategy-select styling, and Chinese strategy labels.
+
+Multi-instance clustering and high availability are intentionally outside the
+1.3.0 scope.
+
+## [1.2.0] - 2026-07-28
+
+- Added standalone client distribution, expanded adapter/catalog coverage,
+  native ACME HTTPS, GeoIP/IP access policy, regional reporting, systemd
+  installation, enterprise upstream CAs, and release/wiki automation.
+
 ## [1.1.0] - 2026-07-25
 
 ### Mirror availability
@@ -87,3 +129,5 @@ follow semantic versioning.
   desired.
 
 [1.1.0]: https://github.com/inbjo/MirrorProxy/compare/v1.0.2...v1.1.0
+[1.2.0]: https://github.com/inbjo/MirrorProxy/compare/v1.1.0...v1.2.0
+[1.3.0]: https://github.com/inbjo/MirrorProxy/compare/v1.2.0...HEAD

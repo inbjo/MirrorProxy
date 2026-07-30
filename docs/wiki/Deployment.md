@@ -5,6 +5,38 @@ IPv4/IPv6 ip2region data. Keep SQLite, cache, GeoIP, and ACME storage on durable
 local storage for either Docker or binary deployments; retain that data directory
 across image and binary upgrades.
 
+## Optional management listener
+
+The authenticated administration console remains available on the public
+listener. Optionally add a private listener for operations from localhost or a
+trusted network:
+
+```toml
+listen_addr = "0.0.0.0:3000"
+
+[management]
+enabled = true
+listen_addr = "127.0.0.1:3001"
+```
+
+Enabling this listener does not remove `/admin` or administrator APIs from the
+public listener. Password login is protected by per-account and per-source
+throttling, a durable 15-minute account lock after five failures, and audit
+events. Preserve the client address by configuring only actual reverse proxies
+in `trusted_proxies`.
+
+`/metrics` is restricted to localhost by default on every listener. This check
+uses the trusted-proxy client address. Remote collection must be an explicit
+choice:
+
+```toml
+[metrics]
+local_only = false
+```
+
+If remote metrics are enabled, restrict the route with a firewall or an
+authenticated monitoring proxy.
+
 ## Deployment modes
 
 ### TLS at a reverse proxy
@@ -79,6 +111,8 @@ journalctl -u mirrorproxy -f
 - Pin an image version before an upgrade, then verify `/healthz`, `/admin`, one
   public proxy target, and logs.
 - Keep SQLite on local disk, not a network filesystem, for a single-instance deployment.
+- Store `MIRRORPROXY_MASTER_KEY` in a secret manager and provide the same key on
+  every restart. Do not store it in the SQLite/data volume.
 
 ## User subdomains
 

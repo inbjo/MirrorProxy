@@ -35,13 +35,24 @@ import {
 } from 'lucide-react'
 import './styles.css'
 import { readStoredPreference } from './preferences'
+import { CacheOperations, TeamTargetAccess } from './v13-operations'
 
 type Locale = 'en' | 'zh'
 type Theme = 'light' | 'dark'
 type AdminNotice = { tone: 'error' | 'success'; title: string; message: string }
+type SiteSettings = { title: string; description: string; keywords: string[]; icon_url: string; footer_text: string }
+
+const DEFAULT_SITE_SETTINGS: SiteSettings = {
+  title: 'MirrorProxy',
+  description: 'MirrorProxy 自托管镜像加速服务，支持 GitHub、Docker/OCI、npm、PyPI、crates.io、Go Modules、Composer、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Homebrew，以及 Linux/BSD 系统与常用软件仓库。 Fast self-hosted package and source mirror proxy.',
+  keywords: ['MirrorProxy', '镜像加速', '软件源', 'GitHub', 'Docker', 'OCI', 'npm', 'Go Modules', 'Maven', 'PyPI', 'crates.io', 'Homebrew', 'Linux', 'BSD', '软件仓库', 'Composer', 'RubyGems', 'NuGet', 'CPAN', 'CRAN'],
+  icon_url: '/favicon.svg',
+  footer_text: '',
+}
 
 type PublicConfig = {
   public_base_url: string
+  site?: SiteSettings
   enabled_proxies: string[]
   quota: {
     enabled: boolean
@@ -57,14 +68,19 @@ type PublicConfig = {
     email_login_enabled: boolean
   }
 }
-type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access'> & {
+type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access' | 'site'> & {
+  site: SiteSettings
   quota: PublicConfig['quota'] & { request_event_retention_days: number; default_user_monthly_gb: number | null }
   trusted_proxies: string[]
   forward_client_authorization: boolean
   database_path: string
   listen_addr: string
+  management: { enabled: boolean; listen_addr: string }
+  metrics: { local_only: boolean }
   upstreams: Record<string, string | Record<string, string>>
   timeout: { request_secs: number }
+  upstream_selection: { strategy: 'ordered' | 'adaptive'; failure_threshold: number; cooldown_secs: number }
+  alerts: { enabled: boolean; webhook_url: string; has_webhook_url: boolean; email_enabled: boolean; email_recipients: string[]; quota_percent: number; source_failures: number; cooldown_secs: number }
   outbound_proxy: {
     enabled: boolean
     url: string
@@ -78,7 +94,7 @@ type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access'> & {
     insecure_skip_verify: boolean
   }
   rate_limit: { enabled: boolean; requests_per_minute: number }
-  cache: { enabled: boolean; directory: string; max_entry_mb: number }
+  cache: { enabled: boolean; directory: string; max_entry_mb: number; max_total_mb: number; default_ttl_secs: number; max_ttl_secs: number }
   geoip: { enabled: boolean; ipv4_path: string; ipv6_path: string }
   user_access: {
     base_domain: string
@@ -235,8 +251,9 @@ function MirrorProxyMark({ size = 18 }: { size?: number }) {
   </svg>
 }
 
-function SiteFooter() {
+function SiteFooter({ footerText }: { footerText?: string }) {
   const [serviceVersion, setServiceVersion] = React.useState('')
+  const [configuredFooter, setConfiguredFooter] = React.useState('')
 
   React.useEffect(() => {
     fetch('/version')
@@ -245,8 +262,18 @@ function SiteFooter() {
       .catch(() => undefined)
   }, [])
 
+  React.useEffect(() => {
+    if (footerText !== undefined) return
+    fetch('/api/public-config')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('config unavailable')))
+      .then((value: PublicConfig) => setConfiguredFooter(value.site?.footer_text ?? ''))
+      .catch(() => undefined)
+  }, [footerText])
+
+  const footerCopy = (footerText ?? configuredFooter).trim() || window.location.hostname
+
   return <footer className="site-footer">
-    <span>© {new Date().getFullYear()} {window.location.hostname}</span>
+    <span>© {new Date().getFullYear()} {footerCopy}</span>
     <span className="site-footer-project">
       <a href="https://github.com/inbjo/MirrorProxy" target="_blank" rel="noreferrer"><Github size={15} /> MirrorProxy</a>
       {serviceVersion ? <code>v{serviceVersion}</code> : null}
@@ -617,6 +644,7 @@ function PublicApp() {
   const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light', ['light', 'dark']))
   const [config, setConfig] = React.useState<PublicConfig>({
     public_base_url: window.location.origin,
+    site: { ...DEFAULT_SITE_SETTINGS, keywords: [...DEFAULT_SITE_SETTINGS.keywords] },
     enabled_proxies: ['github', 'composer'],
     quota: {
       enabled: false,
@@ -647,6 +675,13 @@ function PublicApp() {
       .then((value: PublicConfig) => setConfig(value))
       .catch(() => undefined)
   }, [])
+
+  React.useEffect(() => {
+    const site = config.site
+    if (!site) return
+    document.title = site.title
+    document.querySelectorAll<HTMLLinkElement>('link[rel="icon"], link[rel="apple-touch-icon"]').forEach((link) => { link.href = site.icon_url })
+  }, [config.site])
 
   React.useEffect(() => {
     fetch('/api/sources')
@@ -715,7 +750,7 @@ function PublicApp() {
     <main className="shell">
       <header className="topbar">
         <div>
-          <div className="brand-mark"><MirrorProxyMark size={19} /> MirrorProxy</div>
+          <div className="brand-mark"><MirrorProxyMark size={19} /> {config.site?.title ?? 'MirrorProxy'}</div>
         </div>
         <div className="toolbar">
           {publicProfile && avatarUrl ? <div className="public-account-control">
@@ -736,7 +771,7 @@ function PublicApp() {
 
       <AccelerationWorkbench baseUrl={baseUrl} config={config} catalog={catalog} health={sourceHealth} labels={t} onCopy={copyCommand} copied={copied} />
 
-      <SiteFooter />
+      <SiteFooter footerText={config.site?.footer_text} />
 
       {false && <div className="legacy-home">
       <section className="status-strip">
@@ -1133,7 +1168,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
     ? {
         title: '运行控制台', login: '管理员登录', username: '管理员账号', password: '管理员密码', signIn: '登录', signOut: '退出登录',
         overview: '本月概览', sent: '已发送', billed: '计费流量', remaining: '配额剩余', requests: '请求', errors: '错误',
-        configuration: '运行时配置', publicUrl: '公开地址', trustedProxies: '可信反向代理', trustedProxiesHint: '逗号分隔的 IP 或 CIDR；只有这些来源的 X-Forwarded-* 头会被使用。', quota: '启用总流量限制', quotaGb: '总流量（GB）', retentionDays: '明细保留天数', timezone: '时区', cache: '启用小对象磁盘缓存', cacheDirectory: '缓存目录', cacheMaxEntry: '单项上限（MB）',
+        configuration: '运行时配置', publicUrl: '公开地址', trustedProxies: '可信反向代理', trustedProxiesHint: '逗号分隔的 IP 或 CIDR；只有这些来源的 X-Forwarded-* 头会被使用。', quota: '启用总流量限制', quotaGb: '总流量（GB）', retentionDays: '明细保留天数', timezone: '时区', cache: '启用小对象磁盘缓存', cacheDirectory: '缓存目录', cacheMaxEntry: '单项上限（MB）', cacheMaxTotal: '总容量（MB）', cacheDefaultTtl: '默认有效期（秒）', cacheMaxTtl: '最长有效期（秒）',
         action: '超限动作', forwardAuth: '转发客户端认证头', rate: '启用请求限流', rpm: '每分钟请求数', adapters: '启用代理', upstreams: '上游地址', baseDomain: '用户子域名主域', accessMode: '包代理访问模式', infrastructureReady: '我已完成通配符 DNS、TLS 和原始 Host 转发配置', routingLength: '子域名最短长度', rotationCooldown: '子域名更换冷却（小时）', registrationMode: '注册模式', allowedDomains: '企业邮箱域名', emailTtl: '邮件登录有效期（分钟）',
         save: '保存配置', saving: '保存中…', refresh: '刷新统计', top: 'Top targets', daily: '当月日明细',
         badLogin: '登录失败，请检查管理员密码。', saveError: '配置保存失败。', saveErrorTitle: '保存失败', saveSuccessTitle: '配置已保存', saveSuccess: '新配置已生效。', closeNotice: '关闭提示', restart: '以下字段将在重启后生效：',
@@ -1149,7 +1184,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
     : {
         title: 'Operations console', login: 'Administrator sign in', username: 'Administrator username', password: 'Administrator password', signIn: 'Sign in', signOut: 'Sign out',
         overview: 'Month at a glance', sent: 'Sent', billed: 'Billed traffic', remaining: 'Quota remaining', requests: 'Requests', errors: 'Errors',
-        configuration: 'Runtime configuration', publicUrl: 'Public URL', trustedProxies: 'Trusted reverse proxies', trustedProxiesHint: 'Comma-separated IPs or CIDRs. Only these peers may supply X-Forwarded-* headers.', quota: 'Enable total traffic limit', quotaGb: 'Total traffic (GB)', retentionDays: 'Event retention (days)', timezone: 'Timezone', cache: 'Enable small-response disk cache', cacheDirectory: 'Cache directory', cacheMaxEntry: 'Per-entry limit (MB)',
+        configuration: 'Runtime configuration', publicUrl: 'Public URL', trustedProxies: 'Trusted reverse proxies', trustedProxiesHint: 'Comma-separated IPs or CIDRs. Only these peers may supply X-Forwarded-* headers.', quota: 'Enable total traffic limit', quotaGb: 'Total traffic (GB)', retentionDays: 'Event retention (days)', timezone: 'Timezone', cache: 'Enable small-response disk cache', cacheDirectory: 'Cache directory', cacheMaxEntry: 'Per-entry limit (MB)', cacheMaxTotal: 'Total capacity (MB)', cacheDefaultTtl: 'Default freshness (seconds)', cacheMaxTtl: 'Maximum freshness (seconds)',
         action: 'Exceeded action', forwardAuth: 'Forward client authorization', rate: 'Enable request rate limit', rpm: 'Requests / minute', adapters: 'Enabled adapters', upstreams: 'Upstream endpoints', baseDomain: 'User subdomain base', accessMode: 'Package proxy access mode', infrastructureReady: 'I have configured wildcard DNS, TLS, and original Host forwarding', routingLength: 'Minimum routing ID length', rotationCooldown: 'Rotation cooldown (hours)', registrationMode: 'Registration mode', allowedDomains: 'Allowed email domains', emailTtl: 'Email login lifetime (minutes)',
         save: 'Save configuration', saving: 'Saving…', refresh: 'Refresh stats', top: 'Top targets', daily: 'Daily detail',
         badLogin: 'Sign in failed. Check the administrator password.', saveError: 'Configuration save failed.', saveErrorTitle: 'Save failed', saveSuccessTitle: 'Configuration saved', saveSuccess: 'The new configuration is active.', closeNotice: 'Dismiss notification', restart: 'These fields apply after restart:',
@@ -1212,8 +1247,13 @@ function AdminConsole({ locale }: { locale: Locale }) {
       ...config,
       public_base_url: config.public_base_url || window.location.origin,
       trusted_proxies: config.trusted_proxies ?? [],
+      site: config.site ?? { title: 'MirrorProxy', description: '', keywords: [], icon_url: '/favicon.svg' },
       outbound_proxy: config.outbound_proxy ?? { enabled: false, url: '', no_proxy: ['127.0.0.1', 'localhost'], username: null, password: null, has_password: false },
       upstream_tls: config.upstream_tls ?? { ca_certificates: [], insecure_skip_verify: false },
+      upstream_selection: config.upstream_selection ?? { strategy: 'ordered', failure_threshold: 3, cooldown_secs: 30 },
+      management: config.management ?? { enabled: false, listen_addr: '127.0.0.1:3001' },
+      metrics: config.metrics ?? { local_only: true },
+      alerts: config.alerts ?? { enabled: false, webhook_url: '', has_webhook_url: false, email_enabled: false, email_recipients: [], quota_percent: 80, source_failures: 3, cooldown_secs: 3600 },
       user_access: config.user_access ?? { base_domain: '', mode: 'public', infrastructure_ready: false, routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
       registration: config.registration ?? { mode: 'invite_only', allowed_email_domains: [], email_token_ttl_minutes: 10 },
       webauthn,
@@ -1423,9 +1463,13 @@ function AdminConsole({ locale }: { locale: Locale }) {
   }
 
   const update = <K extends keyof AdminConfig>(key: K, value: AdminConfig[K]) => setDraft((current) => current ? { ...current, [key]: value } : current)
+  const updateSite = (key: keyof AdminConfig['site'], value: string | string[]) => setDraft((current) => current ? { ...current, site: { ...current.site, [key]: value } } : current)
   const updateQuota = (key: keyof AdminConfig['quota'], value: string | boolean | number | null) => setDraft((current) => current ? { ...current, quota: { ...current.quota, [key]: value } } : current)
   const updateRate = (key: keyof AdminConfig['rate_limit'], value: string | boolean | number) => setDraft((current) => current ? { ...current, rate_limit: { ...current.rate_limit, [key]: value } } : current)
+  const updateMetrics = (localOnly: boolean) => setDraft((current) => current ? { ...current, metrics: { local_only: localOnly } } : current)
   const updateCache = (key: keyof AdminConfig['cache'], value: string | boolean | number) => setDraft((current) => current ? { ...current, cache: { ...current.cache, [key]: value } } : current)
+  const updateAlerts = (key: keyof AdminConfig['alerts'], value: string | string[] | boolean | number) => setDraft((current) => current ? { ...current, alerts: { ...current.alerts, [key]: value } } : current)
+  const updateUpstreamSelection = (key: keyof AdminConfig['upstream_selection'], value: string | number) => setDraft((current) => current ? { ...current, upstream_selection: { ...current.upstream_selection, [key]: value } as AdminConfig['upstream_selection'] } : current)
   const updateOutboundProxy = (key: keyof AdminConfig['outbound_proxy'], value: string | boolean | string[] | null) => setDraft((current) => current ? { ...current, outbound_proxy: { ...current.outbound_proxy, [key]: value } } : current)
   const updateUpstreamTls = (key: keyof AdminConfig['upstream_tls'], value: boolean | string[]) => setDraft((current) => current ? { ...current, upstream_tls: { ...current.upstream_tls, [key]: value } } : current)
   const toggleInsecureUpstreamTls = (enabled: boolean) => {
@@ -1488,8 +1532,10 @@ function AdminConsole({ locale }: { locale: Locale }) {
         {activeTab === 'ip-access' ? <AdminIpAccess locale={locale} superAdmin={identity?.role === 'super_admin'} /> : null}
         {activeTab === 'access' ? <section className="admin-tab-panel settings-stack">
           <div className="settings-card"><div className="settings-card-head"><h4>{text.serviceAccess}</h4><p>{text.accessHint}</p></div><div className="config-fields"><label>{text.publicUrl}<input value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label>{text.registrationMode}<select value={draft.registration.mode} onChange={(event) => updateRegistration('mode', event.target.value)}><option value="invite_only">{locale === 'zh' ? '仅邀请用户' : 'Invitation only'}</option><option value="domain_allowlist">{locale === 'zh' ? '仅允许指定邮箱域名' : 'Allowed email domains'}</option><option value="open">{locale === 'zh' ? '开放注册' : 'Open registration'}</option><option value="disabled">{locale === 'zh' ? '禁止新用户' : 'New users disabled'}</option></select></label><label className="wide-field">{text.allowedDomains}<input placeholder="example.com, subsidiary.example.com" value={draft.registration.allowed_email_domains.join(', ')} onChange={(event) => updateRegistration('allowed_email_domains', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /><small>{locale === 'zh' ? '仅“指定邮箱域名”模式需要填写，多个域名用逗号分隔。' : 'Only required for the allowed-domain mode. Separate multiple domains with commas.'}</small></label><label>{text.emailTtl}<input min="1" max="60" type="number" value={draft.registration.email_token_ttl_minutes} onChange={(event) => updateRegistration('email_token_ttl_minutes', Number(event.target.value))} /></label></div></div>
+          <div className="settings-card"><div className="settings-card-head"><h4>{locale === 'zh' ? '站点与 SEO' : 'Site identity & SEO'}</h4><p>{locale === 'zh' ? '这些信息会直接写入服务端返回的 HTML，供浏览器、搜索引擎和分享卡片读取。' : 'These values are rendered into server HTML for browsers, search engines, and link previews.'}</p></div><div className="config-fields site-settings-fields"><label>{locale === 'zh' ? '网站标题' : 'Site title'}<input maxLength={100} value={draft.site.title} onChange={(event) => updateSite('title', event.target.value)} /></label><label>{locale === 'zh' ? '站点图标 URL' : 'Site icon URL'}<input placeholder="/favicon.svg" value={draft.site.icon_url} onChange={(event) => updateSite('icon_url', event.target.value)} /><small>{locale === 'zh' ? '支持站内绝对路径或 HTTP(S) 地址。' : 'Use a root-relative path or HTTP(S) URL.'}</small></label><label className="wide-field">{locale === 'zh' ? 'SEO 描述' : 'SEO description'}<textarea maxLength={300} rows={3} value={draft.site.description} onChange={(event) => updateSite('description', event.target.value)} /></label><label className="wide-field">{locale === 'zh' ? 'SEO 关键词' : 'SEO keywords'}<input placeholder={locale === 'zh' ? '镜像, 代理, 软件源' : 'mirror, proxy, package registry'} value={draft.site.keywords.join(', ')} onChange={(event) => updateSite('keywords', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small>{locale === 'zh' ? '最多 20 项，使用逗号分隔。' : 'Up to 20 comma-separated values.'}</small></label><label className="wide-field">{locale === 'zh' ? '底部左侧文案' : 'Footer text'}<input maxLength={200} placeholder={window.location.hostname} value={draft.site.footer_text} onChange={(event) => updateSite('footer_text', event.target.value)} /><small>{locale === 'zh' ? '留空时显示当前站点域名；右侧 GitHub 链接与版本号保持固定。' : 'Leave blank to show the current hostname. The GitHub link and version remain fixed.'}</small></label></div></div>
           <div className="settings-card"><div className="settings-card-head"><h4>{text.subdomainRouting}</h4><p>{locale === 'zh' ? '默认保留主域名代理。只有企业内部强制计费时才需要强制用户子域名。' : 'Keep main-domain proxying by default. Require user subdomains only for controlled internal deployments.'}</p></div><div className="config-fields"><label>{text.baseDomain}<input placeholder="mirror.example.com" value={draft.user_access.base_domain} onChange={(event) => updateUserAccess('base_domain', event.target.value)} /></label><label>{text.accessMode}<select value={draft.user_access.mode} onChange={(event) => updateUserAccess('mode', event.target.value)}><option value="public">{locale === 'zh' ? '公开模式（推荐）' : 'Public (recommended)'}</option><option value="subdomain_required">{locale === 'zh' ? '强制用户子域名' : 'Require user subdomains'}</option></select></label>{draft.user_access.mode === 'subdomain_required' ? <div className="infrastructure-readiness wide-field"><label className="toggle-field"><input type="checkbox" checked={draft.user_access.infrastructure_ready} onChange={(event) => updateUserAccess('infrastructure_ready', event.target.checked)} />{text.infrastructureReady}</label><p>{locale === 'zh' ? '这是保存前的安全确认，不会自动配置基础设施。请确保 *.主域名 已解析到本服务、TLS 证书覆盖通配符域名，并且反向代理保留客户端请求的原始 Host。' : 'This is a safety acknowledgement, not automatic provisioning. Ensure *.base-domain resolves to this service, TLS covers the wildcard domain, and the reverse proxy preserves the original Host header.'}</p></div> : <div className="infrastructure-readiness infrastructure-readiness-passive wide-field"><CheckCircle2 size={17} /><p>{locale === 'zh' ? '公开模式只使用公开地址，不需要通配符 DNS、通配符证书或用户子域名配置。' : 'Public mode only uses the public URL; wildcard DNS, wildcard certificates, and user subdomains are not required.'}</p></div>}</div></div>
           <div className="settings-card"><div className="settings-card-head"><h4>{text.trafficQuota}</h4><p>{locale === 'zh' ? '公开代理流量与所有用户流量共同计入每月总流量；每个用户还受默认单用户上限约束。用量按所选时区每月重置，双向计费用于同时计算 VPS 流入与流出的厂商。' : 'Public proxy traffic and all user traffic share the monthly total; each user also has a per-user limit. Usage resets monthly in the selected timezone. Bidirectional billing counts both VPS ingress and egress.'}</p></div><div className="config-fields"><label className="toggle-field quota-toggle"><input type="checkbox" checked={draft.quota.enabled} onChange={(event) => updateQuota('enabled', event.target.checked)} />{text.quota}</label><label className="toggle-field quota-toggle"><input type="checkbox" checked={draft.quota.bidirectional_accounting} onChange={(event) => updateQuota('bidirectional_accounting', event.target.checked)} />{text.bidirectionalAccounting}</label><label>{text.quotaGb}<input min="0" type="number" value={draft.quota.monthly_gb} onChange={(event) => updateQuota('monthly_gb', Number(event.target.value))} /></label><label>{text.defaultUserQuota}<input min="0" type="number" value={draft.quota.default_user_monthly_gb ?? ''} placeholder={text.unlimited} onChange={(event) => updateQuota('default_user_monthly_gb', event.target.value === '' ? null : Number(event.target.value))} /></label><label>{text.timezone}<input value={draft.quota.timezone} onChange={(event) => updateQuota('timezone', event.target.value)} /></label><label>{text.action}<select value={draft.quota.on_exceeded} onChange={(event) => updateQuota('on_exceeded', event.target.value)}><option value="stop_proxy">{locale === 'zh' ? '停止代理（503）' : 'Stop proxying (503)'}</option><option value="throttle">{locale === 'zh' ? '请求限流（429）' : 'Rate limit (429)'}</option></select></label></div></div>
+          <div className="settings-card"><div className="settings-card-head"><h4>{locale === 'zh' ? '运行告警' : 'Operational alerts'}</h4><p>{locale === 'zh' ? '配额接近上限或多个上游异常时，通过 Webhook、邮件或两者通知；每个渠道独立按冷却时间去重。' : 'Notify by webhook, email, or both when quota or upstream health crosses a threshold. Each channel is deduplicated independently.'}</p></div><div className="config-fields"><label className="toggle-field"><input type="checkbox" checked={draft.alerts.enabled} onChange={(event) => updateAlerts('enabled', event.target.checked)} />{locale === 'zh' ? '启用告警' : 'Enable alerts'}</label><label className="toggle-field"><input type="checkbox" checked={draft.alerts.email_enabled} onChange={(event) => updateAlerts('email_enabled', event.target.checked)} />{locale === 'zh' ? '发送邮件通知' : 'Send email notifications'}</label><label className="wide-field">Webhook URL<input type="password" placeholder={draft.alerts.has_webhook_url ? (locale === 'zh' ? '已保存，留空表示不修改' : 'Saved; leave blank to keep') : 'https://hooks.example/…'} value={draft.alerts.webhook_url} onChange={(event) => updateAlerts('webhook_url', event.target.value)} /><small>{locale === 'zh' ? '不使用 Webhook 时可留空。' : 'Leave blank when only email delivery is needed.'}</small></label><label className="wide-field">{locale === 'zh' ? '告警收件人' : 'Alert recipients'}<input type="text" placeholder="ops@example.com, owner@example.com" value={draft.alerts.email_recipients.join(', ')} onChange={(event) => updateAlerts('email_recipients', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /><small>{locale === 'zh' ? '多个邮箱用逗号分隔；发送邮件前需要先在“邮件与邀请”中启用 SMTP。' : 'Comma-separated addresses. SMTP must be enabled under Email & invitations.'}</small></label><label>{locale === 'zh' ? '配额阈值（%）' : 'Quota threshold (%)'}<input min="1" max="100" type="number" value={draft.alerts.quota_percent} onChange={(event) => updateAlerts('quota_percent', Number(event.target.value))} /></label><label>{locale === 'zh' ? '异常上游组阈值' : 'Unhealthy source threshold'}<input min="1" type="number" value={draft.alerts.source_failures} onChange={(event) => updateAlerts('source_failures', Number(event.target.value))} /></label><label>{locale === 'zh' ? '冷却时间（秒）' : 'Cooldown (seconds)'}<input min="1" type="number" value={draft.alerts.cooldown_secs} onChange={(event) => updateAlerts('cooldown_secs', Number(event.target.value))} /></label></div></div>
         </section> : null}
         {activeTab === 'advanced' ? <section className="admin-tab-panel settings-stack">
           <div className="advanced-notice">{text.advancedWarning}</div>
@@ -1521,11 +1567,15 @@ function AdminConsole({ locale }: { locale: Locale }) {
               </section>
               <section className="runtime-config-group">
                 <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '请求限流' : 'Request rate limiting'}</h5><p>{locale === 'zh' ? '启用后按客户端限制每分钟请求数。' : 'Limits requests per client when enabled.'}</p></div>
-                <div className="runtime-config-fields paired-fields"><label className="toggle-field"><input type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<input min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label></div>
+                <div className="runtime-config-fields paired-fields"><label className="toggle-field"><input type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<input min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label><label className="toggle-field wide-field"><input type="checkbox" checked={draft.metrics.local_only} onChange={(event) => updateMetrics(event.target.checked)} />{locale === 'zh' ? '仅允许本机访问 /metrics（推荐）' : 'Allow /metrics from localhost only (recommended)'}</label></div>
               </section>
               <section className="runtime-config-group">
-                <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '小对象磁盘缓存' : 'Small-object disk cache'}</h5><p>{locale === 'zh' ? '只缓存不超过单项上限的安全响应。' : 'Caches eligible responses up to the entry-size limit.'}</p></div>
-                <div className="runtime-config-fields paired-fields"><label className="toggle-field"><input type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label><label>{text.cacheMaxEntry}<input min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label className="wide-field">{text.cacheDirectory}<input value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label></div>
+                <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '小对象磁盘缓存' : 'Small-object disk cache'}</h5><p>{locale === 'zh' ? '遵循上游缓存指令，并通过 ETag 或修改时间重新验证已过期内容。' : 'Honors upstream cache directives and revalidates stale content with ETag or modification time.'}</p></div>
+                <div className="runtime-config-fields paired-fields"><label className="toggle-field"><input type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label><label>{text.cacheMaxEntry}<input min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label>{text.cacheMaxTotal}<input min="1" type="number" value={draft.cache.max_total_mb} onChange={(event) => updateCache('max_total_mb', Number(event.target.value))} /></label><label>{text.cacheDefaultTtl}<input min="1" type="number" value={draft.cache.default_ttl_secs} onChange={(event) => updateCache('default_ttl_secs', Number(event.target.value))} /></label><label>{text.cacheMaxTtl}<input min="1" type="number" value={draft.cache.max_ttl_secs} onChange={(event) => updateCache('max_ttl_secs', Number(event.target.value))} /></label><label className="wide-field">{text.cacheDirectory}<input value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><CacheOperations locale={locale} /></div>
+              </section>
+              <section className="runtime-config-group">
+                <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '上游选择策略' : 'Upstream selection'}</h5><p>{locale === 'zh' ? '顺序模式保持配置优先级；自适应模式根据失败熔断与响应延迟动态排序。' : 'Ordered mode preserves configured priority; adaptive mode ranks endpoints using circuit state and latency.'}</p></div>
+                <div className="runtime-config-fields paired-fields"><label>{locale === 'zh' ? '策略' : 'Strategy'}<select value={draft.upstream_selection.strategy} onChange={(event) => updateUpstreamSelection('strategy', event.target.value)}><option value="ordered">{locale === 'zh' ? '顺序优先' : 'Ordered'}</option><option value="adaptive">{locale === 'zh' ? '自适应' : 'Adaptive'}</option></select></label><label>{locale === 'zh' ? '失败阈值' : 'Failure threshold'}<input min="1" type="number" value={draft.upstream_selection.failure_threshold} onChange={(event) => updateUpstreamSelection('failure_threshold', Number(event.target.value))} /></label><label>{locale === 'zh' ? '熔断冷却（秒）' : 'Circuit cooldown (seconds)'}<input min="1" type="number" value={draft.upstream_selection.cooldown_secs} onChange={(event) => updateUpstreamSelection('cooldown_secs', Number(event.target.value))} /></label></div>
               </section>
               <section className="runtime-config-group">
                 <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '流量明细' : 'Traffic records'}</h5><p>{locale === 'zh' ? '控制请求级流量明细在数据库中的保留时间。' : 'Controls how long request-level traffic records remain in the database.'}</p></div>
@@ -1752,11 +1802,11 @@ function AdminAcmeStatus({ locale, superAdmin }: { locale: Locale; superAdmin: b
           <label>{locale === 'zh' ? '检查间隔（小时）' : 'Check interval (hours)'}<input min="1" type="number" value={draft.check_interval_hours} onChange={(event) => updateConfig('check_interval_hours', Number(event.target.value))} /></label>
         </div>
         <div className={`acme-https-panel${draft.direct_https ? ' enabled' : ''}`}>
-          <div className="acme-https-panel-head"><div><small>NATIVE TLS EDGE</small><h5>{locale === 'zh' ? 'MirrorProxy 直接提供 HTTPS' : 'Serve HTTPS directly from MirrorProxy'}</h5><p>{locale === 'zh' ? '无需 Caddy 或 Nginx。80 端口响应 HTTP-01，其余请求重定向到 443；证书续期后自动热加载。' : 'No Caddy or Nginx required. Port 80 serves HTTP-01 and redirects other traffic to 443; renewed certificates reload automatically.'}</p></div><label className="toggle-field"><input type="checkbox" checked={draft.direct_https} onChange={(event) => updateConfig('direct_https', event.target.checked)} />{locale === 'zh' ? '启用原生 HTTPS' : 'Enable native HTTPS'}</label></div>
+          <div className="acme-https-panel-head"><div><small>NATIVE TLS EDGE</small><h5>{locale === 'zh' ? 'MirrorProxy 直接提供 HTTPS' : 'Serve HTTPS directly from MirrorProxy'}</h5><p>{locale === 'zh' ? '无需 Caddy 或 Nginx。80 端口响应 HTTP-01，其余请求重定向到 443；证书续期后自动热加载。' : 'No Caddy or Nginx required. Port 80 serves HTTP-01 and redirects other traffic to 443; renewed certificates reload automatically.'}</p></div><label className="toggle-field acme-native-toggle"><input type="checkbox" checked={draft.direct_https} onChange={(event) => updateConfig('direct_https', event.target.checked)} /><span>{locale === 'zh' ? '启用原生 HTTPS' : 'Enable native HTTPS'}</span></label></div>
           {draft.direct_https ? <div className="acme-config-grid acme-https-fields">
             <label>{locale === 'zh' ? 'HTTP 监听地址' : 'HTTP listen address'}<input placeholder="0.0.0.0:80" value={draft.http_listen_addr} onChange={(event) => updateConfig('http_listen_addr', event.target.value)} /></label>
             <label>{locale === 'zh' ? 'HTTPS 监听地址' : 'HTTPS listen address'}<input placeholder="0.0.0.0:443" value={draft.https_listen_addr} onChange={(event) => updateConfig('https_listen_addr', event.target.value)} /></label>
-            <label className="toggle-field wide-field"><input type="checkbox" checked={draft.redirect_http_to_https} onChange={(event) => updateConfig('redirect_http_to_https', event.target.checked)} /><span><strong>{locale === 'zh' ? 'HTTP 永久重定向到 HTTPS' : 'Permanently redirect HTTP to HTTPS'}</strong><small>{locale === 'zh' ? 'ACME HTTP-01 验证路径始终不会重定向。首次证书就绪前其他请求返回 503。' : 'The ACME HTTP-01 path is never redirected. Other requests return 503 until the first certificate is ready.'}</small></span></label>
+            <label className="toggle-field wide-field acme-redirect-toggle"><input type="checkbox" checked={draft.redirect_http_to_https} onChange={(event) => updateConfig('redirect_http_to_https', event.target.checked)} /><span><strong>{locale === 'zh' ? 'HTTP 永久重定向到 HTTPS' : 'Permanently redirect HTTP to HTTPS'}</strong><small>{locale === 'zh' ? '开启后，除 ACME HTTP-01 验证路径外，HTTP 请求会跳转到 HTTPS；首次证书就绪前返回 503。' : 'When enabled, HTTP requests redirect to HTTPS except ACME HTTP-01 validation; other requests return 503 until the first certificate is ready.'}</small></span></label>
           </div> : null}
         </div>
         {draft.challenge === 'dns-01' ? <div className="acme-dns-panel">
@@ -1959,7 +2009,7 @@ function BillingGroupRow({ group, locale, reload }: { group: BillingGroupView; l
     const response = await fetch(`/admin/api/groups/${group.id}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, monthly_gb: quota === '' ? null : Number(quota) }) })
     if (response.ok) await reload()
   }
-  return <div className="admin-account-row"><span><strong>{group.name}</strong><small>{group.member_count} {locale === 'zh' ? '位成员' : 'members'} · {group.monthly_limit_bytes === null ? (locale === 'zh' ? '不限量' : 'unlimited') : byteLabel(group.monthly_limit_bytes)}</small></span><span><input aria-label={`${group.name} name`} value={name} onChange={(event) => setName(event.target.value)} /><input aria-label={`${group.name} quota`} min="0" type="number" placeholder={locale === 'zh' ? '不限量 GB' : 'Unlimited GB'} value={quota} onChange={(event) => setQuota(event.target.value)} /><button onClick={save}>{locale === 'zh' ? '保存' : 'Save'}</button></span></div>
+  return <div className="admin-account-row team-account-row"><span><strong>{group.name}</strong><small>{group.member_count} {locale === 'zh' ? '位成员' : 'members'} · {group.monthly_limit_bytes === null ? (locale === 'zh' ? '不限量' : 'unlimited') : byteLabel(group.monthly_limit_bytes)}</small></span><span><input aria-label={`${group.name} name`} value={name} onChange={(event) => setName(event.target.value)} /><input aria-label={`${group.name} quota`} min="0" type="number" placeholder={locale === 'zh' ? '不限量 GB' : 'Unlimited GB'} value={quota} onChange={(event) => setQuota(event.target.value)} /><button onClick={save}>{locale === 'zh' ? '保存' : 'Save'}</button></span><TeamTargetAccess groupId={group.id} targets={PROXY_ADAPTERS} locale={locale} /></div>
 }
 
 function BillingUserRow({ initialUser, groups, locale, reloadUsers }: { initialUser: AdminUserView; groups: BillingGroupView[]; locale: Locale; reloadUsers: () => Promise<void> }) {

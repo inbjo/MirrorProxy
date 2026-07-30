@@ -23,7 +23,8 @@ bash scripts/smoke-clients.sh
 ```
 
 可选的 OS 客户端 smoke 与 Docker smoke 是更窄的环境验证，不应把语言生态的通过结果
-表述成所有 OS 仓库均已验证。当前路线图与未完成项保存在主仓库的 `docs/plan.md` 和
+表述成所有 OS 仓库均已验证。稳定标签会发布归档、DEB/RPM、Homebrew 与 WinGet manifest，
+并部署经过签名的客户端 APT 仓库。当前路线图与未完成项保存在主仓库的 `docs/plan.md` 和
 `docs/next.md`。
 
 [English](Development-and-Roadmap)

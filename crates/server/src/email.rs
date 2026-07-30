@@ -578,6 +578,29 @@ async fn enqueue_email(
     Ok(())
 }
 
+pub(crate) async fn enqueue_operational_alert(
+    state: &AppState,
+    recipients: &[String],
+    subject: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let configured = state
+        .database
+        .smtp_settings()
+        .await?
+        .is_some_and(|settings| settings.enabled);
+    if !configured {
+        anyhow::bail!("SMTP is not enabled for operational alert delivery");
+    }
+    for recipient in recipients {
+        state
+            .database
+            .enqueue_email(recipient, subject, body, None)
+            .await?;
+    }
+    Ok(())
+}
+
 pub(crate) fn spawn_email_outbox_worker(database: Arc<Database>) {
     tokio::spawn(async move {
         loop {

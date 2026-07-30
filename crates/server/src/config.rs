@@ -15,8 +15,16 @@ pub struct Config {
     pub database_path: String,
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
+    /// Optional additional control-plane listener for private-network access.
+    /// Administrator routes remain available on the public listener.
+    #[serde(default)]
+    pub management: ManagementConfig,
+    #[serde(default)]
+    pub metrics: MetricsConfig,
     #[serde(default)]
     pub public_base_url: String,
+    #[serde(default)]
+    pub site: SiteConfig,
     /// Connections from these IP addresses or CIDR ranges may provide
     /// X-Forwarded-Host and X-Forwarded-Proto.
     #[serde(default = "default_trusted_proxies")]
@@ -28,6 +36,8 @@ pub struct Config {
     #[serde(default)]
     pub timeout: TimeoutConfig,
     #[serde(default)]
+    pub upstream_selection: UpstreamSelectionConfig,
+    #[serde(default)]
     pub rate_limit: RateLimitConfig,
     #[serde(default)]
     pub cache: CacheConfig,
@@ -37,6 +47,8 @@ pub struct Config {
     pub acme: AcmeConfig,
     #[serde(default)]
     pub quota: QuotaConfig,
+    #[serde(default)]
+    pub alerts: AlertConfig,
     #[serde(default)]
     pub user_access: UserAccessConfig,
     #[serde(default)]
@@ -175,6 +187,80 @@ pub struct TimeoutConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpstreamSelectionConfig {
+    #[serde(default = "default_upstream_selection_strategy")]
+    pub strategy: String,
+    #[serde(default = "default_upstream_failure_threshold")]
+    pub failure_threshold: u32,
+    #[serde(default = "default_upstream_cooldown_secs")]
+    pub cooldown_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManagementConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_management_listen_addr")]
+    pub listen_addr: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MetricsConfig {
+    #[serde(default = "default_true")]
+    pub local_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SiteConfig {
+    #[serde(default = "default_site_title")]
+    pub title: String,
+    #[serde(default = "default_site_description")]
+    pub description: String,
+    #[serde(default = "default_site_keywords")]
+    pub keywords: Vec<String>,
+    #[serde(default = "default_site_icon_url")]
+    pub icon_url: String,
+    #[serde(default)]
+    pub footer_text: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AlertConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub webhook_url: String,
+    #[serde(default)]
+    pub email_enabled: bool,
+    #[serde(default)]
+    pub email_recipients: Vec<String>,
+    #[serde(default = "default_alert_quota_percent")]
+    pub quota_percent: u8,
+    #[serde(default = "default_alert_source_failures")]
+    pub source_failures: u32,
+    #[serde(default = "default_alert_cooldown_secs")]
+    pub cooldown_secs: u64,
+}
+
+impl fmt::Debug for AlertConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AlertConfig")
+            .field("enabled", &self.enabled)
+            .field(
+                "webhook_url",
+                &(!self.webhook_url.is_empty()).then_some("[redacted]"),
+            )
+            .field("email_enabled", &self.email_enabled)
+            .field("email_recipients", &self.email_recipients)
+            .field("quota_percent", &self.quota_percent)
+            .field("source_failures", &self.source_failures)
+            .field("cooldown_secs", &self.cooldown_secs)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -192,6 +278,12 @@ pub struct CacheConfig {
     pub max_entry_mb: u64,
     #[serde(default = "default_cache_max_total_mb")]
     pub max_total_mb: u64,
+    /// Freshness used when an upstream does not provide an explicit cache TTL.
+    #[serde(default = "default_cache_default_ttl_secs")]
+    pub default_ttl_secs: u64,
+    /// Upper bound for an upstream supplied max-age/s-maxage value.
+    #[serde(default = "default_cache_max_ttl_secs")]
+    pub max_ttl_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -493,8 +585,61 @@ impl Config {
         if let Ok(value) = std::env::var("MIRRORPROXY_LISTEN_ADDR") {
             self.listen_addr = value;
         }
+        if let Ok(value) = std::env::var("MIRRORPROXY_MANAGEMENT_ENABLED") {
+            self.management.enabled = parse_env_bool("MIRRORPROXY_MANAGEMENT_ENABLED", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_MANAGEMENT_LISTEN_ADDR") {
+            self.management.listen_addr = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_METRICS_LOCAL_ONLY") {
+            self.metrics.local_only = parse_env_bool("MIRRORPROXY_METRICS_LOCAL_ONLY", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ALERTS_ENABLED") {
+            self.alerts.enabled = parse_env_bool("MIRRORPROXY_ALERTS_ENABLED", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ALERTS_WEBHOOK_URL") {
+            self.alerts.webhook_url = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ALERTS_EMAIL_ENABLED") {
+            self.alerts.email_enabled = parse_env_bool("MIRRORPROXY_ALERTS_EMAIL_ENABLED", &value)?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ALERTS_EMAIL_RECIPIENTS") {
+            self.alerts.email_recipients = parse_url_list(&value);
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ALERTS_QUOTA_PERCENT") {
+            self.alerts.quota_percent = value.parse().map_err(|_| {
+                anyhow::anyhow!(
+                    "MIRRORPROXY_ALERTS_QUOTA_PERCENT must be an integer between 1 and 100"
+                )
+            })?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ALERTS_SOURCE_FAILURES") {
+            self.alerts.source_failures = value.parse().map_err(|_| {
+                anyhow::anyhow!("MIRRORPROXY_ALERTS_SOURCE_FAILURES must be a positive integer")
+            })?;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_ALERTS_COOLDOWN_SECS") {
+            self.alerts.cooldown_secs = value.parse().map_err(|_| {
+                anyhow::anyhow!("MIRRORPROXY_ALERTS_COOLDOWN_SECS must be a positive integer")
+            })?;
+        }
         if let Ok(value) = std::env::var("MIRRORPROXY_PUBLIC_BASE_URL") {
             self.public_base_url = value.trim_end_matches('/').to_string();
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_SITE_TITLE") {
+            self.site.title = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_SITE_DESCRIPTION") {
+            self.site.description = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_SITE_KEYWORDS") {
+            self.site.keywords = parse_url_list(&value);
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_SITE_ICON_URL") {
+            self.site.icon_url = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_SITE_FOOTER_TEXT") {
+            self.site.footer_text = value;
         }
         if let Ok(value) = std::env::var("MIRRORPROXY_TRUSTED_PROXIES") {
             self.trusted_proxies = value
@@ -515,6 +660,19 @@ impl Config {
         if let Ok(value) = std::env::var("MIRRORPROXY_REQUEST_TIMEOUT_SECS") {
             if let Ok(timeout) = value.parse() {
                 self.timeout.request_secs = timeout;
+            }
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_UPSTREAM_SELECTION_STRATEGY") {
+            self.upstream_selection.strategy = value;
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_UPSTREAM_FAILURE_THRESHOLD") {
+            if let Ok(threshold) = value.parse() {
+                self.upstream_selection.failure_threshold = threshold;
+            }
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_UPSTREAM_COOLDOWN_SECS") {
+            if let Ok(cooldown) = value.parse() {
+                self.upstream_selection.cooldown_secs = cooldown;
             }
         }
         if let Ok(value) = std::env::var("MIRRORPROXY_RATE_LIMIT_ENABLED") {
@@ -546,6 +704,16 @@ impl Config {
         if let Ok(value) = std::env::var("MIRRORPROXY_CACHE_MAX_TOTAL_MB") {
             if let Ok(max_total_mb) = value.parse() {
                 self.cache.max_total_mb = max_total_mb;
+            }
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_CACHE_DEFAULT_TTL_SECS") {
+            if let Ok(default_ttl_secs) = value.parse() {
+                self.cache.default_ttl_secs = default_ttl_secs;
+            }
+        }
+        if let Ok(value) = std::env::var("MIRRORPROXY_CACHE_MAX_TTL_SECS") {
+            if let Ok(max_ttl_secs) = value.parse() {
+                self.cache.max_ttl_secs = max_ttl_secs;
             }
         }
         if let Ok(value) = std::env::var("MIRRORPROXY_GEOIP_ENABLED") {
@@ -803,9 +971,49 @@ impl Config {
         if self.database_path.trim().is_empty() {
             anyhow::bail!("database_path cannot be empty");
         }
+        let public_listener = self
+            .listen_addr
+            .parse::<SocketAddr>()
+            .map_err(|_| anyhow::anyhow!("listen_addr must be a valid socket address"))?;
+        if self.management.enabled {
+            let management_listener =
+                self.management
+                    .listen_addr
+                    .parse::<SocketAddr>()
+                    .map_err(|_| {
+                        anyhow::anyhow!("management.listen_addr must be a valid socket address")
+                    })?;
+            if management_listener == public_listener {
+                anyhow::bail!("management.listen_addr must differ from listen_addr");
+            }
+        }
+        if !(1..=100).contains(&self.alerts.quota_percent) {
+            anyhow::bail!("alerts.quota_percent must be between 1 and 100");
+        }
+        if self.alerts.source_failures == 0 || self.alerts.cooldown_secs == 0 {
+            anyhow::bail!("alerts.source_failures and alerts.cooldown_secs must be greater than 0");
+        }
+        if self.alerts.enabled
+            && self.alerts.webhook_url.trim().is_empty()
+            && (!self.alerts.email_enabled || self.alerts.email_recipients.is_empty())
+        {
+            anyhow::bail!("alerts require a webhook URL or enabled email recipients");
+        }
+        if self.alerts.enabled && !self.alerts.webhook_url.trim().is_empty() {
+            validate_http_url("alerts.webhook_url", &self.alerts.webhook_url)?;
+        }
+        if self.alerts.email_enabled && self.alerts.email_recipients.is_empty() {
+            anyhow::bail!("alerts.email_recipients cannot be empty when email alerts are enabled");
+        }
+        for recipient in &self.alerts.email_recipients {
+            if !valid_email_address(recipient) {
+                anyhow::bail!("invalid alert email recipient: {recipient}");
+            }
+        }
         if !self.public_base_url.is_empty() {
             validate_http_url("public_base_url", &self.public_base_url)?;
         }
+        self.site.validate()?;
         for proxy in &self.trusted_proxies {
             parse_trusted_proxy(proxy).map_err(|error| {
                 anyhow::anyhow!("trusted_proxies entry '{proxy}' is invalid: {error}")
@@ -813,6 +1021,18 @@ impl Config {
         }
         if self.timeout.request_secs == 0 {
             anyhow::bail!("timeout.request_secs must be greater than 0");
+        }
+        if !matches!(
+            self.upstream_selection.strategy.as_str(),
+            "ordered" | "adaptive"
+        ) {
+            anyhow::bail!("upstream_selection.strategy must be ordered or adaptive");
+        }
+        if self.upstream_selection.failure_threshold == 0 {
+            anyhow::bail!("upstream_selection.failure_threshold must be greater than 0");
+        }
+        if self.upstream_selection.cooldown_secs == 0 {
+            anyhow::bail!("upstream_selection.cooldown_secs must be greater than 0");
         }
         if self.rate_limit.enabled && self.rate_limit.requests_per_minute == 0 {
             anyhow::bail!("rate_limit.requests_per_minute must be greater than 0 when enabled");
@@ -825,6 +1045,14 @@ impl Config {
         }
         if self.cache.enabled && self.cache.max_total_mb == 0 {
             anyhow::bail!("cache.max_total_mb must be greater than 0 when cache is enabled");
+        }
+        if self.cache.enabled && self.cache.default_ttl_secs == 0 {
+            anyhow::bail!("cache.default_ttl_secs must be greater than 0 when cache is enabled");
+        }
+        if self.cache.enabled && self.cache.max_ttl_secs < self.cache.default_ttl_secs {
+            anyhow::bail!(
+                "cache.max_ttl_secs must be greater than or equal to cache.default_ttl_secs"
+            );
         }
         if self.geoip.enabled
             && self.geoip.ipv4_path.trim().is_empty()
@@ -1138,16 +1366,21 @@ impl Default for Config {
         Self {
             database_path: default_database_path(),
             listen_addr: default_listen_addr(),
+            management: ManagementConfig::default(),
+            metrics: MetricsConfig::default(),
             public_base_url: String::new(),
+            site: SiteConfig::default(),
             trusted_proxies: default_trusted_proxies(),
             enabled_proxies: default_enabled_proxies(),
             upstreams: Upstreams::default(),
             timeout: TimeoutConfig::default(),
+            upstream_selection: UpstreamSelectionConfig::default(),
             rate_limit: RateLimitConfig::default(),
             cache: CacheConfig::default(),
             geoip: GeoIpConfig::default(),
             acme: AcmeConfig::default(),
             quota: QuotaConfig::default(),
+            alerts: AlertConfig::default(),
             user_access: UserAccessConfig::default(),
             registration: RegistrationConfig::default(),
             webauthn: WebauthnConfig::default(),
@@ -1287,6 +1520,100 @@ impl Default for TimeoutConfig {
     }
 }
 
+impl Default for UpstreamSelectionConfig {
+    fn default() -> Self {
+        Self {
+            strategy: default_upstream_selection_strategy(),
+            failure_threshold: default_upstream_failure_threshold(),
+            cooldown_secs: default_upstream_cooldown_secs(),
+        }
+    }
+}
+
+impl Default for ManagementConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen_addr: default_management_listen_addr(),
+        }
+    }
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self { local_only: true }
+    }
+}
+
+impl Default for SiteConfig {
+    fn default() -> Self {
+        Self {
+            title: default_site_title(),
+            description: default_site_description(),
+            keywords: default_site_keywords(),
+            icon_url: default_site_icon_url(),
+            footer_text: String::new(),
+        }
+    }
+}
+
+impl SiteConfig {
+    pub(crate) fn upgrade_legacy_defaults(&mut self) {
+        const LEGACY_DESCRIPTION: &str = "Fast, self-hosted package and source mirror proxy.";
+        if self.description.trim() == LEGACY_DESCRIPTION && self.keywords.is_empty() {
+            self.description = default_site_description();
+            self.keywords = default_site_keywords();
+        }
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        let title_length = self.title.trim().chars().count();
+        if !(1..=100).contains(&title_length) {
+            anyhow::bail!("site.title must contain 1 to 100 characters");
+        }
+        if self.description.chars().count() > 300 {
+            anyhow::bail!("site.description cannot exceed 300 characters");
+        }
+        if self.footer_text.chars().count() > 200 {
+            anyhow::bail!("site.footer_text cannot exceed 200 characters");
+        }
+        if self.keywords.len() > 20
+            || self
+                .keywords
+                .iter()
+                .any(|keyword| keyword.trim().is_empty() || keyword.chars().count() > 50)
+        {
+            anyhow::bail!("site.keywords accepts up to 20 non-empty values of 50 characters");
+        }
+        let icon = self.icon_url.trim();
+        if icon.is_empty() || icon.len() > 2048 {
+            anyhow::bail!("site.icon_url must contain 1 to 2048 characters");
+        }
+        if icon.starts_with('/') {
+            if icon.starts_with("//") || icon.chars().any(char::is_whitespace) {
+                anyhow::bail!("site.icon_url must be a root-relative path or HTTP(S) URL");
+            }
+        } else {
+            validate_http_url("site.icon_url", icon)?;
+        }
+        Ok(())
+    }
+}
+
+impl Default for AlertConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            webhook_url: String::new(),
+            email_enabled: false,
+            email_recipients: Vec::new(),
+            quota_percent: default_alert_quota_percent(),
+            source_failures: default_alert_source_failures(),
+            cooldown_secs: default_alert_cooldown_secs(),
+        }
+    }
+}
+
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
@@ -1303,6 +1630,8 @@ impl Default for CacheConfig {
             directory: default_cache_directory(),
             max_entry_mb: default_cache_max_entry_mb(),
             max_total_mb: default_cache_max_total_mb(),
+            default_ttl_secs: default_cache_default_ttl_secs(),
+            max_ttl_secs: default_cache_max_ttl_secs(),
         }
     }
 }
@@ -1815,6 +2144,10 @@ fn default_listen_addr() -> String {
     "127.0.0.1:3000".to_string()
 }
 
+fn default_management_listen_addr() -> String {
+    "127.0.0.1:3001".to_string()
+}
+
 fn default_webauthn_rp_name() -> String {
     "MirrorProxy".to_string()
 }
@@ -2161,8 +2494,91 @@ fn default_request_timeout_secs() -> u64 {
     60
 }
 
+fn default_upstream_selection_strategy() -> String {
+    "ordered".to_string()
+}
+
+fn default_upstream_failure_threshold() -> u32 {
+    3
+}
+
+fn default_upstream_cooldown_secs() -> u64 {
+    30
+}
+
 fn default_rate_limit_requests_per_minute() -> u32 {
     600
+}
+
+fn default_cache_default_ttl_secs() -> u64 {
+    300
+}
+
+fn default_cache_max_ttl_secs() -> u64 {
+    24 * 60 * 60
+}
+
+fn default_alert_quota_percent() -> u8 {
+    80
+}
+
+fn default_alert_source_failures() -> u32 {
+    3
+}
+
+fn default_alert_cooldown_secs() -> u64 {
+    60 * 60
+}
+
+fn default_site_title() -> String {
+    "MirrorProxy".to_string()
+}
+
+fn default_site_description() -> String {
+    "MirrorProxy 自托管镜像加速服务，支持 GitHub、Docker/OCI、npm、PyPI、crates.io、Go Modules、Composer、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Homebrew，以及 Linux/BSD 系统与常用软件仓库。 Fast self-hosted package and source mirror proxy.".to_string()
+}
+
+fn default_site_keywords() -> Vec<String> {
+    [
+        "MirrorProxy",
+        "镜像加速",
+        "软件源",
+        "GitHub",
+        "Docker",
+        "OCI",
+        "npm",
+        "Go Modules",
+        "Maven",
+        "PyPI",
+        "crates.io",
+        "Homebrew",
+        "Linux",
+        "BSD",
+        "软件仓库",
+        "Composer",
+        "RubyGems",
+        "NuGet",
+        "CPAN",
+        "CRAN",
+    ]
+    .into_iter()
+    .map(ToString::to_string)
+    .collect()
+}
+
+fn default_site_icon_url() -> String {
+    "/favicon.svg".to_string()
+}
+
+fn valid_email_address(value: &str) -> bool {
+    value.len() <= 320
+        && !value.chars().any(char::is_whitespace)
+        && value.split_once('@').is_some_and(|(local, domain)| {
+            !local.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+        })
 }
 
 fn default_quota_monthly_gb() -> u64 {
@@ -3004,5 +3420,46 @@ insecure_skip_verify = true
         assert_eq!(normalize_acme_dns_provider("dns_ali"), "aliyun");
         assert_eq!(normalize_acme_dns_provider("dns_tencent"), "tencent");
         assert_eq!(normalize_acme_dns_provider("dns_aws"), "route53");
+    }
+
+    #[test]
+    fn validates_site_metadata_and_email_only_alerts() {
+        let mut config = Config::default();
+        config.site.title = "Mirror Hub".to_string();
+        config.site.icon_url = "/assets/icon.png".to_string();
+        config.alerts.enabled = true;
+        config.alerts.email_enabled = true;
+        config.alerts.email_recipients = vec!["ops@example.com".to_string()];
+        assert!(config.validate().is_ok());
+
+        config.alerts.email_recipients = vec!["invalid".to_string()];
+        assert!(config.validate().is_err());
+        config.alerts.email_recipients = vec!["ops@example.com".to_string()];
+        config.site.icon_url = "javascript:alert(1)".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn upgrades_only_the_legacy_site_metadata_defaults() {
+        let mut legacy = SiteConfig {
+            description: "Fast, self-hosted package and source mirror proxy.".to_string(),
+            keywords: Vec::new(),
+            ..SiteConfig::default()
+        };
+        legacy.upgrade_legacy_defaults();
+        assert!(legacy.description.contains("RubyGems"));
+        assert!(legacy.keywords.iter().any(|keyword| keyword == "NuGet"));
+
+        let mut customized = SiteConfig {
+            description: "Private mirror for the engineering team".to_string(),
+            keywords: Vec::new(),
+            ..SiteConfig::default()
+        };
+        customized.upgrade_legacy_defaults();
+        assert_eq!(
+            customized.description,
+            "Private mirror for the engineering team"
+        );
+        assert!(customized.keywords.is_empty());
     }
 }

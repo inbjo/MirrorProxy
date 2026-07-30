@@ -483,8 +483,8 @@ p {
 .acme-config-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .acme-config-grid .wide-field { grid-column: 1 / -1; }
 .acme-config-grid label, .acme-dns-panel-head label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font: 11px "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; }
-.acme-config-grid input, .acme-config-grid select, .acme-dns-panel-head select { width: 100%; min-width: 0; min-height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: none; color: var(--text); background: var(--panel); font: inherit; }
-.acme-config-grid input:focus, .acme-config-grid select:focus, .acme-dns-panel-head select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.acme-config-grid input:not([type="checkbox"]), .acme-config-grid select, .acme-dns-panel-head select { width: 100%; min-width: 0; min-height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: none; color: var(--text); background: var(--panel); font: inherit; }
+.acme-config-grid input:not([type="checkbox"]):focus, .acme-config-grid select:focus, .acme-dns-panel-head select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 .acme-config-grid small { color: var(--muted); font-family: inherit; line-height: 1.45; }
 .acme-https-panel { display: grid; gap: 15px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(145deg, color-mix(in srgb, var(--panel-strong) 92%, var(--accent)), var(--panel)); transition: border-color .18s ease, box-shadow .18s ease; }
 .acme-https-panel.enabled { border-color: color-mix(in srgb, var(--ok) 42%, var(--line)); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--ok) 75%, var(--accent)); }
@@ -493,7 +493,12 @@ p {
 .acme-https-panel-head > div > small { color: var(--accent-strong); font: 800 9px "Cascadia Mono", ui-monospace, monospace; letter-spacing: .16em; }
 .acme-https-panel-head h5 { margin: 5px 0 4px; color: var(--text); font-size: 14px; }
 .acme-https-panel-head p { max-width: 720px; color: var(--muted); font-size: 12px; line-height: 1.55; }
-.acme-https-panel-head > label { flex: 0 0 auto; min-height: 42px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.acme-https-panel-head > label { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 10px; min-height: 42px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--panel); cursor: pointer; }
+.acme-native-toggle input, .acme-redirect-toggle > input { flex: 0 0 auto; width: 16px; height: 16px; min-height: 0; margin: 0; accent-color: var(--accent-strong); }
+.acme-redirect-toggle { display: flex !important; align-items: flex-start; gap: 11px !important; min-height: 64px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 8px; color: var(--text) !important; background: var(--panel); cursor: pointer; }
+.acme-redirect-toggle > input { margin-top: 2px; }
+.acme-redirect-toggle > span { display: grid; gap: 4px; }
+.acme-redirect-toggle strong { font-size: 12px; }
 .acme-https-fields { padding-top: 14px; border-top: 1px dashed var(--line); }
 .acme-dns-panel { display: grid; gap: 14px; padding: 15px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 10px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, var(--panel)), var(--panel-strong)); }
 .acme-dns-panel-head { display: flex; align-items: end; justify-content: space-between; gap: 18px; }
@@ -1050,6 +1055,7 @@ p {
 .login-card input,
 .config-fields input,
 .config-fields select,
+.config-fields textarea,
 .upstream-fields input {
   width: 100%;
   min-height: 39px;
@@ -1061,10 +1067,12 @@ p {
   background: var(--panel-strong);
   font: inherit;
 }
+.config-fields textarea { min-height: 82px; padding: 10px; resize: vertical; line-height: 1.55; }
 
 .login-card input:focus,
 .config-fields input:focus,
 .config-fields select:focus,
+.config-fields textarea:focus,
 .upstream-fields input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
 
 .primary-button {
@@ -1227,6 +1235,8 @@ p {
 .mini-switch { display: grid; place-items: center; gap: 2px; color: var(--muted); font: 9px "Cascadia Mono", ui-monospace, monospace; }.ip-rule-actions { display: flex; gap: 5px; }.ip-rule-actions button { padding: 6px 8px; font-size: 10px; }
 
 .config-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin: 20px 0; }
+.site-settings-fields { align-items: start; }
+.site-settings-fields > label { align-self: start; align-content: start; }
 .config-fields label:first-child { grid-column: auto; }
 .config-fields .wide-field { grid-column: 1 / -1; }
 .config-fields small { color: var(--muted); font-family: inherit; font-size: 11px; line-height: 1.45; }
@@ -1259,8 +1269,9 @@ p {
 .runtime-config-fields.paired-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
 .runtime-config-fields .wide-field { grid-column: 1 / -1; }
 .runtime-config-fields label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-family: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; font-size: 11px; }
-.runtime-config-fields input:not([type="checkbox"]) { width: 100%; min-width: 0; min-height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: none; color: var(--text); background: var(--panel); font: inherit; }
-.runtime-config-fields input:not([type="checkbox"]):focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.runtime-config-fields input:not([type="checkbox"]), .runtime-config-fields select { width: 100%; min-width: 0; min-height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: none; color: var(--text); background: var(--panel); font: inherit; }
+.runtime-config-fields select { cursor: pointer; }
+.runtime-config-fields input:not([type="checkbox"]):focus, .runtime-config-fields select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 .runtime-config-fields small { color: var(--muted); font-family: inherit; font-size: 11px; line-height: 1.45; }
 .runtime-config-fields .toggle-field { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--panel); font-family: inherit; font-size: 13px; }
 .runtime-config-fields .toggle-field input { width: auto; accent-color: var(--accent-strong); }
@@ -1813,4 +1824,34 @@ p {
   .rail {
     grid-template-columns: 1fr;
   }
+}
+.cache-operations {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  grid-column: 1 / -1;
+  justify-content: space-between;
+}
+.cache-operations > span { color: var(--text); font: 700 12px "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; }
+.cache-purge-button { min-height: 36px; padding: 0 12px; font-size: 12px; }
+.cache-purge-button:disabled { cursor: wait; opacity: .6; transform: none; }
+
+.team-account-row {
+  flex-wrap: wrap;
+}
+
+.team-target-access {
+  flex-basis: 100%;
+  padding-top: 0.65rem;
+}
+
+.team-target-access summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.team-target-access p {
+  color: var(--muted);
+  margin: 0.55rem 0;
 }
