@@ -31,6 +31,10 @@ curl -fsSL https://sina.dev/https://raw.githubusercontent.com/inbjo/MirrorProxy/
 irm https://sina.dev/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
 ```
 
+The scripts install only the standalone client, select the current platform
+release automatically, and verify its SHA-256 checksum. Run `mirrorproxy --version`
+after installation to confirm it is available.
+
 ### Package managers
 
 ```bash

@@ -29,6 +29,9 @@ curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/inst
 irm https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
 ```
 
+脚本只安装独立客户端，会自动选择当前平台的 Release 资产并验证 SHA-256 校验和。安装后执行
+`mirrorproxy --version` 确认客户端可用。
+
 ### 包管理器
 
 ```bash
