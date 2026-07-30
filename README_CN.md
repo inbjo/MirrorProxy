@@ -15,6 +15,32 @@ Windows、macOS 和 Linux 上管理软件源。
 软件源。SQLite 提供账号、配额、流量统计、地域报表和 IP/CIDR 访问控制；离线
 ip2region 数据库保证 IP 定位快速且不向第三方发送请求。
 
+## 安装服务端
+
+### Docker Compose
+
+下载仓库内的 [compose.yaml](compose.yaml)，设置管理员密码后启动。命名卷会在容器升级时保留
+数据库、缓存和 GeoIP 数据。
+
+```bash
+MIRRORPROXY_ADMIN_PASSWORD='设置高强度密码' docker compose up -d
+```
+
+本机运行时，管理后台地址为 `http://localhost:3000/admin`。
+
+### 二进制发布包
+
+从[最新 Release](https://github.com/inbjo/MirrorProxy/releases/latest)下载对应 Linux 架构的服务端
+归档及 SHA-256 校验文件；校验后解压到持久化目录，复制并调整配置，再启动服务：
+
+```bash
+cp config.example.toml config.toml
+./mirrorproxy-server --config ./config.toml serve
+```
+
+systemd、TLS、反向代理、持久化存储和生产配置详见
+[服务端部署](https://github.com/inbjo/MirrorProxy/wiki/Deployment-zh-CN)。
+
 ## 安装客户端
 
 ### 一键安装脚本

@@ -17,6 +17,35 @@ registries, developer toolchains, and operating-system repositories. SQLite
 provides accounts, quotas, traffic accounting, regional reports, and IP/CIDR
 access control; offline ip2region databases keep IP location private and fast.
 
+## Deploy the server
+
+### Docker Compose
+
+Download the included [compose.yaml](compose.yaml), set an administrator password,
+and start the service. The named volume keeps the database, cache, and GeoIP data
+across container upgrades.
+
+```bash
+MIRRORPROXY_ADMIN_PASSWORD='choose-a-strong-password' docker compose up -d
+```
+
+The console is available at `http://localhost:3000/admin` when running locally.
+
+### Server archive
+
+Download the server archive for your Linux architecture from the
+[latest release](https://github.com/inbjo/MirrorProxy/releases/latest), verify its
+SHA-256 file, extract it into a durable directory, then copy and adapt the
+configuration before starting the server:
+
+```bash
+cp config.example.toml config.toml
+./mirrorproxy-server --config ./config.toml serve
+```
+
+For systemd, TLS, reverse proxies, persistent storage, and production settings,
+see [Deployment](https://github.com/inbjo/MirrorProxy/wiki/Deployment).
+
 ## Install the client
 
 ### One-command installer
