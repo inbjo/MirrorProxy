@@ -36,7 +36,7 @@ openidconnect = "4"
 # Build it from source so MUSL release artifacts do not require a target sysroot.
 openssl-sys = { version = "0.9", features = ["vendored"] }
 prometheus = "0.14"
-quick-xml = "0.39.4"
+quick-xml = "0.41"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "rustls-tls-native-roots", "stream", "gzip", "brotli", "deflate", "json", "socks"] }
 rustls = "0.23.41"
 rand = "0.8"
