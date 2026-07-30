@@ -22,8 +22,17 @@ access control; offline ip2region databases keep IP location private and fast.
 ```bash
 # macOS / Linux (run `brew tap inbjo/tap` once first)
 brew install mirrorproxy
+```
 
-# Debian / Ubuntu (add the signed MirrorProxy APT repository once first)
+Debian and Ubuntu users should add the signed MirrorProxy repository once, then
+install the client:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/apt/mirrorproxy-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/mirrorproxy-archive-keyring.gpg >/dev/null
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/mirrorproxy-archive-keyring.gpg] https://raw.githubusercontent.com/inbjo/MirrorProxy/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/mirrorproxy.list >/dev/null
+sudo apt update
 sudo apt install mirrorproxy
 ```
 
