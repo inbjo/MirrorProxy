@@ -34,9 +34,9 @@ winget upgrade --id Inbjo.MirrorProxy --exact
 首次安装需要添加 MirrorProxy 的签名密钥和软件源：
 
 ```bash
-curl -fsSL https://inbjo.github.io/MirrorProxy/apt/mirrorproxy-archive-keyring.gpg \
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/apt/mirrorproxy-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/mirrorproxy-archive-keyring.gpg >/dev/null
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/mirrorproxy-archive-keyring.gpg] https://inbjo.github.io/MirrorProxy/apt stable main" \
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/mirrorproxy-archive-keyring.gpg] https://raw.githubusercontent.com/inbjo/MirrorProxy/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/mirrorproxy.list >/dev/null
 sudo apt update
 sudo apt install mirrorproxy
@@ -113,8 +113,8 @@ Windows ZIP 同样只包含客户端可执行文件。
 
    将 `mirrorproxy-apt-private.asc` 的完整内容写入 Secret 后，把该文件离线备份并从工作目录
    删除。丢失私钥会导致已添加仓库的客户端无法验证后续更新。
-4. 在 GitHub Pages 设置中选择 **GitHub Actions** 作为发布来源。APT 仓库将发布到
-   `https://inbjo.github.io/MirrorProxy/apt`。
+4. Release workflow 会把签名 APT 仓库发布到专用 `apt` 分支，仓库地址为
+   `https://raw.githubusercontent.com/inbjo/MirrorProxy/apt`。
 5. 首次 WinGet manifest 合入 `microsoft/winget-pkgs` 后，添加可向该仓库创建 PR 的
    `WINGET_TOKEN`，并将 Repository variable `WINGET_AUTO_SUBMIT` 设为 `true`。
 

@@ -38,9 +38,9 @@ version-update pull requests automatically.
 Add the signing key and repository once:
 
 ```bash
-curl -fsSL https://inbjo.github.io/MirrorProxy/apt/mirrorproxy-archive-keyring.gpg \
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/apt/mirrorproxy-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/mirrorproxy-archive-keyring.gpg >/dev/null
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/mirrorproxy-archive-keyring.gpg] https://inbjo.github.io/MirrorProxy/apt stable main" \
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/mirrorproxy-archive-keyring.gpg] https://raw.githubusercontent.com/inbjo/MirrorProxy/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/mirrorproxy.list >/dev/null
 sudo apt update
 sudo apt install mirrorproxy
@@ -123,8 +123,8 @@ Run `mirrorproxy --version` and `mirrorproxy list` after installation. See
    After storing the complete exported file in the secret, back it up offline
    and remove it from the working directory. Losing the key prevents existing
    clients from authenticating future repository updates.
-4. Configure GitHub Pages to use **GitHub Actions** as its publishing source. The
-   repository URL will be `https://inbjo.github.io/MirrorProxy/apt`.
+4. The Release workflow publishes the signed repository to the dedicated `apt`
+   branch at `https://raw.githubusercontent.com/inbjo/MirrorProxy/apt`.
 5. After the first WinGet manifest is accepted into `microsoft/winget-pkgs`, add
    a `WINGET_TOKEN` capable of creating the update PR and set the repository
    variable `WINGET_AUTO_SUBMIT` to `true`.

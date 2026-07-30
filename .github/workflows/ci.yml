@@ -67,6 +67,7 @@ jobs:
         run: |
           npm ci
           npm audit --audit-level=high
+          npm run build
       - name: Generate Rust coverage
         run: |
           cargo install cargo-llvm-cov --locked

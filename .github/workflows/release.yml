@@ -215,9 +215,18 @@ jobs:
           ./scripts/generate-apt-repository.sh release-artifacts apt-repository stable
           tar -czf mirrorproxy-apt-repository.tar.gz -C apt-repository .
           sha256sum mirrorproxy-apt-repository.tar.gz >>SHA256SUMS
-          mkdir -p pages/apt
-          cp -a apt-repository/. pages/apt/
-          cp apt-repository/index.html pages/index.html
+      - name: Publish client APT repository branch
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git -C apt-repository init -b apt
+          git -C apt-repository config user.name github-actions[bot]
+          git -C apt-repository config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C apt-repository add --all
+          git -C apt-repository commit -m "apt: publish ${GITHUB_REF_NAME}"
+          git -C apt-repository remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C apt-repository push --force origin HEAD:refs/heads/apt
       - name: Prepare Homebrew tap checkout
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/checkout@v5
@@ -225,14 +234,6 @@ jobs:
           repository: ${{ github.repository_owner }}/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
-      - name: Configure GitHub Pages
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/configure-pages@v5
-      - name: Upload APT repository Pages artifact
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: pages
       - name: Move rolling Nightly tag
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/github-script@v8
@@ -304,23 +305,6 @@ jobs:
             SHA256SUMS
             scripts/install.sh
             scripts/install.ps1
-
-  deploy-apt:
-    name: Publish client APT repository
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-    needs: publish
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy APT repository
-        id: deployment
-        uses: actions/deploy-pages@v4
 
   submit-winget:
     name: Submit WinGet update
