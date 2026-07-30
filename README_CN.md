@@ -17,19 +17,41 @@ ip2region 数据库保证 IP 定位快速且不向第三方发送请求。
 
 ## 安装客户端
 
-```bash
-# macOS / Linux（首次使用需先执行 brew tap inbjo/tap）
-brew install mirrorproxy
+### 一键安装脚本
 
-# Debian / Ubuntu（首次使用需先添加 MirrorProxy APT 仓库）
-sudo apt install mirrorproxy
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh | sh
 ```
 
 ```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
+```
+
+### 包管理器
+
+```bash
+# macOS / Linux
+brew install inbjo/tap/mirrorproxy
+```
+
+```powershell
+# Windows（WinGet 首次上架 PR 合并后可用）
 winget install --id Inbjo.MirrorProxy --exact
 ```
 
-首次添加 Tap、APT 签名仓库和 WinGet 上架状态见[客户端分发与安装](https://github.com/inbjo/MirrorProxy/wiki/Distribution-zh-CN)。
+```bash
+# Debian / Ubuntu：首次使用时添加已签名的 MirrorProxy APT 仓库
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/apt/mirrorproxy-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/mirrorproxy-archive-keyring.gpg >/dev/null
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/mirrorproxy-archive-keyring.gpg] https://raw.githubusercontent.com/inbjo/MirrorProxy/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/mirrorproxy.list >/dev/null
+sudo apt update
+sudo apt install mirrorproxy
+```
+
+详情见[客户端分发与安装](https://github.com/inbjo/MirrorProxy/wiki/Distribution-zh-CN)。
 
 ## 文档导航
 

@@ -19,20 +19,41 @@ access control; offline ip2region databases keep IP location private and fast.
 
 ## Install the client
 
-```bash
-# macOS / Linux (run `brew tap inbjo/tap` once first)
-brew install mirrorproxy
+### One-command installer
 
-# Debian / Ubuntu (add the signed MirrorProxy APT repository once first)
-sudo apt install mirrorproxy
+```bash
+# macOS / Linux
+curl -fsSL https://sina.dev/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.sh | sh
 ```
 
 ```powershell
+# Windows PowerShell
+irm https://sina.dev/https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/install.ps1 | iex
+```
+
+### Package managers
+
+```bash
+# macOS / Linux
+brew install inbjo/tap/mirrorproxy
+```
+
+```powershell
+# Windows (available after the WinGet submission is merged)
 winget install --id Inbjo.MirrorProxy --exact
 ```
 
-See [Client distribution](https://github.com/inbjo/MirrorProxy/wiki/Distribution)
-for the one-time tap and APT setup and current WinGet availability.
+```bash
+# Debian / Ubuntu: add the signed MirrorProxy APT repository once
+curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/apt/mirrorproxy-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/mirrorproxy-archive-keyring.gpg >/dev/null
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/mirrorproxy-archive-keyring.gpg] https://raw.githubusercontent.com/inbjo/MirrorProxy/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/mirrorproxy.list >/dev/null
+sudo apt update
+sudo apt install mirrorproxy
+```
+
+See [Client distribution](https://github.com/inbjo/MirrorProxy/wiki/Distribution) for details.
 
 ## Documentation
 
