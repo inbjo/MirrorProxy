@@ -522,6 +522,25 @@ p {
 .advanced-details { margin-top: 12px; border-top: 1px solid var(--line); }
 .advanced-details summary { padding: 14px 0 4px; color: var(--accent-strong); cursor: pointer; font-size: 13px; font-weight: 700; }
 .advanced-details .upstream-fields { margin-top: 14px; }
+.custom-source-editor { margin-top: 18px; padding: 16px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--accent) 4%, var(--panel-strong)); }
+.custom-source-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
+.custom-source-heading h5 { margin: 4px 0 0; color: var(--text); font-size: 15px; }
+.custom-source-heading small { color: var(--muted); font: 700 10px "Cascadia Mono", ui-monospace, monospace; text-transform: uppercase; letter-spacing: .06em; }
+.custom-source-help { margin: 8px 0 14px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.custom-source-list { display: grid; gap: 8px; }
+.custom-source-row { display: grid; grid-template-columns: minmax(180px, .65fr) minmax(320px, 1.55fr) minmax(220px, .85fr) 34px; gap: 8px; align-items: end; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
+.custom-source-row label, .custom-source-add label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font: 700 10px "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; }
+.custom-source-row input, .custom-source-add input { width: 100%; min-height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; outline: none; color: var(--text); background: var(--panel-strong); font: 12px "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace; }
+.custom-source-row input:focus, .custom-source-add input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
+.custom-source-path { display: grid; align-self: center; overflow: hidden; gap: 5px; padding: 3px 8px; }
+.custom-source-path span { color: var(--muted); font: 700 9px "Cascadia Mono", ui-monospace, monospace; text-transform: uppercase; letter-spacing: .04em; }
+.custom-source-path code { overflow: hidden; color: var(--accent-strong); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.custom-source-delete { display: grid; width: 34px; height: 36px; place-items: center; border: 1px solid color-mix(in srgb, #bd4e40 42%, var(--line)); border-radius: 6px; color: #b3483c; background: color-mix(in srgb, #bd4e40 7%, var(--panel-strong)); cursor: pointer; }
+.custom-source-delete:hover { color: #fff7f5; background: #bd4e40; }
+.custom-source-add { display: grid; grid-template-columns: minmax(130px, .55fr) minmax(240px, 1.45fr) auto; gap: 8px; align-items: end; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.custom-source-add button { min-height: 36px; white-space: nowrap; }
+.custom-source-empty { margin: 0; padding: 14px; border: 1px dashed var(--line); border-radius: 7px; color: var(--muted); font-size: 12px; text-align: center; }
+.custom-source-error { margin: 9px 0 0; color: #b3483c; font-size: 11px; line-height: 1.5; }
 .provider-advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 14px 0 2px; }
 .provider-advanced-grid .wide-field { grid-column: 1 / -1; }
 .danger-zone { border-color: color-mix(in srgb, #d86654 44%, var(--line)); }
@@ -1713,6 +1732,10 @@ p {
     grid-template-columns: 1fr;
   }
 
+  .custom-source-row { grid-template-columns: minmax(160px, .6fr) minmax(0, 1.4fr); }
+  .custom-source-path { grid-column: 1 / 2; }
+  .custom-source-delete { justify-self: end; }
+
   .rail {
     position: static;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1783,6 +1806,9 @@ p {
   .admin-trigger { min-width: 42px; font-size: 0; }
   .admin-trigger svg { margin: 0; }
   .console-head, .console-section-head { align-items: stretch; flex-direction: column; }
+  .custom-source-row, .custom-source-add { grid-template-columns: 1fr; }
+  .custom-source-path { grid-column: auto; padding-inline: 0; }
+  .custom-source-delete { width: 100%; }
   .admin-tab-toolbar { padding: 22px 16px 14px; }
   .admin-tabs { padding-left: 10px; padding-right: 10px; }
   .admin-tab-panel { margin: 0 16px; }

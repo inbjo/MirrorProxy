@@ -52,7 +52,7 @@ describe('App preferences', () => {
     const json = (value: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(value), { status }))
     vi.stubGlobal('fetch', vi.fn((input: string) => {
       if (input === '/api/public-config') return json({ public_base_url: 'https://mirror.example', enabled_proxies: ['maven'], quota: { enabled: false, bidirectional_accounting: false, monthly_gb: 0, timezone: 'UTC', on_exceeded: 'stop_proxy' } })
-      if (input === '/api/sources') return json({ providers: [], targets: [{ code: 'maven', name: 'Apache Maven', category: 'repo', aliases: [], supported_modes: ['proxy'], default_scope: 'user' }], sources: [{ target_code: 'maven', provider_code: 'mirrorproxy', repo_url: '/maven/', speed_url: null, capability: 'proxy' }], templates: [] })
+      if (input === '/api/sources') return json({ providers: [], targets: [{ code: 'maven', name: 'Apache Maven', category: 'repo', aliases: [], supported_modes: ['proxy'], default_scope: 'user' }, { code: 'clickhouse', name: 'clickhouse', category: 'repo', aliases: ['additional_os'], supported_modes: ['proxy'], default_scope: 'system' }], sources: [{ target_code: 'maven', provider_code: 'mirrorproxy', repo_url: '/maven/', speed_url: null, capability: 'proxy' }, { target_code: 'clickhouse', provider_code: 'mirrorproxy', repo_url: '/os/clickhouse/', speed_url: null, capability: 'proxy' }], templates: [] })
       if (input === '/api/source-health') return json({ running: false, total: 60, healthy: 59, degraded: 1, unhealthy: 0, disabled: 0, unknown: 0, last_checked_at: 1_721_880_000, items: [{ target_code: 'maven', adapter: 'maven', status: 'degraded', http_status: null, latency_ms: 512, checked_at: 1_721_880_000, error: null, endpoints: [{ position: 0, endpoint: 'https://bad.example/maven2', status: 'unhealthy', http_status: 403, latency_ms: 512, checked_at: 1_721_880_000, error: null }, { position: 1, endpoint: 'https://good.example/maven2', status: 'healthy', http_status: 200, latency_ms: 80, checked_at: 1_721_880_000, error: null }] }] })
       return json({ error: 'not found' }, 404)
     }))
@@ -64,6 +64,13 @@ describe('App preferences', () => {
     fireEvent.click(screen.getByText('Apache Maven'))
     expect(await screen.findByText('https://bad.example/maven2')).toBeTruthy()
     expect(await screen.findByText('https://good.example/maven2')).toBeTruthy()
+    fireEvent.click(screen.getByText('clickhouse'))
+    expect(await screen.findByText('https://mirror.example/os/clickhouse/')).toBeTruthy()
+    expect(screen.getByText('Proxy repository URL')).toBeTruthy()
+    expect(screen.getByText(/provides a proxy URL only/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy address' })).toBeTruthy()
+    expect(screen.queryByText(/enable this source locally/)).toBeNull()
+    expect(screen.queryByText(/mirrorproxy set clickhouse/)).toBeNull()
   })
 
   it('uses the signed-in user dedicated domain for homepage mirror addresses', async () => {
@@ -163,7 +170,10 @@ describe('App preferences', () => {
 
   it('renders nested additional OS upstreams as editable fields', async () => {
     window.history.replaceState({}, '', '/admin')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
     let savedAcme: Record<string, unknown> | null = null
+    let savedRuntimeConfig: Record<string, any> | null = null
+    let runtimeSaveAttempts = 0
     const json = (value: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(value), { status }))
     vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => {
       if (input === '/admin/api/auth/session') return json({ error: 'unauthorized' }, 401)
@@ -174,7 +184,12 @@ describe('App preferences', () => {
       }
       if (input === '/admin/api/acme/config') return json({ config: { enabled: false, email: '', domains: [], challenge: 'http-01', directory_url: 'https://acme-v02.api.letsencrypt.org/directory', storage_directory: 'acme', renew_before_days: 30, check_interval_hours: 12, direct_https: false, http_listen_addr: '0.0.0.0:80', https_listen_addr: '0.0.0.0:443', redirect_http_to_https: true, dns: { provider: 'cloudflare', cloudflare_zone_id: '', webhook_url: '', propagation_delay_secs: 30, has_cloudflare_api_token: true } }, managed_by_environment: false, restart_required: false })
       if (input === '/admin/api/acme/status') return json({ enabled: false, challenge: 'http-01', dns_provider: null, domains: [], certificate_path: 'acme/fullchain.pem', private_key_path: 'acme/privkey.pem', certificate_not_after: null, last_success_at: null, last_error: null, running: false, direct_https: false, http_listen_addr: '0.0.0.0:80', https_listen_addr: '0.0.0.0:443', https_active: false })
-      if (input === '/admin/api/config' && init?.method === 'PUT') return json({ error: 'public_base_url must use HTTPS and exactly match user_access.base_domain' }, 400)
+      if (input === '/admin/api/config' && init?.method === 'PUT') {
+        runtimeSaveAttempts += 1
+        if (runtimeSaveAttempts === 1) return json({ error: 'public_base_url must use HTTPS and exactly match user_access.base_domain' }, 400)
+        savedRuntimeConfig = JSON.parse(String(init.body)) as Record<string, any>
+        return json({ config: savedRuntimeConfig, restart_required: [] })
+      }
       if (input === '/admin/api/config') return json({ public_base_url: 'http://selfhost.com', trusted_proxies: ['127.0.0.1'], enabled_proxies: ['os'], quota: { enabled: false, bidirectional_accounting: false, monthly_gb: 500, timezone: 'local', on_exceeded: 'stop_proxy', request_event_retention_days: 30 }, forward_client_authorization: false, database_path: 'test.sqlite', listen_addr: '127.0.0.1:3000', upstreams: { debian: 'https://deb.debian.org/debian', maven: 'https://one.example/maven, https://two.example/maven', additional_os: { kali: 'https://http.kali.org/kali' } }, timeout: { request_secs: 60 }, rate_limit: { enabled: false, requests_per_minute: 600 }, cache: { enabled: false, directory: 'cache', max_entry_mb: 8 } })
       if (input === '/admin/api/stats') return json({ month: '2026-07', request_count: 0, response_bytes: 0, error_count: 0, quota: { enabled: false, monthly_limit_bytes: null, remaining_bytes: null, exceeded: false, timezone: 'local', on_exceeded: 'stop_proxy' }, daily: [], targets: [] })
       if (input === '/admin/api/source-health') return json({ running: false, total: 60, healthy: 0, unhealthy: 0, disabled: 0, unknown: 60, last_checked_at: null, items: [] })
@@ -219,11 +234,26 @@ describe('App preferences', () => {
     expect(screen.getByText(/WebPKI public roots and native system roots/)).toBeTruthy()
     fireEvent.click(await screen.findByText('Edit upstream endpoints'))
     expect(await screen.findByText(/comma-separated/)).toBeTruthy()
+    expect(await screen.findByText('Custom software repositories')).toBeTruthy()
+    expect(screen.getByText(/APT repositories such as ClickHouse and Docker CE/)).toBeTruthy()
+    expect(screen.getByText('http://selfhost.com/os/kali')).toBeTruthy()
     expect(await screen.findByDisplayValue('https://one.example/maven, https://two.example/maven')).toBeTruthy()
     const field = await screen.findByDisplayValue('https://http.kali.org/kali')
-    expect(field.closest('label')?.textContent).toContain('additional_os.kali')
     fireEvent.change(field, { target: { value: 'https://mirror.example/kali' } })
     expect(screen.getByDisplayValue('https://mirror.example/kali')).toBeTruthy()
+    const sourceName = screen.getByLabelText('Source name for kali')
+    fireEvent.change(sourceName, { target: { value: 'kali-rolling' } })
+    fireEvent.blur(sourceName)
+    expect(await screen.findByLabelText('Source name for kali-rolling')).toHaveProperty('value', 'kali-rolling')
+    fireEvent.change(screen.getByLabelText('New source name'), { target: { value: 'clickhouse' } })
+    fireEvent.change(screen.getByLabelText('New source upstream URL'), { target: { value: 'https://packages.clickhouse.com/deb' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }))
+    expect(await screen.findByLabelText('Upstream URL for clickhouse')).toHaveProperty('value', 'https://packages.clickhouse.com/deb')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete custom source clickhouse' }))
+    expect(screen.queryByLabelText('Upstream URL for clickhouse')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Save configuration' }))
+    await waitFor(() => expect(savedRuntimeConfig).not.toBeNull())
+    expect(savedRuntimeConfig!.upstreams.additional_os).toEqual({ 'kali-rolling': 'https://mirror.example/kali' })
     fireEvent.click(await screen.findByRole('button', { name: 'Email & invitations' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Save mail settings' }))
     expect(await screen.findByText(/SMTP settings saved/)).toBeTruthy()

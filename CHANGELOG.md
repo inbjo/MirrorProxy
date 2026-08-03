@@ -3,6 +3,23 @@
 All notable changes to MirrorProxy are documented in this file. Release tags
 follow semantic versioning.
 
+## [1.3.1] - 2026-08-03
+
+### Custom software repositories
+
+- Added complete administrator CRUD for public custom APT and static-file
+  upstreams backed by `upstreams.additional_os`, while preserving the existing
+  `/os/<source-name>/...` proxy route.
+- Added source-name, duplicate, built-in-name, and HTTP(S) URL validation in
+  the administration console.
+- Merged runtime custom repositories into `/api/sources` so they appear in the
+  public source catalog immediately after the configuration is saved.
+- Added custom-repository-specific public guidance that exposes only the proxy
+  repository URL and does not claim to configure the client. Existing suite,
+  component, and signing-key settings remain client-owned.
+- Aligned custom repository editor columns and retained a single-column mobile
+  layout.
+
 ## [1.3.0] - 2026-07-30
 
 ### Reliability and cache
@@ -131,3 +148,4 @@ Multi-instance clustering and high availability are intentionally outside the
 [1.1.0]: https://github.com/inbjo/MirrorProxy/compare/v1.0.2...v1.1.0
 [1.2.0]: https://github.com/inbjo/MirrorProxy/compare/v1.1.0...v1.2.0
 [1.3.0]: https://github.com/inbjo/MirrorProxy/compare/v1.2.0...v1.3.0
+[1.3.1]: https://github.com/inbjo/MirrorProxy/compare/v1.3.0...v1.3.1

@@ -19,6 +19,7 @@ import {
   Mail,
   Moon,
   PackageOpen,
+  Plus,
   RefreshCw,
   LogIn,
   LogOut,
@@ -29,6 +30,7 @@ import {
   ShieldCheck,
   ShieldBan,
   Terminal,
+  Trash2,
   Sun,
   UserRound,
   X,
@@ -298,7 +300,7 @@ const messages = {
     crates: 'Rust crates proxy',
     pypi: 'pip / PyPI proxy',
     sourceCatalog: 'Source catalog',
-    sourceCatalogDesc: 'Targets imported from the built-in catalog for CLI commands, Web views, and future SQLite-backed source management.',
+    sourceCatalogDesc: 'Built-in targets and custom software repositories configured by the administrator.',
     langSources: 'Languages',
     osSources: 'Operating systems',
     repoSources: 'Software repositories',
@@ -335,6 +337,9 @@ const messages = {
     upstreamStatus: 'Configured upstreams',
     mirrorproxyAddress: 'MirrorProxy address',
     mirrorproxyAddressHint: 'Use this endpoint when your client accepts a mirror URL directly.',
+    customRepositoryAddress: 'Proxy repository URL',
+    customRepositoryAddressHint: 'Replace only the upstream repository root in your existing client configuration. MirrorProxy does not configure the client.',
+    customRepositoryAvailable: 'This administrator-defined repository provides a proxy URL only. Keep the original distribution, components, signing key, and other client settings unchanged.',
     mirrorproxyCli: 'MirrorProxy CLI setup',
     mirrorproxyCliHint: 'For an installed MirrorProxy CLI; it writes local config and keeps a rollback record.',
     manualSetup: 'Manual setup command',
@@ -343,6 +348,7 @@ const messages = {
     sourceAvailable: 'Use this site address or copy a command below to enable this source locally.',
     sourceUnavailable: 'This target currently supports local configuration only; no MirrorProxy server adapter is available.',
     copyCommand: 'Copy command',
+    copyAddress: 'Copy address',
     closeConfig: 'Close configuration',
     githubDesc: 'Proxy repository pages, release assets, raw files, archives, and Composer GitHub dist URLs.',
     composerDesc: 'Use MirrorProxy as a Packagist-compatible Composer repository.',
@@ -390,7 +396,7 @@ const messages = {
     crates: 'Rust crates 代理',
     pypi: 'pip / PyPI 代理',
     sourceCatalog: '镜像源目录',
-    sourceCatalogDesc: '内置 catalog 会同时服务 CLI、Web 展示和后续 SQLite 源管理。',
+    sourceCatalogDesc: '展示内置镜像目标，以及管理员在后台添加的自定义软件仓库。',
     langSources: '语言生态',
     osSources: '操作系统',
     repoSources: '软件仓库',
@@ -427,6 +433,9 @@ const messages = {
     upstreamStatus: '已配置上游',
     mirrorproxyAddress: 'MirrorProxy 地址',
     mirrorproxyAddressHint: '客户端可直接填写镜像 URL 时，使用此地址。',
+    customRepositoryAddress: '代理仓库地址',
+    customRepositoryAddressHint: '仅替换现有客户端配置中的上游仓库根地址；MirrorProxy 不会配置客户端。',
+    customRepositoryAvailable: '这是管理员添加的自定义软件仓库，仅提供代理地址。原有的发行版代号、组件、签名密钥及其他客户端配置应保持不变。',
     mirrorproxyCli: 'MirrorProxy CLI 配置',
     mirrorproxyCliHint: '已安装 MirrorProxy CLI 时可用；它会写入本机配置并保留回滚记录。',
     manualSetup: '手动配置命令',
@@ -435,6 +444,7 @@ const messages = {
     sourceAvailable: '使用本站地址或复制下面的命令，即可在本机启用该镜像源。',
     sourceUnavailable: '该目标当前仅提供本机配置能力；没有对应的 MirrorProxy 服务端代理。',
     copyCommand: '复制命令',
+    copyAddress: '复制地址',
     closeConfig: '关闭配置',
     githubDesc: '代理仓库页面、release 文件、raw 文件、archive，以及 Composer 中常见的 GitHub dist 地址。',
     composerDesc: '将 MirrorProxy 配置为兼容 Packagist 的 Composer 仓库。',
@@ -996,6 +1006,7 @@ function LinkConverter({ title, icon, hint, value, onChange, output, outputLabel
 
 function SourceConfigModal({ target, health, baseUrl, catalog, labels, copied, onCopy, onClose }: { target: SourceTarget; health?: SourceHealthItem; baseUrl: string; catalog: SourceCatalog; labels: Record<string, string>; copied: string | null; onCopy: (id: string, value: string) => void; onClose: () => void }) {
   const source = catalog.sources.find((item) => item.target_code === target.code && item.provider_code === 'mirrorproxy')
+  const customRepository = target.aliases.includes('additional_os')
   const template = catalog.templates.find((item) => item.target_code === target.code)
   const proxyUrl = source ? `${baseUrl}${source.repo_url.startsWith('/') ? source.repo_url : `/${source.repo_url}`}` : ''
   const mirrorproxyCommand = `mirrorproxy set ${target.code} --mirror mirrorproxy --base-url ${baseUrl} --scope ${target.default_scope}`
@@ -1005,11 +1016,11 @@ function SourceConfigModal({ target, health, baseUrl, catalog, labels, copied, o
     <section className="config-modal" role="dialog" aria-modal="true" aria-label={`${target.name} ${labels.sourceCatalogHeading}`} onMouseDown={(event) => event.stopPropagation()}>
       <button className="config-modal-close" onClick={onClose} aria-label={labels.closeConfig}><X size={18} /></button>
       <span className="eyebrow">CONFIGURE / {target.code.toUpperCase()}</span><h2>{target.name}</h2>
-      <p>{source ? labels.sourceAvailable : labels.sourceUnavailable}</p>
+      <p>{source ? (customRepository ? labels.customRepositoryAvailable : labels.sourceAvailable) : labels.sourceUnavailable}</p>
       {health?.endpoints.length ? <section className="public-upstream-health"><div><strong>{labels.upstreamStatus ?? 'Upstream status'}</strong><span className={`source-health-badge source-health-${health.status}`}><i />{labels[`source${health.status[0].toUpperCase()}${health.status.slice(1)}`]}</span></div><div className="public-upstream-list">{health.endpoints.map((endpoint) => <div className={`public-upstream-row ${endpoint.status}`} key={`${endpoint.position}-${endpoint.endpoint}`}><i /><code>{endpoint.endpoint}</code><span>HTTP {endpoint.http_status ?? '—'} · {endpoint.latency_ms === null ? '—' : `${endpoint.latency_ms} ms`}</span></div>)}</div></section> : null}
-      {source ? <ConfigOption title={labels.mirrorproxyAddress} description={labels.mirrorproxyAddressHint} value={proxyUrl} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-url'} onCopy={() => onCopy('source-url', proxyUrl)} /> : null}
-      {source ? <ConfigOption title={labels.mirrorproxyCli} description={labels.mirrorproxyCliHint} value={mirrorproxyCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-cli'} onCopy={() => onCopy('source-cli', mirrorproxyCommand)} /> : null}
-      <ConfigOption title={labels.manualSetup} description={target.category === 'os' ? labels.manualSystemSetupHint : labels.manualSetupHint} value={manualCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-manual'} onCopy={() => onCopy('source-manual', manualCommand)} />
+      {source ? <ConfigOption title={customRepository ? labels.customRepositoryAddress : labels.mirrorproxyAddress} description={customRepository ? labels.customRepositoryAddressHint : labels.mirrorproxyAddressHint} value={proxyUrl} copyLabel={customRepository ? labels.copyAddress : labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-url'} onCopy={() => onCopy('source-url', proxyUrl)} /> : null}
+      {source && !customRepository ? <ConfigOption title={labels.mirrorproxyCli} description={labels.mirrorproxyCliHint} value={mirrorproxyCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-cli'} onCopy={() => onCopy('source-cli', mirrorproxyCommand)} /> : null}
+      {!customRepository ? <ConfigOption title={labels.manualSetup} description={target.category === 'os' ? labels.manualSystemSetupHint : labels.manualSetupHint} value={manualCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-manual'} onCopy={() => onCopy('source-manual', manualCommand)} /> : null}
     </section>
   </div>
 }
@@ -1161,6 +1172,127 @@ function adminConfigErrorMessage(reason: string, status: number, locale: Locale,
     return locale === 'zh' ? '管理员会话已失效，请重新登录后再保存。' : 'The administrator session has expired. Sign in again before saving.'
   }
   return reason || fallback
+}
+
+const RESERVED_OS_SOURCE_NAMES = new Set([
+  'alpine', 'openwrt', 'termux', 'debian', 'ubuntu', 'fedora', 'archlinux',
+  'opensuse', 'void', 'gentoo', 'freebsd',
+])
+const CUSTOM_SOURCE_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/
+
+function validHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+function AdditionalOsSourceRow({ locale, publicBaseUrl, name, url, onRename, onUrlChange, onRemove }: {
+  locale: Locale
+  publicBaseUrl: string
+  name: string
+  url: string
+  onRename: (nextName: string) => boolean
+  onUrlChange: (url: string) => void
+  onRemove: () => void
+}) {
+  const [nameDraft, setNameDraft] = React.useState(name)
+  const proxyUrl = `${publicBaseUrl.replace(/\/$/, '')}/os/${name}`
+
+  React.useEffect(() => setNameDraft(name), [name])
+
+  const commitName = () => {
+    const normalized = nameDraft.trim().toLowerCase()
+    if (normalized === name) {
+      setNameDraft(name)
+      return
+    }
+    if (!onRename(normalized)) setNameDraft(name)
+  }
+
+  return <div className="custom-source-row">
+    <label><span>{locale === 'zh' ? '源名称' : 'Source name'}</span><input aria-label={locale === 'zh' ? `${name} 的源名称` : `Source name for ${name}`} autoCapitalize="none" autoCorrect="off" spellCheck={false} value={nameDraft} onBlur={commitName} onChange={(event) => setNameDraft(event.target.value)} /></label>
+    <label><span>{locale === 'zh' ? '上游 URL' : 'Upstream URL'}</span><input aria-label={locale === 'zh' ? `${name} 的上游 URL` : `Upstream URL for ${name}`} type="url" value={url} onChange={(event) => onUrlChange(event.target.value)} /></label>
+    <div className="custom-source-path"><span>{locale === 'zh' ? '代理根地址' : 'Proxy base URL'}</span><code>{proxyUrl}</code></div>
+    <button aria-label={locale === 'zh' ? `删除自定义源 ${name}` : `Delete custom source ${name}`} className="custom-source-delete" type="button" onClick={onRemove}><Trash2 size={15} /></button>
+  </div>
+}
+
+function AdditionalOsEditor({ locale, publicBaseUrl, sources, onChange }: {
+  locale: Locale
+  publicBaseUrl: string
+  sources: Record<string, string>
+  onChange: (sources: Record<string, string>) => void
+}) {
+  const [newName, setNewName] = React.useState('')
+  const [newUrl, setNewUrl] = React.useState('')
+  const [validationError, setValidationError] = React.useState('')
+
+  const nameError = (name: string, currentName?: string): string => {
+    if (!CUSTOM_SOURCE_NAME_PATTERN.test(name)) {
+      return locale === 'zh'
+        ? '源名称只能使用小写字母、数字、点、下划线和连字符，并且必须以字母或数字开头。'
+        : 'Source names may use lowercase letters, numbers, dots, underscores, and hyphens, and must start with a letter or number.'
+    }
+    if (RESERVED_OS_SOURCE_NAMES.has(name)) {
+      return locale === 'zh' ? '该名称属于内置 OS 源，请直接修改上方对应的固定上游。' : 'That name belongs to a built-in OS source. Edit its fixed upstream above instead.'
+    }
+    if (name !== currentName && Object.hasOwn(sources, name)) {
+      return locale === 'zh' ? '已存在同名自定义源。' : 'A custom source with that name already exists.'
+    }
+    return ''
+  }
+
+  const addSource = (event: React.FormEvent) => {
+    event.preventDefault()
+    const name = newName.trim().toLowerCase()
+    const url = newUrl.trim()
+    const error = nameError(name) || (!validHttpUrl(url)
+      ? (locale === 'zh' ? '请输入有效的 HTTP 或 HTTPS 上游 URL。' : 'Enter a valid HTTP or HTTPS upstream URL.')
+      : '')
+    if (error) {
+      setValidationError(error)
+      return
+    }
+    onChange({ ...sources, [name]: url })
+    setNewName('')
+    setNewUrl('')
+    setValidationError('')
+  }
+
+  const renameSource = (currentName: string, nextName: string): boolean => {
+    const error = nameError(nextName, currentName)
+    if (error) {
+      setValidationError(error)
+      return false
+    }
+    onChange(Object.fromEntries(Object.entries(sources).map(([name, url]) => name === currentName ? [nextName, url] : [name, url])))
+    setValidationError('')
+    return true
+  }
+
+  const removeSource = (name: string) => {
+    if (!window.confirm(locale === 'zh' ? `确定删除自定义源“${name}”吗？` : `Delete the custom source “${name}”?`)) return
+    onChange(Object.fromEntries(Object.entries(sources).filter(([current]) => current !== name)))
+    setValidationError('')
+  }
+
+  return <section className="custom-source-editor" aria-labelledby="custom-source-title">
+    <div className="custom-source-heading"><div><span className="console-kicker">ADDITIONAL_OS</span><h5 id="custom-source-title">{locale === 'zh' ? '自定义软件仓库' : 'Custom software repositories'}</h5></div><small>{locale === 'zh' ? `${Object.keys(sources).length} 个仓库` : `${Object.keys(sources).length} repositories`}</small></div>
+    <p className="custom-source-help">{locale === 'zh' ? '用于添加 ClickHouse、Docker CE 等 APT 仓库，或公开二进制文件仓库。填写上游仓库根地址；保存后，请用下方代理根地址替换原仓库地址。' : 'Add APT repositories such as ClickHouse and Docker CE, or public binary file repositories. Enter the upstream repository root, then replace the original repository URL with the proxy base URL below.'}</p>
+    <div className="custom-source-list">
+      {Object.entries(sources).map(([name, url]) => <AdditionalOsSourceRow key={name} locale={locale} publicBaseUrl={publicBaseUrl} name={name} url={url} onRename={(nextName) => renameSource(name, nextName)} onUrlChange={(nextUrl) => onChange({ ...sources, [name]: nextUrl })} onRemove={() => removeSource(name)} />)}
+      {Object.keys(sources).length === 0 ? <p className="custom-source-empty">{locale === 'zh' ? '尚未添加自定义软件仓库。' : 'No custom software repositories have been added.'}</p> : null}
+    </div>
+    <form className="custom-source-add" onSubmit={addSource}>
+      <label><span>{locale === 'zh' ? '新源名称' : 'New source name'}</span><input aria-label={locale === 'zh' ? '新源名称' : 'New source name'} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="clickhouse" value={newName} onChange={(event) => setNewName(event.target.value)} /></label>
+      <label><span>{locale === 'zh' ? '上游 URL' : 'Upstream URL'}</span><input aria-label={locale === 'zh' ? '新源上游 URL' : 'New source upstream URL'} placeholder="https://packages.example.com" type="url" value={newUrl} onChange={(event) => setNewUrl(event.target.value)} /></label>
+      <button className="secondary-button" type="submit"><Plus size={15} />{locale === 'zh' ? '添加源' : 'Add source'}</button>
+    </form>
+    {validationError ? <p className="custom-source-error" role="alert">{validationError}</p> : null}
+  </section>
 }
 
 function AdminConsole({ locale }: { locale: Locale }) {
@@ -1486,14 +1618,13 @@ function AdminConsole({ locale }: { locale: Locale }) {
     return { ...current, enabled_proxies: enabled ? current.enabled_proxies.filter((item) => item !== adapter) : [...current.enabled_proxies, adapter] }
   })
   const updateUpstream = (key: string, value: string) => setDraft((current) => current ? { ...current, upstreams: { ...current.upstreams, [key]: value } } : current)
-  const updateAdditionalOsUpstream = (target: string, value: string) => setDraft((current) => {
+  const updateAdditionalOsUpstreams = (sources: Record<string, string>) => setDraft((current) => {
     if (!current) return current
-    const additionalOs = current.upstreams.additional_os
     return {
       ...current,
       upstreams: {
         ...current.upstreams,
-        additional_os: { ...(typeof additionalOs === 'object' ? additionalOs : {}), [target]: value },
+        additional_os: sources,
       },
     }
   })
@@ -1587,7 +1718,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
               </section>
             </div>
           </div>
-          <div className="settings-card"><h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><input type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div><details className="advanced-details"><summary>{text.showUpstreams}</summary><p className="field-hint">{text.upstreamHint}</p><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : Object.entries(value).map(([target, url]) => <label key={`${key}.${target}`}><span>{key}.{target}</span><input value={url} onChange={(event) => updateAdditionalOsUpstream(target, event.target.value)} /></label>))}</div></details></div>
+          <div className="settings-card"><h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><input type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div><details className="advanced-details"><summary>{text.showUpstreams}</summary><p className="field-hint">{text.upstreamHint}</p><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><input value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : [])}</div><AdditionalOsEditor locale={locale} publicBaseUrl={draft.public_base_url} sources={typeof draft.upstreams.additional_os === 'object' ? draft.upstreams.additional_os : {}} onChange={updateAdditionalOsUpstreams} /></details></div>
         </section> : null}
         {activeTab === 'users' ? <AdminBillingManagement locale={locale} /> : null}
         {activeTab === 'providers' ? <AdminAuthProviders locale={locale} /> : null}

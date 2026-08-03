@@ -5808,21 +5808,21 @@ struct MirrorProviderSummary {
 
 #[derive(Serialize)]
 struct SourceTargetSummary {
-    code: &'static str,
-    name: &'static str,
-    category: &'static str,
-    aliases: &'static [&'static str],
-    supported_modes: Vec<&'static str>,
-    default_scope: &'static str,
+    code: String,
+    name: String,
+    category: String,
+    aliases: Vec<String>,
+    supported_modes: Vec<String>,
+    default_scope: String,
 }
 
 #[derive(Serialize)]
 struct TargetSourceSummary {
-    target_code: &'static str,
-    provider_code: &'static str,
-    repo_url: &'static str,
-    speed_url: Option<&'static str>,
-    capability: &'static str,
+    target_code: String,
+    provider_code: String,
+    repo_url: String,
+    speed_url: Option<String>,
+    capability: String,
 }
 
 #[derive(Serialize)]
@@ -5834,7 +5834,59 @@ struct SourceTemplateSummary {
     requires_sudo: bool,
 }
 
-async fn source_catalog() -> impl IntoResponse {
+async fn source_catalog(State(state): State<AppState>) -> impl IntoResponse {
+    let config = state.config();
+    let mut targets = catalog::SOURCE_TARGETS
+        .iter()
+        .map(|target| SourceTargetSummary {
+            code: target.code.to_string(),
+            name: target.name.to_string(),
+            category: target.category.as_str().to_string(),
+            aliases: target
+                .aliases
+                .iter()
+                .map(|alias| alias.to_string())
+                .collect(),
+            supported_modes: target
+                .supported_modes
+                .iter()
+                .map(|mode| mode.as_str().to_string())
+                .collect(),
+            default_scope: target.default_scope.as_str().to_string(),
+        })
+        .collect::<Vec<_>>();
+    let mut sources = catalog::TARGET_SOURCES
+        .iter()
+        .map(|source| TargetSourceSummary {
+            target_code: source.target_code.to_string(),
+            provider_code: source.provider_code.to_string(),
+            repo_url: source.repo_url.to_string(),
+            speed_url: source.speed_url.map(str::to_string),
+            capability: source.capability.as_str().to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    for target_code in config.upstreams.additional_os.keys() {
+        if targets.iter().any(|target| target.code == *target_code) {
+            continue;
+        }
+        targets.push(SourceTargetSummary {
+            code: target_code.clone(),
+            name: target_code.clone(),
+            category: "repo".to_string(),
+            aliases: vec!["additional_os".to_string()],
+            supported_modes: vec!["proxy".to_string()],
+            default_scope: "system".to_string(),
+        });
+        sources.push(TargetSourceSummary {
+            target_code: target_code.clone(),
+            provider_code: "mirrorproxy".to_string(),
+            repo_url: format!("/os/{target_code}/"),
+            speed_url: None,
+            capability: "proxy".to_string(),
+        });
+    }
+
     Json(SourceCatalogResponse {
         providers: catalog::MIRROR_PROVIDERS
             .iter()
@@ -5847,31 +5899,8 @@ async fn source_catalog() -> impl IntoResponse {
                 speed_test_url: provider.speed_test_url,
             })
             .collect(),
-        targets: catalog::SOURCE_TARGETS
-            .iter()
-            .map(|target| SourceTargetSummary {
-                code: target.code,
-                name: target.name,
-                category: target.category.as_str(),
-                aliases: target.aliases,
-                supported_modes: target
-                    .supported_modes
-                    .iter()
-                    .map(|mode| mode.as_str())
-                    .collect(),
-                default_scope: target.default_scope.as_str(),
-            })
-            .collect(),
-        sources: catalog::TARGET_SOURCES
-            .iter()
-            .map(|source| TargetSourceSummary {
-                target_code: source.target_code,
-                provider_code: source.provider_code,
-                repo_url: source.repo_url,
-                speed_url: source.speed_url,
-                capability: source.capability.as_str(),
-            })
-            .collect(),
+        targets,
+        sources,
         templates: catalog::SOURCE_TEMPLATES
             .iter()
             .map(|template| SourceTemplateSummary {
@@ -8339,7 +8368,12 @@ on_exceeded = "stop_proxy"
 
     #[tokio::test]
     async fn exposes_source_catalog() {
-        let app = build_router(Config::default()).await.unwrap();
+        let mut config = Config::default();
+        config.upstreams.additional_os.insert(
+            "clickhouse".to_string(),
+            "https://packages.clickhouse.com/deb".to_string(),
+        );
+        let app = build_router(config).await.unwrap();
         let response = app
             .oneshot(
                 Request::builder()
@@ -8382,6 +8416,17 @@ on_exceeded = "stop_proxy"
             .any(
                 |source| source["target_code"] == "npm" && source["provider_code"] == "mirrorproxy"
             ));
+        assert!(value["targets"].as_array().unwrap().iter().any(|target| {
+            target["code"] == "clickhouse"
+                && target["category"] == "repo"
+                && target["aliases"] == serde_json::json!(["additional_os"])
+                && target["supported_modes"] == serde_json::json!(["proxy"])
+        }));
+        assert!(value["sources"].as_array().unwrap().iter().any(|source| {
+            source["target_code"] == "clickhouse"
+                && source["provider_code"] == "mirrorproxy"
+                && source["repo_url"] == "/os/clickhouse/"
+        }));
         for target_code in ["poetry", "pdm", "uv", "bun"] {
             assert!(value["sources"]
                 .as_array()
