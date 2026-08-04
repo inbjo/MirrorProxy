@@ -29,7 +29,13 @@ OS-client and Docker smoke tests are narrower environment checks. Passing
 language-ecosystem smoke must not be described as validation for every OS
 repository. CI also generates Rust LCOV coverage and audits Rust/npm
 dependencies. Tagged releases publish archives, Debian/RPM packages, Homebrew
-and WinGet manifests, and a signed client APT repository. The active roadmap is `docs/plan.md` and
-`docs/next.md`; multi-instance operation remains outside the 1.3.0 scope.
+and WinGet manifests, and a signed client APT repository.
+
+The early phase-based implementation plans are no longer the active roadmap and
+have been removed from the main branch; their history remains available in Git.
+Track future features, defects, and release work through the project's
+[GitHub Issues](https://github.com/inbjo/MirrorProxy/issues), milestones, and
+[release notes](https://github.com/inbjo/MirrorProxy/releases). Documentation
+describes capabilities available in the current version.
 
 [简体中文](Development-and-Roadmap-zh-CN)

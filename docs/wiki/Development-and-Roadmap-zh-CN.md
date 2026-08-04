@@ -24,7 +24,11 @@ bash scripts/smoke-clients.sh
 
 可选的 OS 客户端 smoke 与 Docker smoke 是更窄的环境验证，不应把语言生态的通过结果
 表述成所有 OS 仓库均已验证。稳定标签会发布归档、DEB/RPM、Homebrew 与 WinGet manifest，
-并部署经过签名的客户端 APT 仓库。当前路线图与未完成项保存在主仓库的 `docs/plan.md` 和
-`docs/next.md`。
+并部署经过签名的客户端 APT 仓库。
+
+早期阶段性实施计划不再作为当前路线图，已从主分支移除，历史内容仍可通过 Git 记录查看。后续
+功能、缺陷和版本安排通过项目的 [GitHub Issues](https://github.com/inbjo/MirrorProxy/issues)、
+Milestones 与 [Release notes](https://github.com/inbjo/MirrorProxy/releases) 跟踪；文档只描述
+当前已经提供的能力。
 
 [English](Development-and-Roadmap)
