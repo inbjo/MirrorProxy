@@ -7,13 +7,73 @@
 [![License](https://img.shields.io/github/license/inbjo/MirrorProxy?style=flat-square&label=License)](LICENSE)
 [![Docker Pulls](https://img.shields.io/docker/pulls/kudang/mirrorproxy?style=flat-square&logo=docker&logoColor=white&label=Docker%20Pulls)](https://hub.docker.com/r/kudang/mirrorproxy)
 
-MirrorProxy 是一个使用 Rust 编写的自部署镜像代理平台。服务端
-`mirrorproxy-server` 内嵌 React 管理控制台，独立的 `mirrorproxy` 客户端负责在
-Windows、macOS 和 Linux 上管理软件源。
+**官方源访问不了，第三方镜像不可靠？部署一个 MirrorProxy，解决所有常用软件源代理。**
 
-项目通过 adapter 架构支持 GitHub、Docker/OCI、语言包仓库、开发工具链和操作系统
-软件源。SQLite 提供账号、配额、流量统计、地域报表和 IP/CIDR 访问控制；离线
-ip2region 数据库保证 IP 定位快速且不向第三方发送请求。
+在受限的网络环境中，官方源常常无法连接，或者速度慢到难以正常使用。好不容易找到第三方镜像，
+又可能无法访问、速度不稳定，甚至随时失效；不同软件还各有一套改源方式。开发者频繁切换配置，
+CI 构建随时卡住，最终浪费的往往不只是下载时间，而是整个团队的时间。
+
+与其长期寻找和维护别人的镜像，不如部署一个属于自己的 MirrorProxy。只需一台网络通畅的服务器，
+就能把 GitHub、容器镜像、语言包仓库、开发工具链和操作系统软件源统一代理到自己的域名。
+一个项目、一套后台、一个稳定入口，覆盖日常开发所需的主流软件源。
+
+MirrorProxy 按需获取并缓存内容，无需预先完整同步庞大的镜像仓库；当某个上游不可用时，还能自动
+切换到备用地址。个人开发者可以告别反复找源、测速和修改配置，团队则可以进一步获得统一改源、
+账号权限、流量配额、健康检测和使用统计，把四处拼凑的镜像方案升级为自己真正掌控的基础设施。
+
+## 部署 MirrorProxy，你将获得
+
+- **不再到处寻找第三方镜像**：常用代码托管、容器、语言包、工具链和系统仓库由一个项目统一
+  代理，不再收藏大量镜像地址，也不必为每种生态搭建一套服务。
+- **不再反复测速和手工切换**：同一个源可以配置多个上游；遇到超时、限流或故障时自动尝试
+  备用地址，并通过持续健康检测及时发现不可用入口。
+- **更少失败、更快完成的构建**：把服务部署在网络条件更好的位置，开发机和 CI 只访问自己的
+  稳定域名；已下载的依赖可由缓存复用，减少跨境请求和重复等待。
+- **所有设备使用一致配置**：Windows、macOS、Linux 客户端帮助查看、切换和恢复软件源，
+  新电脑、构建机和 CI 环境无需重新研究每个包管理器该如何改源。
+- **可放心共享的团队镜像**：为用户或团队分配月度额度和可用源，结合限速、用户专属入口及
+  IP/CIDR 黑白名单，既能共享服务，也能避免匿名滥用和意外流量账单。
+- **真正看得见的运行状态**：集中查看流量消耗、使用趋势、访问地域和每个镜像源的健康状态；
+  配额即将耗尽或上游持续故障时，通过邮件或 Webhook 主动通知。
+- **数据与访问记录留在自己手中**：账号、策略和统计保存在本地，IP 地域识别也完全离线完成，
+  不向第三方定位接口发送访问者 IP。
+- **从个人服务平滑扩展到团队平台**：先以公开代理和默认配置快速启动，需要时再开启账号、邀请、
+  OAuth/OIDC、团队配额、审计、Prometheus、自动 HTTPS 等能力，无需更换系统。
+
+## 支持的软件源
+
+MirrorProxy 提供约 30 类内置代理适配器，并允许在后台添加自定义操作系统静态仓库：
+
+| 类别                 | 已支持的源与生态                                                                                                                                                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 代码与发布文件       | GitHub、GitHub Raw、Git Smart HTTP 只读克隆                                                                                                                                                                                                |
+| 容器与 OCI           | Docker Hub、GitHub Container Registry、Quay、Kubernetes Registry、Homebrew OCI                                                                                                                                                             |
+| JavaScript / Node.js | npm、NVM、Bun（复用 npm 协议）                                                                                                                                                                                                             |
+| Python               | PyPI / pip、Poetry、uv、PDM、Anaconda                                                                                                                                                                                                      |
+| Rust / Go            | crates.io / Cargo、Rustup、Go Modules                                                                                                                                                                                                      |
+| JVM / .NET           | Maven Central、Clojars、NuGet                                                                                                                                                                                                              |
+| 其他语言生态         | Composer、RubyGems、CPAN、CRAN、Hackage、Julia、LuaRocks、CocoaPods、Pub、OPAM                                                                                                                                                             |
+| 开发工具与应用源     | Homebrew、WinGet、TeX Live、ELPA、Nix、GNU Guix、Flatpak                                                                                                                                                                                   |
+| Linux / BSD / 系统源 | Debian、Ubuntu、Fedora、Arch Linux、Alpine、openSUSE、Void Linux、Gentoo、FreeBSD、Kali、Rocky Linux、AlmaLinux、Manjaro、Raspberry Pi OS、Armbian、openEuler、Anolis OS、Deepin、Linux Mint、Solus、Trisquel、Linux Lite、NetBSD、OpenBSD |
+| 专用系统与工具源     | OpenWrt、Termux、MSYS2、ROS，以及管理员配置的自定义静态仓库                                                                                                                                                                                |
+
+## MirrorProxy 提供的能力
+
+- **镜像加速**：按需代理、磁盘缓存、HTTP 条件重验证，避免完整同步镜像站带来的存储和维护成本。
+- **高可用上游**：为同一个源配置多个地址，支持顺序或自适应选择、自动故障转移、熔断恢复与
+  定时健康检测。
+- **统一源管理**：在 Web 后台启停内置源、调整上游，并添加自定义操作系统静态仓库；客户端可在
+  Windows、macOS 和 Linux 上安全改源与回滚。
+- **用户与团队运营**：邀请注册、邮箱登录、OAuth/OIDC、计费组/团队、全局—团队—用户三级
+  月度配额，以及团队可用镜像范围控制。
+- **安全访问控制**：请求限速、IP/CIDR 黑白名单、用户专属子域名、私有上游凭据、可信反向代理、
+  管理员分权、Passkey、会话撤销和审计日志。
+- **流量与健康洞察**：用量与趋势统计、离线 GeoIP 国家/省市报表、源健康检测、Prometheus 指标、
+  结构化日志、可选 OTLP 追踪，以及配额和源故障告警。
+- **灵活网络接入**：支持统一出站 HTTP/SOCKS5 代理、企业内部 CA，并可为私有 npm、OCI 等上游
+  配置凭据。
+- **简单可靠的部署**：提供 Docker Compose、Linux 发布包和 systemd 安装方式；既可接入现有
+  Caddy/Nginx/Traefik，也可通过 ACME HTTP-01 / DNS-01 自动申请和续期 HTTPS 证书。
 
 ## 安装服务端
 

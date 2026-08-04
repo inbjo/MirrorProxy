@@ -7,15 +7,96 @@
 [![License](https://img.shields.io/github/license/inbjo/MirrorProxy?style=flat-square&label=License)](LICENSE)
 [![Docker Pulls](https://img.shields.io/docker/pulls/kudang/mirrorproxy?style=flat-square&logo=docker&logoColor=white&label=Docker%20Pulls)](https://hub.docker.com/r/kudang/mirrorproxy)
 
-MirrorProxy is a self-hosted mirror proxy platform written in Rust. The
-`mirrorproxy-server` service embeds its React administration console, while the
-standalone `mirrorproxy` client manages package sources on Windows, macOS, and
-Linux.
+**Official sources unreachable and public mirrors unreliable? Deploy
+MirrorProxy—one self-hosted gateway for every source your builds depend on.**
 
-Its adapter-based proxy core supports GitHub, Docker/OCI, language package
-registries, developer toolchains, and operating-system repositories. SQLite
-provides accounts, quotas, traffic accounting, regional reports, and IP/CIDR
-access control; offline ip2region databases keep IP location private and fast.
+In restricted networks, official sources are often unreachable or too slow for
+normal use. Even after finding a public mirror, it may be inaccessible, unstable,
+or gone without warning—and every tool has a different way to change sources.
+Developers keep switching configurations while CI builds can stall at any time.
+The real cost is not just download time, but the time of the entire team.
+
+Instead of continually searching for and maintaining somebody else's mirrors,
+deploy your own MirrorProxy on a server with reliable upstream connectivity. It
+brings GitHub, container registries, language packages, developer toolchains,
+and operating-system repositories behind your domain: one project, one console,
+and one stable gateway for the mainstream software sources used every day.
+
+MirrorProxy fetches and caches content on demand, so it does not require a full
+copy of every repository. When one upstream becomes unavailable, it can switch
+to another automatically. Individuals can stop hunting, benchmarking, and
+reconfiguring mirrors; teams also gain consistent source settings, access
+control, quotas, health monitoring, and traffic reporting—turning a patchwork of
+public mirrors into infrastructure they truly control.
+
+## What you gain by deploying MirrorProxy
+
+- **Stop hunting for public mirrors:** proxy code hosts, containers, language
+  packages, toolchains, and operating-system repositories with one project
+  instead of collecting mirror URLs or deploying a service for every ecosystem.
+- **Stop benchmarking and switching by hand:** configure multiple upstreams for
+  one source, fail over on timeouts, rate limits, and outages, and continuously
+  monitor endpoint health.
+- **Fewer failures and faster builds:** run MirrorProxy where upstream access is
+  reliable, point workstations and CI at your own stable domain, and reuse cached
+  dependencies instead of repeating slow cross-border downloads.
+- **Consistent configuration on every machine:** use the Windows, macOS, and
+  Linux client to inspect, switch, and restore sources without relearning each
+  package manager's configuration on every workstation or build host.
+- **A mirror you can safely share:** assign monthly quotas and allowed sources to
+  users or teams, then combine rate limits, private user endpoints, and IP/CIDR
+  rules to prevent anonymous abuse and surprise bandwidth bills.
+- **Operations you can actually see:** inspect traffic, trends, visitor regions,
+  and the health of every source; receive email or webhook alerts before quotas
+  run out or upstream failures become prolonged outages.
+- **Ownership of your data:** keep accounts, policies, and statistics locally,
+  including fully offline IP geolocation that never sends visitor addresses to
+  a third-party lookup service.
+- **A path from personal service to team platform:** start quickly with public
+  access and sensible defaults, then enable accounts, invitations, OAuth/OIDC,
+  team quotas, auditing, Prometheus, and automatic HTTPS as needs grow.
+
+## Supported sources
+
+MirrorProxy includes around 30 proxy adapter types and supports additional
+administrator-defined static operating-system repositories:
+
+| Category | Supported sources and ecosystems |
+| --- | --- |
+| Code and release assets | GitHub, GitHub Raw, read-only Git smart HTTP clone |
+| Containers and OCI | Docker Hub, GitHub Container Registry, Quay, Kubernetes Registry, Homebrew OCI |
+| JavaScript / Node.js | npm, NVM, Bun through the npm protocol |
+| Python | PyPI / pip, Poetry, uv, PDM, Anaconda |
+| Rust / Go | crates.io / Cargo, Rustup, Go Modules |
+| JVM / .NET | Maven Central, Clojars, NuGet |
+| Other language ecosystems | Composer, RubyGems, CPAN, CRAN, Hackage, Julia, LuaRocks, CocoaPods, Pub, OPAM |
+| Developer tools and application sources | Homebrew, WinGet, TeX Live, ELPA, Nix, GNU Guix, Flatpak |
+| Linux / BSD / operating-system sources | Debian, Ubuntu, Fedora, Arch Linux, Alpine, openSUSE, Void Linux, Gentoo, FreeBSD, Kali, Rocky Linux, AlmaLinux, Manjaro, Raspberry Pi OS, Armbian, openEuler, Anolis OS, Deepin, Linux Mint, Solus, Trisquel, Linux Lite, NetBSD, OpenBSD |
+| Specialized systems and tool sources | OpenWrt, Termux, MSYS2, ROS, and administrator-defined static repositories |
+
+## Capabilities
+
+- **Mirror acceleration:** on-demand proxying, bounded disk caching, and HTTP
+  conditional revalidation without the storage cost of a full mirror.
+- **Resilient upstreams:** multiple endpoints per source, ordered or adaptive
+  selection, automatic failover, circuit recovery, and scheduled health checks.
+- **Unified source management:** enable and configure built-in sources or add
+  custom static OS repositories in the web console; safely switch and roll back
+  local settings with the Windows, macOS, and Linux client.
+- **User and team operations:** invitations, email login, OAuth/OIDC,
+  billing groups/teams, global-team-user monthly quotas, and per-team source
+  restrictions.
+- **Secure access:** rate limiting, IP/CIDR allow and deny rules, private user
+  subdomains, private-upstream credentials, trusted proxies, administrator roles,
+  passkeys, session revocation, and audit logs.
+- **Traffic and health insight:** usage trends, offline country and regional
+  GeoIP reports, source health, Prometheus metrics, structured logs, optional
+  OTLP tracing, and quota/source-failure alerts.
+- **Flexible network access:** a shared outbound HTTP/SOCKS5 proxy, enterprise
+  CA certificates, and credentials for private npm, OCI, and other upstreams.
+- **Simple, reliable deployment:** Docker Compose, Linux release archives, and
+  systemd installation; use an existing Caddy/Nginx/Traefik proxy or automate
+  HTTPS certificates through ACME HTTP-01/DNS-01.
 
 ## Deploy the server
 
