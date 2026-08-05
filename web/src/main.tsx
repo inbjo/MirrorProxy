@@ -42,6 +42,80 @@ import { CacheOperations, TeamTargetAccess } from './v13-operations'
 type Locale = 'en' | 'zh'
 type Theme = 'light' | 'dark'
 type AdminNotice = { tone: 'error' | 'success'; title: string; message: string }
+type ConfirmDialogRequest = {
+  locale: Locale
+  message: string
+  title?: string
+  confirmLabel?: string
+  tone?: 'primary' | 'danger'
+}
+type ConfirmDialogContextValue = (request: ConfirmDialogRequest) => Promise<boolean>
+
+const ConfirmDialogContext = React.createContext<ConfirmDialogContextValue | null>(null)
+
+function useConfirmDialog() {
+  const confirmAction = React.useContext(ConfirmDialogContext)
+  if (!confirmAction) throw new Error('useConfirmDialog must be used inside ConfirmDialogProvider')
+  return confirmAction
+}
+
+function ConfirmDialogProvider({ children }: { children: React.ReactNode }) {
+  const [request, setRequest] = React.useState<ConfirmDialogRequest | null>(null)
+  const dialogRef = React.useRef<HTMLDialogElement>(null)
+  const resolverRef = React.useRef<((confirmed: boolean) => void) | null>(null)
+
+  const settle = React.useCallback((confirmed: boolean) => {
+    const dialog = dialogRef.current
+    if (dialog?.open && typeof dialog.close === 'function') dialog.close()
+    dialog?.removeAttribute('open')
+    setRequest(null)
+    resolverRef.current?.(confirmed)
+    resolverRef.current = null
+  }, [])
+
+  const confirmAction = React.useCallback<ConfirmDialogContextValue>((nextRequest) => new Promise((resolve) => {
+    resolverRef.current?.(false)
+    resolverRef.current = resolve
+    setRequest(nextRequest)
+  }), [])
+
+  React.useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog || !request || dialog.open) return
+    if (typeof dialog.showModal === 'function') {
+      try { dialog.showModal() } catch { dialog.setAttribute('open', '') }
+    }
+    if (!dialog.open) dialog.setAttribute('open', '')
+  }, [request])
+
+  React.useEffect(() => () => resolverRef.current?.(false), [])
+
+  const locale = request?.locale ?? 'en'
+  const danger = request?.tone === 'danger'
+  return <ConfirmDialogContext.Provider value={confirmAction}>
+    {children}
+    <dialog
+      aria-labelledby="app-confirm-title"
+      aria-describedby="app-confirm-message"
+      className={`app-confirm-dialog${danger ? ' app-confirm-dialog-danger' : ''}`}
+      ref={dialogRef}
+      onCancel={(event) => { event.preventDefault(); settle(false) }}
+      onMouseDown={(event) => { if (event.target === event.currentTarget) settle(false) }}
+    >
+      <div className="app-confirm-panel">
+        <span className="app-confirm-icon" aria-hidden="true"><CircleAlert size={20} /></span>
+        <div className="app-confirm-copy">
+          <h2 id="app-confirm-title">{request?.title ?? (danger ? (locale === 'zh' ? '确认敏感操作' : 'Confirm sensitive action') : (locale === 'zh' ? '确认操作' : 'Confirm action'))}</h2>
+          <p id="app-confirm-message">{request?.message}</p>
+        </div>
+        <div className="app-confirm-actions">
+          <button autoFocus className="secondary-button" type="button" onClick={() => settle(false)}>{locale === 'zh' ? '取消' : 'Cancel'}</button>
+          <button className={danger ? 'danger-button' : 'primary-button'} type="button" onClick={() => settle(true)}>{request?.confirmLabel ?? (locale === 'zh' ? '继续' : 'Continue')}</button>
+        </div>
+      </div>
+    </dialog>
+  </ConfirmDialogContext.Provider>
+}
 type SiteSettings = { title: string; description: string; keywords: string[]; icon_url: string; footer_text: string }
 
 const DEFAULT_SITE_SETTINGS: SiteSettings = {
@@ -479,9 +553,11 @@ const messages = {
 } satisfies Record<Locale, Record<string, string>>
 
 export function App() {
-  if (window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')) return <AdminPage />
-  if (window.location.pathname === '/login' || window.location.pathname === '/account') return <UserPage />
-  return <PublicApp />
+  let page: React.ReactNode
+  if (window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')) page = <AdminPage />
+  else if (window.location.pathname === '/login' || window.location.pathname === '/account') page = <UserPage />
+  else page = <PublicApp />
+  return <ConfirmDialogProvider>{page}</ConfirmDialogProvider>
 }
 
 type UserProfile = { user: { id: number; email: string; display_name: string; routing_id: string; routing_rotated_at: number }; proxy_base_url: string | null }
@@ -530,6 +606,7 @@ const accountMessages = {
 } satisfies Record<Locale, Record<string, string>>
 
 function UserPage() {
+  const confirmAction = useConfirmDialog()
   const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en', ['en', 'zh']))
   const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light', ['light', 'dark']))
   const [email, setEmail] = React.useState(() => new URLSearchParams(location.search).get('email') ?? '')
@@ -614,13 +691,13 @@ function UserPage() {
     } finally { setVerifying(false) }
   }
   const rotate = async () => {
-    if (!window.confirm(t.confirmRotate)) return
+    if (!await confirmAction({ locale, title: locale === 'zh' ? '更换专属代理地址' : 'Rotate routing address', message: t.confirmRotate, confirmLabel: locale === 'zh' ? '确认更换' : 'Rotate address', tone: 'danger' })) return
     const response = await fetch('/api/account/routing-id/rotate', { method: 'POST' })
     if (!response.ok) { setMessage(t.rotateFailed); return }
     await loadProfile()
   }
   const unlink = async (identity: LinkedIdentity) => {
-    if (!window.confirm(`${t.confirmDisconnect}\n\n${identity.provider_name}`)) return
+    if (!await confirmAction({ locale, title: locale === 'zh' ? '解绑登录方式' : 'Disconnect sign-in method', message: `${t.confirmDisconnect}\n\n${identity.provider_name}`, confirmLabel: locale === 'zh' ? '确认解绑' : 'Disconnect', tone: 'danger' })) return
     const response = await fetch(`/api/account/providers/${identity.id}`, { method: 'DELETE' })
     setMessage(response.ok ? `${identity.provider_name} ${t.disconnected}` : t.disconnectFailed)
     if (response.ok) await loadProfile()
@@ -631,7 +708,7 @@ function UserPage() {
   }
 
   const signOut = async () => {
-    if (!window.confirm(t.confirmSignOut)) return
+    if (!await confirmAction({ locale, title: locale === 'zh' ? '退出账户' : 'Sign out', message: t.confirmSignOut, confirmLabel: locale === 'zh' ? '退出登录' : 'Sign out' })) return
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
     setProfile(null); setUsage(null); setIdentities([])
   }
@@ -650,6 +727,7 @@ function UserPage() {
 }
 
 function PublicApp() {
+  const confirmAction = useConfirmDialog()
   const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en', ['en', 'zh']))
   const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light', ['light', 'dark']))
   const [config, setConfig] = React.useState<PublicConfig>({
@@ -751,7 +829,7 @@ function PublicApp() {
   }
 
   const signOut = async () => {
-    if (!window.confirm(t.confirmSignOut)) return
+    if (!await confirmAction({ locale, title: locale === 'zh' ? '退出账户' : 'Sign out', message: t.confirmSignOut, confirmLabel: locale === 'zh' ? '退出登录' : 'Sign out' })) return
     const response = await fetch('/api/auth/logout', { method: 'POST' })
     if (response.ok) setPublicProfile(null)
   }
@@ -947,12 +1025,12 @@ function AccelerationWorkbench({ baseUrl, config, catalog, health, labels, onCop
       <div className="hero-stats"><Metric icon={<CheckCircle2 size={18} />} label={labels.status} value={labels.online} tone="ok" /><Metric icon={<PackageOpen size={18} />} label={labels.adapters} value={String(config.enabled_proxies.length)} /></div>
     </div>
     <div className="quick-converters">
-      <LinkConverter title={labels.quickGithubTitle} icon={<Github size={19} />} hint={labels.quickGithubHint} value={githubInput} onChange={setGithubInput} output={githubLink} outputLabel={labels.proxyLink} placeholder="https://github.com/owner/repo/releases/download/..." copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-github'} onCopy={() => githubLink && onCopy('quick-github', githubLink)} />
+      <LinkConverter title={labels.quickGithubTitle} icon={<Github size={19} />} hint={labels.quickGithubHint} value={githubInput} onChange={setGithubInput} output={githubLink} outputLabel={labels.proxyLink} placeholder="https://github.com/owner/repo/releases/download/…" copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-github'} onCopy={() => githubLink && onCopy('quick-github', githubLink)} />
       <LinkConverter title={labels.quickDockerTitle} icon={<Container size={19} />} hint={labels.quickDockerHint} value={dockerInput} onChange={setDockerInput} output={dockerCommand} outputLabel={labels.pullCommand} placeholder="ghcr.io/owner/image:latest" copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-docker'} onCopy={() => dockerCommand && onCopy('quick-docker', dockerCommand)} />
     </div>
     <InstallClientPanel baseUrl={baseUrl} labels={labels} copied={copied} onCopy={onCopy} />
     {catalog ? <div className="source-workbench">
-      <div className="source-workbench-head"><div><span className="eyebrow">SOURCE CATALOG</span><h2>{labels.sourceCatalogHeading}</h2><p>{labels.sourceCatalogHint}</p></div><code>{baseUrl}</code></div>
+      <div className="source-workbench-head"><div><h2>{labels.sourceCatalogHeading}</h2><p>{labels.sourceCatalogHint}</p></div><code>{baseUrl}</code></div>
       <div className="source-toolbar">
         <div className="source-filters" role="group" aria-label={labels.sourceCatalogHeading}>
           <label className={showAllSources ? 'source-filter active' : 'source-filter'}><input type="checkbox" checked={showAllSources} onChange={showAll} />{labels.sourceFilterAll}</label>
@@ -977,7 +1055,7 @@ function InstallClientPanel({ baseUrl, labels, copied, onCopy }: { baseUrl: stri
 
   return <section id="install" className="install-panel">
     <div className="install-heading">
-      <div><span className="eyebrow">{labels.stableRelease}</span><h2><Download size={24} /> {labels.installClient}</h2><p>{labels.installClientDesc}</p></div>
+      <div><h2><Download size={24} /> {labels.installClient}</h2><p>{labels.installClientDesc}</p></div>
       <a href="https://github.com/inbjo/MirrorProxy/releases/latest" target="_blank" rel="noreferrer"><Github size={16} /> {labels.viewReleases}</a>
     </div>
     <div className="install-grid">
@@ -1015,7 +1093,7 @@ function SourceConfigModal({ target, health, baseUrl, catalog, labels, copied, o
   return <div className="config-modal-backdrop" role="presentation" onMouseDown={onClose}>
     <section className="config-modal" role="dialog" aria-modal="true" aria-label={`${target.name} ${labels.sourceCatalogHeading}`} onMouseDown={(event) => event.stopPropagation()}>
       <button className="config-modal-close" onClick={onClose} aria-label={labels.closeConfig}><X size={18} /></button>
-      <span className="eyebrow">CONFIGURE / {target.code.toUpperCase()}</span><h2>{target.name}</h2>
+      <h2>{target.name}</h2>
       <p>{source ? (customRepository ? labels.customRepositoryAvailable : labels.sourceAvailable) : labels.sourceUnavailable}</p>
       {health?.endpoints.length ? <section className="public-upstream-health"><div><strong>{labels.upstreamStatus ?? 'Upstream status'}</strong><span className={`source-health-badge source-health-${health.status}`}><i />{labels[`source${health.status[0].toUpperCase()}${health.status.slice(1)}`]}</span></div><div className="public-upstream-list">{health.endpoints.map((endpoint) => <div className={`public-upstream-row ${endpoint.status}`} key={`${endpoint.position}-${endpoint.endpoint}`}><i /><code>{endpoint.endpoint}</code><span>HTTP {endpoint.http_status ?? '—'} · {endpoint.latency_ms === null ? '—' : `${endpoint.latency_ms} ms`}</span></div>)}</div></section> : null}
       {source ? <ConfigOption title={customRepository ? labels.customRepositoryAddress : labels.mirrorproxyAddress} description={customRepository ? labels.customRepositoryAddressHint : labels.mirrorproxyAddressHint} value={proxyUrl} copyLabel={customRepository ? labels.copyAddress : labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-url'} onCopy={() => onCopy('source-url', proxyUrl)} /> : null}
@@ -1216,7 +1294,7 @@ function AdditionalOsSourceRow({ locale, publicBaseUrl, name, url, onRename, onU
     <label><span>{locale === 'zh' ? '源名称' : 'Source name'}</span><input aria-label={locale === 'zh' ? `${name} 的源名称` : `Source name for ${name}`} autoCapitalize="none" autoCorrect="off" spellCheck={false} value={nameDraft} onBlur={commitName} onChange={(event) => setNameDraft(event.target.value)} /></label>
     <label><span>{locale === 'zh' ? '上游 URL' : 'Upstream URL'}</span><input aria-label={locale === 'zh' ? `${name} 的上游 URL` : `Upstream URL for ${name}`} type="url" value={url} onChange={(event) => onUrlChange(event.target.value)} /></label>
     <div className="custom-source-path"><span>{locale === 'zh' ? '代理根地址' : 'Proxy base URL'}</span><code>{proxyUrl}</code></div>
-    <button aria-label={locale === 'zh' ? `删除自定义源 ${name}` : `Delete custom source ${name}`} className="custom-source-delete" type="button" onClick={onRemove}><Trash2 size={15} /></button>
+    <button aria-haspopup="dialog" aria-label={locale === 'zh' ? `删除自定义源 ${name}` : `Delete custom source ${name}`} className="custom-source-delete" type="button" onClick={onRemove}><span className="custom-source-delete-face"><Trash2 size={15} /></span></button>
   </div>
 }
 
@@ -1226,9 +1304,11 @@ function AdditionalOsEditor({ locale, publicBaseUrl, sources, onChange }: {
   sources: Record<string, string>
   onChange: (sources: Record<string, string>) => void
 }) {
+  const confirmAction = useConfirmDialog()
   const [newName, setNewName] = React.useState('')
   const [newUrl, setNewUrl] = React.useState('')
   const [validationError, setValidationError] = React.useState('')
+  const [removedSource, setRemovedSource] = React.useState<{ name: string; url: string } | null>(null)
 
   const nameError = (name: string, currentName?: string): string => {
     if (!CUSTOM_SOURCE_NAME_PATTERN.test(name)) {
@@ -1273,10 +1353,23 @@ function AdditionalOsEditor({ locale, publicBaseUrl, sources, onChange }: {
     return true
   }
 
-  const removeSource = (name: string) => {
-    if (!window.confirm(locale === 'zh' ? `确定删除自定义源“${name}”吗？` : `Delete the custom source “${name}”?`)) return
+  const removeSource = async (name: string) => {
+    if (!await confirmAction({
+      locale,
+      title: locale === 'zh' ? '删除自定义软件仓库' : 'Delete custom repository',
+      message: locale === 'zh' ? `确定删除“${name}”吗？保存配置后，该仓库的代理地址将不再可用。` : `Delete “${name}”? After saving the configuration, its proxy address will no longer be available.`,
+      confirmLabel: locale === 'zh' ? '删除仓库' : 'Delete repository',
+      tone: 'danger',
+    })) return
+    setRemovedSource({ name, url: sources[name] })
     onChange(Object.fromEntries(Object.entries(sources).filter(([current]) => current !== name)))
     setValidationError('')
+  }
+
+  const restoreSource = () => {
+    if (!removedSource) return
+    onChange({ ...sources, [removedSource.name]: removedSource.url })
+    setRemovedSource(null)
   }
 
   return <section className="custom-source-editor" aria-labelledby="custom-source-title">
@@ -1286,6 +1379,7 @@ function AdditionalOsEditor({ locale, publicBaseUrl, sources, onChange }: {
       {Object.entries(sources).map(([name, url]) => <AdditionalOsSourceRow key={name} locale={locale} publicBaseUrl={publicBaseUrl} name={name} url={url} onRename={(nextName) => renameSource(name, nextName)} onUrlChange={(nextUrl) => onChange({ ...sources, [name]: nextUrl })} onRemove={() => removeSource(name)} />)}
       {Object.keys(sources).length === 0 ? <p className="custom-source-empty">{locale === 'zh' ? '尚未添加自定义软件仓库。' : 'No custom software repositories have been added.'}</p> : null}
     </div>
+    {removedSource ? <p className="custom-source-undo" role="status"><span>{locale === 'zh' ? `已移除“${removedSource.name}”` : `Removed “${removedSource.name}”`}</span><button type="button" onClick={restoreSource}>{locale === 'zh' ? '撤销' : 'Undo'}</button></p> : null}
     <form className="custom-source-add" onSubmit={addSource}>
       <label><span>{locale === 'zh' ? '新源名称' : 'New source name'}</span><input aria-label={locale === 'zh' ? '新源名称' : 'New source name'} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="clickhouse" value={newName} onChange={(event) => setNewName(event.target.value)} /></label>
       <label><span>{locale === 'zh' ? '上游 URL' : 'Upstream URL'}</span><input aria-label={locale === 'zh' ? '新源上游 URL' : 'New source upstream URL'} placeholder="https://packages.example.com" type="url" value={newUrl} onChange={(event) => setNewUrl(event.target.value)} /></label>
@@ -1296,6 +1390,7 @@ function AdditionalOsEditor({ locale, publicBaseUrl, sources, onChange }: {
 }
 
 function AdminConsole({ locale }: { locale: Locale }) {
+  const confirmAction = useConfirmDialog()
   const text: Record<string, string> = locale === 'zh'
     ? {
         title: '运行控制台', login: '管理员登录', username: '管理员账号', password: '管理员密码', signIn: '登录', signOut: '退出登录',
@@ -1485,7 +1580,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
   }
 
   const signOut = async (requireConfirmation = true) => {
-    if (requireConfirmation && !window.confirm(locale === 'zh' ? '确定退出管理员后台吗？' : 'Sign out of the administrator console?')) return
+    if (requireConfirmation && !await confirmAction({ locale, title: locale === 'zh' ? '退出管理后台' : 'Sign out of administration', message: locale === 'zh' ? '确定退出管理员后台吗？' : 'Sign out of the administrator console?', confirmLabel: locale === 'zh' ? '退出登录' : 'Sign out' })) return
     if (token) await fetch('/admin/api/auth/logout', { method: 'POST' }).catch(() => undefined)
     setIdentity(null); setToken(null); setDraft(null); setStats(null); setSourceHealth(null); setAuditLog([]); setAuditTotal(0); setRestartRequired([]); setNotice(null)
   }
@@ -1536,7 +1631,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
 
   const changePassword = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!token || !window.confirm(text.passwordConfirm)) return
+    if (!token || !await confirmAction({ locale, title: locale === 'zh' ? '修改管理员密码' : 'Change administrator password', message: text.passwordConfirm, confirmLabel: locale === 'zh' ? '确认修改' : 'Change password', tone: 'danger' })) return
     setPasswordBusy(true); setError(null)
     const response = await fetch('/admin/api/password', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1551,7 +1646,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
 
   const changeUsername = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!token || !window.confirm(text.usernameConfirm)) return
+    if (!token || !await confirmAction({ locale, title: locale === 'zh' ? '修改管理员账号' : 'Change administrator username', message: text.usernameConfirm, confirmLabel: locale === 'zh' ? '确认修改' : 'Change username', tone: 'danger' })) return
     setUsernameBusy(true); setError(null)
     const response = await fetch('/admin/api/username', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1588,7 +1683,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
   }
 
   const removePasskey = async (passkey: AdminPasskey) => {
-    if (!window.confirm(`${text.deletePasskey}: ${passkey.name}?`)) return
+    if (!await confirmAction({ locale, title: locale === 'zh' ? '删除 Passkey' : 'Delete passkey', message: `${text.deletePasskey}: ${passkey.name}?`, confirmLabel: locale === 'zh' ? '删除 Passkey' : 'Delete passkey', tone: 'danger' })) return
     const response = await fetch(`/admin/api/auth/passkeys/${passkey.id}`, { method: 'DELETE' })
     if (!response.ok) { setError(text.passkeyError); return }
     await loadPasskeys()
@@ -1604,10 +1699,14 @@ function AdminConsole({ locale }: { locale: Locale }) {
   const updateUpstreamSelection = (key: keyof AdminConfig['upstream_selection'], value: string | number) => setDraft((current) => current ? { ...current, upstream_selection: { ...current.upstream_selection, [key]: value } as AdminConfig['upstream_selection'] } : current)
   const updateOutboundProxy = (key: keyof AdminConfig['outbound_proxy'], value: string | boolean | string[] | null) => setDraft((current) => current ? { ...current, outbound_proxy: { ...current.outbound_proxy, [key]: value } } : current)
   const updateUpstreamTls = (key: keyof AdminConfig['upstream_tls'], value: boolean | string[]) => setDraft((current) => current ? { ...current, upstream_tls: { ...current.upstream_tls, [key]: value } } : current)
-  const toggleInsecureUpstreamTls = (enabled: boolean) => {
-    if (enabled && !window.confirm(locale === 'zh'
-      ? '关闭上游 TLS 证书校验会使所有镜像上游请求容易遭受中间人攻击。仅应临时用于调试，确定继续吗？'
-      : 'Disabling upstream TLS verification exposes all mirror-upstream requests to man-in-the-middle attacks. Use it only temporarily for debugging. Continue?')) return
+  const toggleInsecureUpstreamTls = async (enabled: boolean) => {
+    if (enabled && !await confirmAction({
+      locale,
+      title: locale === 'zh' ? '关闭 TLS 证书校验' : 'Disable TLS verification',
+      message: locale === 'zh' ? '关闭上游 TLS 证书校验会使所有镜像上游请求容易遭受中间人攻击。仅应临时用于调试，确定继续吗？' : 'Disabling upstream TLS verification exposes all mirror-upstream requests to man-in-the-middle attacks. Use it only temporarily for debugging. Continue?',
+      confirmLabel: locale === 'zh' ? '仍然关闭' : 'Disable verification',
+      tone: 'danger',
+    })) return
     updateUpstreamTls('insecure_skip_verify', enabled)
   }
   const updateUserAccess = (key: keyof AdminConfig['user_access'], value: string | number | boolean) => setDraft((current) => current ? { ...current, user_access: { ...current.user_access, [key]: value } } : current)
@@ -1642,17 +1741,30 @@ function AdminConsole({ locale }: { locale: Locale }) {
     { id: 'advanced', label: text.tabAdvanced, hint: text.advancedHint },
     { id: 'audit', label: text.tabAudit, hint: text.auditHint },
   ] as Array<{ id: typeof activeTab; label: string; hint: string }>
+  const compactEnglishTabLabels = {
+    overview: 'Overview',
+    health: 'Health',
+    geo: 'Traffic',
+    'ip-access': 'IP rules',
+    access: 'Access',
+    users: 'Users',
+    providers: 'Providers',
+    email: 'Email',
+    security: 'Security',
+    advanced: 'Advanced',
+    audit: 'Audit',
+  } satisfies Record<typeof activeTab, string>
   const activeTabCopy = tabs.find((tab) => tab.id === activeTab) ?? tabs[0]
 
   return (
     <section className="admin-console" aria-label={text.title}>
-      {notice ? <div className={`admin-toast admin-toast-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} aria-live="polite"><span className="admin-toast-icon">{notice.tone === 'error' ? <CircleAlert size={19} /> : <CheckCircle2 size={19} />}</span><span className="admin-toast-copy"><strong>{notice.title}</strong><span>{notice.message}</span></span><button type="button" onClick={() => setNotice(null)} aria-label={text.closeNotice}><X size={16} /></button></div> : null}
+      {notice?.tone === 'error' ? <div className="admin-toast admin-toast-error" role="alert" aria-live="polite"><span className="admin-toast-icon"><CircleAlert size={19} /></span><span className="admin-toast-copy"><strong>{notice.title}</strong><span>{notice.message}</span></span><button type="button" onClick={() => setNotice(null)} aria-label={text.closeNotice}><X size={16} /></button></div> : null}
       <div className="console-head"><div><span className="console-kicker"><ShieldCheck size={15} /> ADMIN</span><h2>{text.title}</h2></div>{token ? <button className="secondary-button compact-button console-logout" onClick={() => signOut()}><LogOut size={15} /> {text.signOut}</button> : null}</div>
       {!token ? <form className="login-card admin-login-card" onSubmit={signIn}><div className="admin-login-intro"><h3>{text.login}</h3><p>{text.passwordHint}</p></div><label className="admin-username-field">{text.username}<input autoFocus required autoComplete="username webauthn" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="admin-password-field">{text.password}<input required={!passkeyEnabled} autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error ? <p className="form-error admin-login-error">{error}</p> : null}<div className="login-actions admin-login-actions"><button className="primary-button password-login-button" type="submit"><LogIn size={17} /> {text.signIn}</button>{passkeyEnabled ? <button className="secondary-button passkey-login-button" disabled={passkeyBusy || !username.trim()} type="button" onClick={signInWithPasskey}><KeyRound size={17} /> {text.usePasskey}</button> : null}</div></form> : null}
       {token && draft && stats ? <div className="console-workspace">
-        <nav className="admin-tabs" aria-label={text.title}>{tabs.map((tab) => <button aria-current={activeTab === tab.id ? 'page' : undefined} className={activeTab === tab.id ? 'active' : ''} key={tab.id} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>)}</nav>
+        <nav className="admin-tabs" aria-label={text.title}>{tabs.map((tab) => <button aria-current={activeTab === tab.id ? 'page' : undefined} aria-label={tab.label} className={activeTab === tab.id ? 'active' : ''} key={tab.id} title={tab.label} onClick={() => setActiveTab(tab.id)}>{locale === 'en' ? compactEnglishTabLabels[tab.id] : tab.label}</button>)}</nav>
         <div className="admin-tab-toolbar"><div><h3>{activeTabCopy.label}</h3><p>{activeTabCopy.hint}</p></div><div className="console-actions">{activeTab === 'overview' || activeTab === 'audit' ? <button onClick={() => (activeTab === 'audit' ? loadAudit(auditPage) : load(token)).catch(() => setError(text.saveError))}>{text.refresh}</button> : null}{activeTab === 'health' ? <button className="primary-button" disabled={sourceHealthBusy || sourceHealth?.running} onClick={runSourceHealth}><RefreshCw className={sourceHealthBusy || sourceHealth?.running ? 'spin' : ''} size={16} /> {locale === 'zh' ? (sourceHealthBusy || sourceHealth?.running ? '检测中…' : '立即检测') : (sourceHealthBusy || sourceHealth?.running ? 'Checking…' : 'Run check')}</button> : null}{activeTab === 'access' || activeTab === 'advanced' || activeTab === 'security' ? <button className="primary-button" disabled={saving} onClick={save}><Save size={16} /> {saving ? text.saving : text.save}</button> : null}</div></div>
-        {error ? <p className="form-error admin-global-message">{error}</p> : null}{restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
+        {error ? <p className="form-error admin-global-message">{error}</p> : null}{notice?.tone === 'success' ? <p className="admin-save-status" role="status"><CheckCircle2 size={16} /><span><strong>{notice.title}</strong> {notice.message}</span></p> : null}{restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
         {activeTab === 'overview' ? <section className="admin-tab-panel console-overview"><div className="console-section-head"><div><h3>{text.overview}</h3><p>{stats.month} · {stats.quota.timezone}</p></div></div>
           {stats.quota.exceeded ? <div className="quota-alert"><ChartNoAxesCombined size={18} /> {text.quotaStopped}</div> : null}
           <div className="console-metrics"><ConsoleMetric label={draft.quota.bidirectional_accounting ? text.billed : text.sent} value={byteLabel(stats.response_bytes)} /><ConsoleMetric label={text.remaining} value={stats.quota.enabled ? byteLabel(stats.quota.remaining_bytes) : '∞'} /><ConsoleMetric label={text.requests} value={stats.request_count.toLocaleString()} /><ConsoleMetric label={text.errors} value={stats.error_count.toLocaleString()} /></div>
@@ -1702,7 +1814,7 @@ function AdminConsole({ locale }: { locale: Locale }) {
               </section>
               <section className="runtime-config-group">
                 <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '小对象磁盘缓存' : 'Small-object disk cache'}</h5><p>{locale === 'zh' ? '遵循上游缓存指令，并通过 ETag 或修改时间重新验证已过期内容。' : 'Honors upstream cache directives and revalidates stale content with ETag or modification time.'}</p></div>
-                <div className="runtime-config-fields paired-fields"><label className="toggle-field"><input type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label><label>{text.cacheMaxEntry}<input min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label>{text.cacheMaxTotal}<input min="1" type="number" value={draft.cache.max_total_mb} onChange={(event) => updateCache('max_total_mb', Number(event.target.value))} /></label><label>{text.cacheDefaultTtl}<input min="1" type="number" value={draft.cache.default_ttl_secs} onChange={(event) => updateCache('default_ttl_secs', Number(event.target.value))} /></label><label>{text.cacheMaxTtl}<input min="1" type="number" value={draft.cache.max_ttl_secs} onChange={(event) => updateCache('max_ttl_secs', Number(event.target.value))} /></label><label className="wide-field">{text.cacheDirectory}<input value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><CacheOperations locale={locale} /></div>
+                <div className="runtime-config-fields paired-fields"><label className="toggle-field"><input type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label><label>{text.cacheMaxEntry}<input min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label>{text.cacheMaxTotal}<input min="1" type="number" value={draft.cache.max_total_mb} onChange={(event) => updateCache('max_total_mb', Number(event.target.value))} /></label><label>{text.cacheDefaultTtl}<input min="1" type="number" value={draft.cache.default_ttl_secs} onChange={(event) => updateCache('default_ttl_secs', Number(event.target.value))} /></label><label>{text.cacheMaxTtl}<input min="1" type="number" value={draft.cache.max_ttl_secs} onChange={(event) => updateCache('max_ttl_secs', Number(event.target.value))} /></label><label className="wide-field">{text.cacheDirectory}<input value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><CacheOperations locale={locale} confirmAction={confirmAction} /></div>
               </section>
               <section className="runtime-config-group">
                 <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '上游选择策略' : 'Upstream selection'}</h5><p>{locale === 'zh' ? '顺序模式保持配置优先级；自适应模式根据失败熔断与响应延迟动态排序。' : 'Ordered mode preserves configured priority; adaptive mode ranks endpoints using circuit state and latency.'}</p></div>
@@ -1808,6 +1920,7 @@ function emailAdminError(reason: string, status: number, locale: Locale, fallbac
 type AdminSessionView = { id: string; auth_method: string; created_at: number; expires_at: number; last_used_at: number; current: boolean }
 
 function AdminSessionManagement({ locale, onCurrentRevoked }: { locale: Locale; onCurrentRevoked: () => void }) {
+  const confirmAction = useConfirmDialog()
   const [sessions, setSessions] = React.useState<AdminSessionView[]>([])
   const load = React.useCallback(async () => {
     const response = await fetch('/admin/api/auth/sessions')
@@ -1818,9 +1931,13 @@ function AdminSessionManagement({ locale, onCurrentRevoked }: { locale: Locale; 
   }, [])
   React.useEffect(() => { load().catch(() => undefined) }, [load])
   const revoke = async (session: AdminSessionView) => {
-    if (!window.confirm(locale === 'zh'
-      ? `确定撤销${session.current ? '当前' : '这个'}管理员会话吗？${session.current ? '撤销后需要重新登录。' : ''}`
-      : `Revoke ${session.current ? 'the current' : 'this'} administrator session?${session.current ? ' You will need to sign in again.' : ''}`)) return
+    if (!await confirmAction({
+      locale,
+      title: locale === 'zh' ? '撤销管理员会话' : 'Revoke administrator session',
+      message: locale === 'zh' ? `确定撤销${session.current ? '当前' : '这个'}管理员会话吗？${session.current ? '撤销后需要重新登录。' : ''}` : `Revoke ${session.current ? 'the current' : 'this'} administrator session?${session.current ? ' You will need to sign in again.' : ''}`,
+      confirmLabel: locale === 'zh' ? '撤销会话' : 'Revoke session',
+      tone: 'danger',
+    })) return
     const response = await fetch(`/admin/api/auth/sessions/${session.id}`, { method: 'DELETE' })
     if (!response.ok) return
     if (session.current) onCurrentRevoked(); else await load()
@@ -1969,6 +2086,7 @@ type AuthProviderDraft = AuthProviderView & { client_secret: string }
 const emptyAuthProvider = (): AuthProviderDraft => ({ id: 0, slug: '', display_name: '', kind: 'oauth2', preset: 'custom_oauth2', enabled: false, client_id: '', client_secret: '', has_client_secret: false, issuer_url: null, authorization_url: null, token_url: null, userinfo_url: null, emails_url: null, scopes: [], subject_field: 'id', email_field: 'email', email_verified_field: null, display_name_field: 'name' })
 
 function AdminAuthProviders({ locale }: { locale: Locale }) {
+  const confirmAction = useConfirmDialog()
   const [providers, setProviders] = React.useState<AuthProviderView[]>([])
   const [templates, setTemplates] = React.useState<AuthProviderTemplate[]>([])
   const [draft, setDraft] = React.useState<AuthProviderDraft>(emptyAuthProvider)
@@ -2002,7 +2120,7 @@ function AdminAuthProviders({ locale }: { locale: Locale }) {
     if (response.ok) { setDraft(emptyAuthProvider()); await load() }
   }
   const remove = async (provider: AuthProviderView) => {
-    if (!confirm(`${locale === 'zh' ? '删除' : 'Delete'} ${provider.display_name}?`)) return
+    if (!await confirmAction({ locale, title: locale === 'zh' ? '删除登录方式' : 'Delete identity provider', message: `${locale === 'zh' ? '确定删除' : 'Delete'} ${provider.display_name}?`, confirmLabel: locale === 'zh' ? '删除登录方式' : 'Delete provider', tone: 'danger' })) return
     const response = await fetch(`/admin/api/auth-providers/${provider.id}`, { method: 'DELETE' })
     setNotice(response.ok
       ? { tone: 'success', title: locale === 'zh' ? '删除成功' : 'Provider deleted', message: `${provider.display_name} ${locale === 'zh' ? '已删除。' : 'was deleted.'}` }
@@ -2028,7 +2146,7 @@ function AdminAuthProviders({ locale }: { locale: Locale }) {
   const set = <K extends keyof AuthProviderDraft>(key: K, value: AuthProviderDraft[K]) => setDraft((current) => ({ ...current, [key]: value }))
   const custom = draft.preset.startsWith('custom_')
   return <section className="admin-tab-panel settings-stack identity-provider-settings">
-    {notice ? <div className={`admin-toast admin-toast-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} aria-live="polite"><span className="admin-toast-icon">{notice.tone === 'error' ? <CircleAlert size={19} /> : <CheckCircle2 size={19} />}</span><span className="admin-toast-copy"><strong>{notice.title}</strong><span>{notice.message}</span></span><button type="button" onClick={() => setNotice(null)} aria-label={locale === 'zh' ? '关闭提示' : 'Close notification'}><X size={16} /></button></div> : null}
+    {notice ? <p className={`operation-notice operation-notice-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.tone === 'error' ? <CircleAlert size={17} /> : <CheckCircle2 size={17} />}<span><strong>{notice.title}</strong> {notice.message}</span></p> : null}
     <div className="settings-card"><div className="settings-card-head"><div><h4>OAuth2 / OpenID Connect</h4><p>{locale === 'zh' ? '优先选择平台模板，通常只需 Client ID 和 Client Secret。' : 'Start with a provider template; most platforms only need a client ID and secret.'}</p></div><button onClick={() => setDraft(emptyAuthProvider())}>{locale === 'zh' ? '新增登录方式' : 'New provider'}</button></div><div className="admin-account-list">{providers.map((provider) => <div className="admin-account-row" key={provider.id}><span><strong>{provider.display_name}</strong><small>{provider.kind.toUpperCase()} · {provider.enabled ? (locale === 'zh' ? '已启用' : 'enabled') : (locale === 'zh' ? '已停用' : 'disabled')}</small></span><span><button disabled={testingProviderId === provider.id} onClick={() => test(provider)}>{testingProviderId === provider.id ? (locale === 'zh' ? '测试中…' : 'Testing…') : (locale === 'zh' ? '测试' : 'Test')}</button><button onClick={() => edit(provider)}>{locale === 'zh' ? '编辑' : 'Edit'}</button><button onClick={() => remove(provider)}>{locale === 'zh' ? '删除' : 'Delete'}</button></span></div>)}</div></div>
     <form className="settings-card provider-form" onSubmit={save}><div className="provider-registration-policy wide-field"><ShieldCheck size={18} /><span><strong>{locale === 'zh' ? '新用户规则由全局注册模式统一控制' : 'New-user access follows the global registration policy'}</strong><small>{locale === 'zh' ? '请在“访问与配额”中选择开放注册、指定邮箱域名、仅邀请或禁止新用户。所有已启用的第三方登录方式遵循同一规则；第三方返回已验证邮箱时，会自动绑定同邮箱的已有账户。' : 'Choose open, allowed domains, invitation only, or disabled under Access & quota. Every enabled provider follows that rule; a verified provider email is automatically linked to the matching existing account.'}</small></span></div><label>{locale === 'zh' ? '平台模板' : 'Provider template'}<select value={draft.preset} onChange={(event) => chooseTemplate(event.target.value)}>{templates.map((template) => <option value={template.preset} key={template.preset}>{template.display_name}</option>)}</select></label><label>{locale === 'zh' ? '登录按钮名称' : 'Sign-in button label'}<input required maxLength={80} value={draft.display_name} onChange={(event) => set('display_name', event.target.value)} /></label><label>Client ID<input required value={draft.client_id} onChange={(event) => set('client_id', event.target.value)} /></label><label>Client Secret<input type="password" placeholder={draft.has_client_secret ? (locale === 'zh' ? '已保存，留空表示不修改' : 'Saved; leave blank to keep') : (locale === 'zh' ? '启用前必填' : 'Required before enabling')} value={draft.client_secret} onChange={(event) => set('client_secret', event.target.value)} /></label>{draft.kind === 'oidc' ? <label className="wide-field">Issuer URL<input required type="url" placeholder="https://id.example.com/realms/company" value={draft.issuer_url ?? ''} onChange={(event) => set('issuer_url', event.target.value || null)} /></label> : null}<label className="toggle-field wide-field"><input type="checkbox" checked={draft.enabled} onChange={(event) => set('enabled', event.target.checked)} />{locale === 'zh' ? '启用此登录方式' : 'Enable this provider'}</label>{custom ? <details className="advanced-details wide-field"><summary>{locale === 'zh' ? '自定义协议高级字段' : 'Custom protocol fields'}</summary><div className="provider-advanced-grid"><label>{locale === 'zh' ? '唯一标识' : 'Slug'}<input required pattern="[a-z0-9-]{2,50}" value={draft.slug} onChange={(event) => set('slug', event.target.value.toLowerCase())} /></label><label>{locale === 'zh' ? '协议' : 'Protocol'}<select value={draft.kind} onChange={(event) => set('kind', event.target.value as 'oauth2' | 'oidc')}><option value="oauth2">OAuth2</option><option value="oidc">OpenID Connect</option></select></label>{draft.kind === 'oauth2' ? <><label>Authorization URL<input required type="url" value={draft.authorization_url ?? ''} onChange={(event) => set('authorization_url', event.target.value || null)} /></label><label>Token URL<input required type="url" value={draft.token_url ?? ''} onChange={(event) => set('token_url', event.target.value || null)} /></label><label>UserInfo URL<input required type="url" value={draft.userinfo_url ?? ''} onChange={(event) => set('userinfo_url', event.target.value || null)} /></label><label>{locale === 'zh' ? '已验证邮箱 URL' : 'Verified emails URL'}<input type="url" value={draft.emails_url ?? ''} onChange={(event) => set('emails_url', event.target.value || null)} /></label><label>{locale === 'zh' ? '用户 ID 字段' : 'Subject field'}<input value={draft.subject_field} onChange={(event) => set('subject_field', event.target.value)} /></label><label>{locale === 'zh' ? '邮箱字段' : 'Email field'}<input value={draft.email_field} onChange={(event) => set('email_field', event.target.value)} /></label><label>{locale === 'zh' ? '邮箱已验证字段' : 'Verified field'}<input value={draft.email_verified_field ?? ''} onChange={(event) => set('email_verified_field', event.target.value || null)} /></label><label>{locale === 'zh' ? '显示名称字段' : 'Name field'}<input value={draft.display_name_field} onChange={(event) => set('display_name_field', event.target.value)} /></label></> : null}<label className="wide-field">Scopes<input value={draft.scopes.join(' ')} onChange={(event) => set('scopes', event.target.value.split(/\s+/).filter(Boolean))} /></label></div></details> : null}<button className="primary-button" type="submit">{draft.id ? (locale === 'zh' ? '保存修改' : 'Update provider') : (locale === 'zh' ? '添加登录方式' : 'Add provider')}</button></form>
     <p className="provider-callback">{locale === 'zh' ? '回调地址' : 'Callback URL'}: <code>{window.location.origin}/api/auth/&lt;slug&gt;/callback</code></p>
@@ -2036,6 +2154,7 @@ function AdminAuthProviders({ locale }: { locale: Locale }) {
 }
 
 function AdminEmailSettings({ locale }: { locale: Locale }) {
+  const confirmAction = useConfirmDialog()
   const [smtp, setSmtp] = React.useState<SmtpView | null>(null)
   const [password, setPassword] = React.useState('')
   const [testRecipient, setTestRecipient] = React.useState('')
@@ -2085,7 +2204,7 @@ function AdminEmailSettings({ locale }: { locale: Locale }) {
     } finally { setSendingInvite(false) }
   }
   const revoke = async (id: number) => {
-    if (!window.confirm(locale === 'zh' ? '确定撤销这条邀请吗？邀请链接会立即失效。' : 'Revoke this invitation? Its link will stop working immediately.')) return
+    if (!await confirmAction({ locale, title: locale === 'zh' ? '撤销用户邀请' : 'Revoke invitation', message: locale === 'zh' ? '确定撤销这条邀请吗？邀请链接会立即失效。' : 'Revoke this invitation? Its link will stop working immediately.', confirmLabel: locale === 'zh' ? '撤销邀请' : 'Revoke invitation', tone: 'danger' })) return
     await fetch(`/admin/api/invitations/${id}`, { method: 'DELETE' }); await load()
   }
   const resend = async (id: number) => {
@@ -2144,6 +2263,7 @@ function BillingGroupRow({ group, locale, reload }: { group: BillingGroupView; l
 }
 
 function BillingUserRow({ initialUser, groups, locale, reloadUsers }: { initialUser: AdminUserView; groups: BillingGroupView[]; locale: Locale; reloadUsers: () => Promise<void> }) {
+  const confirmAction = useConfirmDialog()
   const [user, setUser] = React.useState(initialUser)
   const [billing, setBilling] = React.useState<UserBillingView | null>(null)
   const [usage, setUsage] = React.useState<UserUsage | null>(null)
@@ -2165,22 +2285,26 @@ function BillingUserRow({ initialUser, groups, locale, reloadUsers }: { initialU
     await load()
   }
   const toggle = async () => {
-    if (!window.confirm(user.disabled
-      ? (locale === 'zh' ? `确定启用用户 ${user.email} 吗？` : `Enable ${user.email}?`)
-      : (locale === 'zh' ? `确定禁用用户 ${user.email} 吗？该用户的登录会话会立即失效。` : `Disable ${user.email}? Their active sessions will be revoked immediately.`))) return
+    if (!await confirmAction({
+      locale,
+      title: user.disabled ? (locale === 'zh' ? '启用用户' : 'Enable user') : (locale === 'zh' ? '禁用用户' : 'Disable user'),
+      message: user.disabled ? (locale === 'zh' ? `确定启用用户 ${user.email} 吗？` : `Enable ${user.email}?`) : (locale === 'zh' ? `确定禁用用户 ${user.email} 吗？该用户的登录会话会立即失效。` : `Disable ${user.email}? Their active sessions will be revoked immediately.`),
+      confirmLabel: user.disabled ? (locale === 'zh' ? '启用用户' : 'Enable user') : (locale === 'zh' ? '禁用用户' : 'Disable user'),
+      tone: user.disabled ? 'primary' : 'danger',
+    })) return
     const response = await fetch(`/admin/api/users/${user.id}/status`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ disabled: !user.disabled }) })
     if (response.ok) setUser({ ...user, disabled: !user.disabled })
   }
   const rotate = async () => {
-    if (!window.confirm(locale === 'zh' ? `确定更换 ${user.email} 的专属代理地址吗？当前地址会立即失效。` : `Rotate the dedicated proxy address for ${user.email}? The current address will stop working immediately.`)) return
+    if (!await confirmAction({ locale, title: locale === 'zh' ? '更换用户代理地址' : 'Rotate user routing address', message: locale === 'zh' ? `确定更换 ${user.email} 的专属代理地址吗？当前地址会立即失效。` : `Rotate the dedicated proxy address for ${user.email}? The current address will stop working immediately.`, confirmLabel: locale === 'zh' ? '确认更换' : 'Rotate address', tone: 'danger' })) return
     await fetch(`/admin/api/users/${user.id}/routing-id/rotate`, { method: 'POST' })
   }
   const loadIdentities = async () => { const response = await fetch(`/admin/api/users/${user.id}/identities`); if (response.ok) setIdentities(await response.json() as LinkedIdentity[]) }
   const unlink = async (identity: LinkedIdentity) => {
-    if (!window.confirm(locale === 'zh' ? `确定解除 ${user.email} 与 ${identity.provider_name} 的绑定吗？` : `Unlink ${identity.provider_name} from ${user.email}?`)) return
+    if (!await confirmAction({ locale, title: locale === 'zh' ? '解除登录身份绑定' : 'Unlink identity', message: locale === 'zh' ? `确定解除 ${user.email} 与 ${identity.provider_name} 的绑定吗？` : `Unlink ${identity.provider_name} from ${user.email}?`, confirmLabel: locale === 'zh' ? '解除绑定' : 'Unlink identity', tone: 'danger' })) return
     const response = await fetch(`/admin/api/users/${user.id}/identities/${identity.id}`, { method: 'DELETE' }); if (response.ok) await loadIdentities()
   }
-  const remove = async () => { if (!confirm(locale === 'zh' ? `确定删除 ${user.email}？历史流量和审计记录会保留。` : `Soft-delete ${user.email}? Existing traffic and audit history will be retained.`)) return; const response = await fetch(`/admin/api/users/${user.id}`, { method: 'DELETE' }); if (response.ok) await reloadUsers() }
+  const remove = async () => { if (!await confirmAction({ locale, title: locale === 'zh' ? '删除用户' : 'Delete user', message: locale === 'zh' ? `确定删除 ${user.email}？历史流量和审计记录会保留。` : `Soft-delete ${user.email}? Existing traffic and audit history will be retained.`, confirmLabel: locale === 'zh' ? '删除用户' : 'Delete user', tone: 'danger' })) return; const response = await fetch(`/admin/api/users/${user.id}`, { method: 'DELETE' }); if (response.ok) await reloadUsers() }
   return (
     <div className="admin-user-record">
       <div className="admin-user-summary">
@@ -2315,15 +2439,16 @@ function AdminGeoTraffic({ locale }: { locale: Locale }) {
       <ConsoleMetric label={locale === 'zh' ? '错误数' : 'Errors'} value={(data?.error_count ?? 0).toLocaleString()} />
     </div>
     <div className="geo-report-grid">
-      <section className="settings-card geo-atlas-card"><div className="settings-card-head"><div><span className="eyebrow">TRAFFIC ATLAS</span><h4>{locale === 'zh' ? '国家 / 省市排行' : 'Country / region ranking'}</h4></div><Globe2 size={22} /></div>
+      <section className="settings-card geo-atlas-card"><div className="settings-card-head"><div><h4>{locale === 'zh' ? '国家 / 省市排行' : 'Country / region ranking'}</h4></div><Globe2 size={22} /></div>
         {countries.length ? <div className="geo-country-list">{countries.map((country, index) => <details key={`${country.code}-${country.name}`} open={index < 3} className="geo-country-row"><summary><span className="geo-rank">{String(index + 1).padStart(2, '0')}</span><span><strong>{country.name}</strong><small>{country.code} · {country.requests.toLocaleString()} req</small></span><span className="geo-traffic-value">{byteLabel(country.billed)}</span><i style={{ '--geo-share': `${Math.max(2, country.billed / peak * 100)}%` } as React.CSSProperties} /></summary><div className="geo-city-list">{country.children.slice(0, 30).map((row) => <div key={`${row.province}-${row.city}`}><span>{row.province === 'Unknown' ? '—' : row.province} / {row.city === 'Unknown' ? '—' : row.city}</span><strong>{byteLabel(row.billed_bytes)}</strong><small>{byteLabel(row.response_bytes)} {locale === 'zh' ? '实际' : 'delivered'} · {row.request_count} req</small></div>)}</div></details>)}</div> : <p className="empty-stat">{locale === 'zh' ? '所选范围尚无地域流量。' : 'No regional traffic in this range.'}</p>}
       </section>
-      <section className="settings-card geo-trend-card"><div className="settings-card-head"><div><span className="eyebrow">DAILY PULSE</span><h4>{locale === 'zh' ? '每日计费流量' : 'Daily billed traffic'}</h4></div><ChartNoAxesCombined size={22} /></div><div className="geo-trend-chart" role="img" aria-label={locale === 'zh' ? '每日计费流量趋势' : 'Daily billed traffic trend'}>{(data?.daily ?? []).map((point) => <div key={point.day} title={`${point.day}: ${byteLabel(point.billed_bytes)}`}><span style={{ height: `${Math.max(3, point.billed_bytes / trendPeak * 100)}%` }} /><small>{point.day.slice(5)}</small></div>)}</div></section>
+      <section className="settings-card geo-trend-card"><div className="settings-card-head"><div><h4>{locale === 'zh' ? '每日计费流量' : 'Daily billed traffic'}</h4></div><ChartNoAxesCombined size={22} /></div><div className="geo-trend-chart" role="img" aria-label={locale === 'zh' ? '每日计费流量趋势' : 'Daily billed traffic trend'}>{(data?.daily ?? []).map((point) => <div key={point.day} title={`${point.day}: ${byteLabel(point.billed_bytes)}`}><span style={{ height: `${Math.max(3, point.billed_bytes / trendPeak * 100)}%` }} /><small>{point.day.slice(5)}</small></div>)}</div></section>
     </div>
   </section>
 }
 
 function AdminIpAccess({ locale, superAdmin }: { locale: Locale; superAdmin: boolean }) {
+  const confirmAction = useConfirmDialog()
   const [status, setStatus] = React.useState<GeoIpStatus | null>(null)
   const [rules, setRules] = React.useState<IpAccessRule[]>([])
   const [lookupIp, setLookupIp] = React.useState('1.1.1.1')
@@ -2358,7 +2483,7 @@ function AdminIpAccess({ locale, superAdmin }: { locale: Locale; superAdmin: boo
   }
   const edit = (rule: IpAccessRule) => { setEditing(rule); setAction(rule.action); setValue(rule.network); setNote(rule.note) }
   const updateRule = async (rule: IpAccessRule, enabled: boolean) => { await fetch(`/admin/api/ip-access-rules/${rule.id}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: rule.action, value: rule.network, note: rule.note, enabled }) }); await load() }
-  const remove = async (rule: IpAccessRule) => { if (!confirm(locale === 'zh' ? `删除规则 ${rule.network}？` : `Delete rule ${rule.network}?`)) return; await fetch(`/admin/api/ip-access-rules/${rule.id}`, { method: 'DELETE' }); await load() }
+  const remove = async (rule: IpAccessRule) => { if (!await confirmAction({ locale, title: locale === 'zh' ? '删除访问规则' : 'Delete access rule', message: locale === 'zh' ? `删除规则 ${rule.network}？` : `Delete rule ${rule.network}?`, confirmLabel: locale === 'zh' ? '删除规则' : 'Delete rule', tone: 'danger' })) return; await fetch(`/admin/api/ip-access-rules/${rule.id}`, { method: 'DELETE' }); await load() }
   const updateDatabase = async (version: number) => {
     if (!superAdmin || updatingVersion !== null) return
     setUpdatingVersion(version)

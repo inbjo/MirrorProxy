@@ -1,0 +1,128 @@
+:root {
+  --color-paper: oklch(96.8% 0.008 225);
+  --color-paper-2: oklch(98.2% 0.006 225);
+  --color-paper-3: oklch(93.8% 0.010 225);
+  --color-surface-raised: oklch(99.1% 0.004 225);
+  --color-ink: oklch(23% 0.028 255);
+  --color-ink-2: oklch(34% 0.026 248);
+  --color-neutral: oklch(43% 0.028 238);
+  --color-muted: oklch(50% 0.028 238);
+  --color-rule: oklch(87% 0.014 230);
+  --color-rule-2: oklch(76% 0.022 230);
+  --color-accent: oklch(50% 0.105 215);
+  --color-accent-strong: oklch(42% 0.090 215);
+  --color-accent-soft: oklch(93% 0.025 215);
+  --color-accent-ink: oklch(98% 0.008 215);
+  --color-focus: oklch(58% 0.145 215);
+  --color-success: oklch(51% 0.115 155);
+  --color-success-strong: oklch(42% 0.095 155);
+  --color-success-soft: oklch(94% 0.030 155);
+  --color-warning: oklch(64% 0.130 75);
+  --color-warning-strong: oklch(47% 0.105 70);
+  --color-warning-soft: oklch(95% 0.035 80);
+  --color-error: oklch(57% 0.165 28);
+  --color-error-strong: oklch(46% 0.145 28);
+  --color-error-soft: oklch(95% 0.028 28);
+  --color-error-ink: oklch(98% 0.010 28);
+  --color-code: oklch(24% 0.025 255);
+  --color-code-bg: oklch(92.5% 0.012 230);
+  --color-overlay: oklch(18% 0.025 240 / 0.52);
+
+  --font-display: "Aptos Display", "Aptos", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Aptos", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-md: 1.25rem;
+  --text-lg: 1.5625rem;
+  --text-xl: 1.953rem;
+  --text-2xl: 2.441rem;
+  --text-display: clamp(2.625rem, 5vw + 0.5rem, 4.75rem);
+
+  --space-3xs: 0.25rem;
+  --space-2xs: 0.5rem;
+  --space-xs: 0.75rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 2rem;
+  --space-xl: 3rem;
+  --space-2xl: 4.5rem;
+  --space-3xl: 7rem;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --dur-long: 420ms;
+
+  --rule-hair: 1px;
+  --rule-fine: 2px;
+  --radius-card: 10px;
+  --radius-input: 8px;
+  --radius-pill: 999px;
+  --control-min: 44px;
+  --admin-shell-max: 1440px;
+  --admin-content-max: 1392px;
+  --shadow-card: 0 1px 2px oklch(20% 0.02 230 / 0.07);
+  --shadow-overlay: 0 24px 70px oklch(18% 0.025 230 / 0.24);
+
+  --z-base: 1;
+  --z-raised: 10;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
+
+  /* Compatibility aliases consumed by the existing application stylesheet. */
+  --bg: var(--color-paper);
+  --panel: var(--color-paper-2);
+  --panel-strong: var(--color-surface-raised);
+  --surface: var(--color-paper-2);
+  --text: var(--color-ink);
+  --muted: var(--color-muted);
+  --line: var(--color-rule);
+  --accent: var(--color-accent);
+  --accent-strong: var(--color-accent-strong);
+  --primary-text: var(--color-accent-ink);
+  --ok: var(--color-success);
+  --code: var(--color-code);
+  --code-bg: var(--color-code-bg);
+  --shadow: var(--shadow-card);
+}
+
+:root[data-theme="dark"] {
+  --color-paper: oklch(16% 0.016 230);
+  --color-paper-2: oklch(19% 0.018 230);
+  --color-paper-3: oklch(22% 0.020 230);
+  --color-surface-raised: oklch(24% 0.022 230);
+  --color-ink: oklch(94% 0.008 225);
+  --color-ink-2: oklch(85% 0.012 225);
+  --color-neutral: oklch(75% 0.018 225);
+  --color-muted: oklch(72% 0.022 225);
+  --color-rule: oklch(31% 0.025 230);
+  --color-rule-2: oklch(43% 0.035 230);
+  --color-accent: oklch(78% 0.105 205);
+  --color-accent-strong: oklch(86% 0.090 205);
+  --color-accent-soft: oklch(28% 0.040 210);
+  --color-accent-ink: oklch(20% 0.035 215);
+  --color-focus: oklch(78% 0.125 205);
+  --color-success: oklch(76% 0.105 155);
+  --color-success-strong: oklch(81% 0.090 155);
+  --color-success-soft: oklch(25% 0.035 155);
+  --color-warning: oklch(78% 0.115 78);
+  --color-warning-strong: oklch(83% 0.095 78);
+  --color-warning-soft: oklch(26% 0.035 78);
+  --color-error: oklch(72% 0.135 28);
+  --color-error-strong: oklch(78% 0.115 28);
+  --color-error-soft: oklch(25% 0.035 28);
+  --color-error-ink: oklch(17% 0.030 28);
+  --color-code: oklch(96% 0.006 225);
+  --color-code-bg: oklch(13% 0.014 230);
+  --color-overlay: oklch(8% 0.015 230 / 0.62);
+  --shadow-card: 0 1px 2px oklch(8% 0.015 230 / 0.34);
+  --shadow-overlay: 0 24px 70px oklch(8% 0.015 230 / 0.52);
+}

@@ -1,0 +1,13 @@
+[
+  {
+    "date": "2026-08-05",
+    "scope": "app",
+    "macrostructure": "Workbench",
+    "theme": "custom",
+    "theme_axes": "light / geometric-sans / cool",
+    "enrichment": "none",
+    "nav": "N9 Edge-aligned minimal",
+    "footer": "Ft2 Inline single line",
+    "brief": "MirrorProxy public, account, and administrator UI audit remediation"
+  }
+]

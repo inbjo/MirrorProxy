@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App, sourceManualCommand } from './main'
 
 describe('App preferences', () => {
-  afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); window.history.replaceState({}, '', '/') })
+  afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); window.history.replaceState({}, '', '/') })
   it('switches language and theme and persists both', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))))
     const { container } = render(<App />)
@@ -20,7 +20,7 @@ describe('App preferences', () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))))
     Object.assign(navigator, { clipboard: { writeText } })
     const { container } = render(<App />)
-    const githubInput = container.querySelector<HTMLInputElement>('input[placeholder="https://github.com/owner/repo/releases/download/..."]')!
+    const githubInput = container.querySelector<HTMLInputElement>('input[placeholder="https://github.com/owner/repo/releases/download/…"]')!
     fireEvent.change(githubInput, { target: { value: 'https://github.com/openai/openai' } })
     fireEvent.click(githubInput.parentElement!.querySelector('button')!)
     await waitFor(() => expect(writeText).toHaveBeenCalled())
@@ -74,7 +74,6 @@ describe('App preferences', () => {
   })
 
   it('uses the signed-in user dedicated domain for homepage mirror addresses', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const json = (value: unknown) => Promise.resolve(new Response(JSON.stringify(value), { status: 200 }))
     vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => {
       if (input === '/api/public-config') return json({ public_base_url: 'https://mirror.example', enabled_proxies: [], quota: { enabled: false, monthly_gb: 0, timezone: 'UTC', on_exceeded: 'stop_proxy' } })
@@ -90,6 +89,9 @@ describe('App preferences', () => {
     expect(screen.getByText('User')).toBeTruthy()
     expect(container.querySelector<HTMLAnchorElement>('.account-profile-entry')?.getAttribute('href')).toBe('/account')
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    const signOutDialog = await screen.findByRole('dialog', { name: 'Sign out' })
+    expect(screen.getByText('User')).toBeTruthy()
+    fireEvent.click(within(signOutDialog).getByRole('button', { name: 'Sign out' }))
     await waitFor(() => expect(container.querySelector('.account-entry')?.textContent).toContain('Sign in / Register'))
   })
 
@@ -170,7 +172,6 @@ describe('App preferences', () => {
 
   it('renders nested additional OS upstreams as editable fields', async () => {
     window.history.replaceState({}, '', '/admin')
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     let savedAcme: Record<string, unknown> | null = null
     let savedRuntimeConfig: Record<string, any> | null = null
     let runtimeSaveAttempts = 0
@@ -250,7 +251,20 @@ describe('App preferences', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add source' }))
     expect(await screen.findByLabelText('Upstream URL for clickhouse')).toHaveProperty('value', 'https://packages.clickhouse.com/deb')
     fireEvent.click(screen.getByRole('button', { name: 'Delete custom source clickhouse' }))
-    expect(screen.queryByLabelText('Upstream URL for clickhouse')).toBeNull()
+    let deleteDialog = await screen.findByRole('dialog', { name: 'Delete custom repository' })
+    expect(screen.getByLabelText('Upstream URL for clickhouse')).toBeTruthy()
+    fireEvent.click(within(deleteDialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByLabelText('Upstream URL for clickhouse')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete custom source clickhouse' }))
+    deleteDialog = await screen.findByRole('dialog', { name: 'Delete custom repository' })
+    fireEvent.click(within(deleteDialog).getByRole('button', { name: 'Delete repository' }))
+    await waitFor(() => expect(screen.queryByLabelText('Upstream URL for clickhouse')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByLabelText('Upstream URL for clickhouse')).toHaveProperty('value', 'https://packages.clickhouse.com/deb')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete custom source clickhouse' }))
+    deleteDialog = await screen.findByRole('dialog', { name: 'Delete custom repository' })
+    fireEvent.click(within(deleteDialog).getByRole('button', { name: 'Delete repository' }))
+    await waitFor(() => expect(screen.queryByLabelText('Upstream URL for clickhouse')).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: 'Save configuration' }))
     await waitFor(() => expect(savedRuntimeConfig).not.toBeNull())
     expect(savedRuntimeConfig!.upstreams.additional_os).toEqual({ 'kali-rolling': 'https://mirror.example/kali' })

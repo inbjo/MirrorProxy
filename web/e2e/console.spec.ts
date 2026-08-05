@@ -23,7 +23,7 @@ const adminConfig = {
   listen_addr: '127.0.0.1:3000',
   management: { enabled: false, listen_addr: '127.0.0.1:3001' },
   metrics: { local_only: true },
-  upstreams: { npm: 'https://registry.npmjs.org' },
+  upstreams: { npm: 'https://registry.npmjs.org', additional_os: { clickhouse: 'https://packages.clickhouse.com/deb' } },
   timeout: { request_secs: 30 },
   upstream_selection: { strategy: 'ordered', failure_threshold: 3, cooldown_secs: 30 },
   alerts: { enabled: false, webhook_url: '', has_webhook_url: false, email_enabled: false, email_recipients: [], quota_percent: 80, source_failures: 3, cooldown_secs: 3600 },
@@ -48,6 +48,19 @@ test.beforeEach(async ({ page, context }) => {
   await page.route('**/version', route => route.fulfill({ json: { version: '1.0.2' } }))
 })
 
+test('keeps public, account, and administrator routes inside narrow viewports', async ({ page }) => {
+  for (const width of [320, 375, 414, 768]) {
+    await page.setViewportSize({ width, height: 900 })
+    for (const path of ['/', '/account', '/admin']) {
+      await page.goto(path)
+      await expect.poll(() => page.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      }))).toEqual({ clientWidth: width, scrollWidth: width })
+    }
+  }
+})
+
 test('keeps the administrator portal on an independent entry', async ({ page }) => {
   await page.goto('/')
 
@@ -58,6 +71,7 @@ test('keeps the administrator portal on an independent entry', async ({ page }) 
   expect((await page.request.get('/favicon.svg')).ok()).toBe(true)
   await expect(page.getByText('https://mirror.example', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Admin console' })).toHaveCount(0)
+  await page.setViewportSize({ width: 1600, height: 900 })
   await page.goto('/admin')
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
   await expect(page.getByLabel('Administrator username')).toBeVisible()
@@ -156,6 +170,20 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await page.goto('/admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in' }).click()
+  const adminTabs = page.locator('.admin-tabs')
+  await expect(adminTabs).toBeVisible()
+  await expect(adminTabs.getByText('Health', { exact: true })).toBeVisible()
+  await expect(adminTabs.getByRole('button', { name: 'Mirror health' })).toHaveAttribute('title', 'Mirror health')
+  expect(await page.locator('.admin-console').evaluate((element) => getComputedStyle(element).maxWidth)).toBe('1440px')
+  expect(await page.locator('.admin-tab-panel').evaluate((element) => getComputedStyle(element).maxWidth)).toBe('1392px')
+  expect(await adminTabs.evaluate((element) => getComputedStyle(element).paddingLeft)).toBe('0px')
+  expect(await page.locator('.admin-tab-toolbar').evaluate((element) => getComputedStyle(element).paddingLeft)).toBe('0px')
+  expect(await adminTabs.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))).toMatchObject({ clientWidth: expect.any(Number), scrollWidth: expect.any(Number) })
+  expect(await adminTabs.evaluate((element) => element.scrollWidth)).toBe(await adminTabs.evaluate((element) => element.clientWidth))
+  await page.setViewportSize({ width: 600, height: 900 })
+  expect(await adminTabs.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true)
+  expect(await adminTabs.evaluate((element) => getComputedStyle(element).scrollbarWidth)).toBe('thin')
+  await page.setViewportSize({ width: 1280, height: 720 })
   await page.getByRole('button', { name: 'Access & quotas' }).click()
   await expect(page.getByRole('heading', { name: 'Service access' })).toBeVisible()
 
@@ -165,6 +193,18 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await expect(page.getByText('These fields apply after restart: listen_addr')).toBeVisible()
 
   await page.getByRole('button', { name: 'Advanced', exact: true }).click()
+  await page.getByText('Edit upstream endpoints').click()
+  const deleteSource = page.getByRole('button', { name: 'Delete custom source clickhouse' })
+  await expect(deleteSource).toBeVisible()
+  expect(await deleteSource.evaluate((button) => ({
+    hitArea: button.getBoundingClientRect().height,
+    face: button.querySelector('.custom-source-delete-face')?.getBoundingClientRect().height,
+  }))).toEqual({ hitArea: 44, face: 32 })
+  await deleteSource.click()
+  const deleteDialog = page.locator('.app-confirm-dialog')
+  await expect(deleteDialog).toBeVisible()
+  await deleteDialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByLabel('Upstream URL for clickhouse')).toBeVisible()
   await page.getByLabel('Enable mirror upstream proxy').check()
   await page.getByLabel('Proxy URL').fill('socks5h://proxy.example:1080')
   await page.getByLabel('Username (optional)').fill('proxy-user')
@@ -240,8 +280,8 @@ test('operates the v1.3 cache, alerts, and adaptive upstream controls', async ({
   await page.getByLabel('Strategy').selectOption('adaptive')
   await expect(page.getByLabel('Strategy')).toHaveCSS('min-height', '42px')
   await expect(page.getByText('2 entries · 2.0 KB / 256.0 MB')).toBeVisible()
-  page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: 'Purge cache' }).click()
+  await page.locator('.app-confirm-dialog').getByRole('button', { name: 'Purge cache' }).click()
   await expect.poll(() => cachePurged).toBe(true)
   await expect(page.getByRole('button', { name: 'Purge cache' })).not.toHaveCSS('border-style', 'none')
 })
@@ -288,7 +328,6 @@ test('changes the administrator password and revokes the active session', async 
   })
 
   await page.goto('/admin')
-  page.once('dialog', dialog => dialog.accept())
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in' }).click()
   await page.getByRole('button', { name: 'Administrators & security' }).click()
@@ -296,6 +335,7 @@ test('changes the administrator password and revokes the active session', async 
   await passwordForm.getByLabel('Current password').fill('correct-password')
   await passwordForm.getByLabel('New password (12 characters minimum)').fill('replacement-password')
   await passwordForm.getByRole('button', { name: 'Change password', exact: true }).click()
+  await page.locator('.app-confirm-dialog').getByRole('button', { name: 'Change password' }).click()
   await expect.poll(() => passwordRequest).toEqual({ current_password: 'correct-password', new_password: 'replacement-password' })
   await expect.poll(() => loggedOut).toBe(true)
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
@@ -426,11 +466,11 @@ test('signs in by email and rotates the dedicated routing address', async ({ pag
   await expect(page.getByText('1.0 KB', { exact: true })).toBeVisible()
   const disconnect = page.getByRole('button', { name: 'Disconnect' })
   await expect(disconnect).toHaveClass(/revoke-button/)
-  page.once('dialog', dialog => dialog.accept())
   await disconnect.click()
+  await page.locator('.app-confirm-dialog').getByRole('button', { name: 'Disconnect' }).click()
   await expect(page.getByText('GitHub was disconnected.')).toBeVisible()
-  page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: 'Generate a new routing address' }).click()
+  await page.locator('.app-confirm-dialog').getByRole('button', { name: 'Rotate address' }).click()
   await expect(page.locator('input[readonly]')).toHaveValue('https://rotated-routing-id.mirror.example')
 })
 
@@ -614,14 +654,14 @@ test('revokes administrator sessions and searches and soft-deletes users', async
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await page.getByRole('button', { name: 'Administrators & security' }).click()
-  page.once('dialog', dialog => dialog.accept())
   await page.locator('.admin-account-row', { hasText: 'passkey' }).getByRole('button', { name: 'Revoke' }).click()
+  await page.locator('.app-confirm-dialog').getByRole('button', { name: 'Revoke session' }).click()
   await expect.poll(() => revokedSession).toBe('0123456789abcdef01234567')
   await page.getByRole('button', { name: 'Users & groups' }).click()
   await page.getByLabel('Search users').fill('search-me')
   await expect(page.getByText('search-me@example.com')).toBeVisible()
   await expect(page.getByText('other@example.com')).toHaveCount(0)
-  page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: 'Delete' }).click()
+  await page.locator('.app-confirm-dialog').getByRole('button', { name: 'Delete user' }).click()
   await expect.poll(() => deletedUser).toBe(true)
 })

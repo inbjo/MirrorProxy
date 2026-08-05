@@ -1,0 +1,9 @@
+{
+  "date": "2026-08-05",
+  "framework": "React 19 + Vite 8 + Tailwind CSS 4",
+  "font_stack": "Aptos + Cascadia Mono",
+  "palette": "cool teal custom properties",
+  "motion": "motion-cut; no motion library",
+  "spacing": "4-point named scale in tokens.css",
+  "source_files": ["web/package.json", "web/src/styles.css", "web/src/main.tsx"]
+}

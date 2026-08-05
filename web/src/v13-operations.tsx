@@ -2,8 +2,9 @@ import * as React from 'react'
 import { Trash2 } from 'lucide-react'
 
 type Locale = 'en' | 'zh'
+type ConfirmAction = (request: { locale: Locale; message: string; title?: string; confirmLabel?: string; tone?: 'primary' | 'danger' }) => Promise<boolean>
 
-export function CacheOperations({ locale }: { locale: Locale }) {
+export function CacheOperations({ locale, confirmAction }: { locale: Locale; confirmAction: ConfirmAction }) {
   const [stats, setStats] = React.useState<{ entries: number; bytes: number; max_bytes: number } | null>(null)
   const [busy, setBusy] = React.useState(false)
   const load = React.useCallback(async () => {
@@ -12,7 +13,7 @@ export function CacheOperations({ locale }: { locale: Locale }) {
   }, [])
   React.useEffect(() => { load().catch(() => undefined) }, [load])
   const purge = async () => {
-    if (!window.confirm(locale === 'zh' ? '确定清空全部磁盘缓存吗？' : 'Purge every disk-cache entry?')) return
+    if (!await confirmAction({ locale, title: locale === 'zh' ? '清空磁盘缓存' : 'Purge disk cache', message: locale === 'zh' ? '确定清空全部磁盘缓存吗？此操作会删除当前缓存的所有条目。' : 'Purge every disk-cache entry? This removes all currently cached entries.', confirmLabel: locale === 'zh' ? '清空缓存' : 'Purge cache', tone: 'danger' })) return
     setBusy(true)
     try { await fetch('/admin/api/cache', { method: 'DELETE' }); await load() } finally { setBusy(false) }
   }
