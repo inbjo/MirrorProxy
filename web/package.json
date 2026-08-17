@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "pretest": "node scripts/check-docker-context.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test"
   },

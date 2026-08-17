@@ -13,6 +13,9 @@ follow semantic versioning.
 - Made release GeoIP downloads reproducible by pinning the ip2region data to a
   verified upstream commit and matching SHA-256 checksums instead of combining
   mutable `master` URLs with fixed hashes.
+- Included the root design-token stylesheet in the Docker frontend stage and
+  added a source-contract check so container builds cannot drift from normal
+  frontend builds.
 
 ### Web console
 
