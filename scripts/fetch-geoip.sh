@@ -3,10 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESTINATION="${MIRRORPROXY_GEOIP_DESTINATION:-$ROOT_DIR/geoip}"
-V4_URL="https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb"
-V6_URL="https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v6.xdb"
-V4_SHA256="6307a9696f5711f84bcb8b25f07894de68a64a0ed4a1cc7e990562dd3084f210"
-V6_SHA256="5b93da35ac28bc316dccc54a758381f7a874ae0461dd51ff5df5e34815586f11"
+IP2REGION_COMMIT="800d19424237f4be5f2081e6cd9547d98f3871c3"
+V4_URL="https://raw.githubusercontent.com/lionsoul2014/ip2region/$IP2REGION_COMMIT/data/ip2region_v4.xdb"
+V6_URL="https://raw.githubusercontent.com/lionsoul2014/ip2region/$IP2REGION_COMMIT/data/ip2region_v6.xdb"
+V4_SHA256="c6edaf379fe524d7283a9c11c7eac27d5641a0976baa48c22c319ccd59aa3f36"
+V6_SHA256="939f6b46bd2b8bec3cf7c5ceb8ba782266ae9b1f35b5ba7916700dec0b7506ed"
 
 mkdir -p "$DESTINATION"
 

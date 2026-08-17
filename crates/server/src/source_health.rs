@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -192,7 +193,17 @@ pub fn is_running() -> bool {
 }
 
 pub async fn report(state: &AppState, include_errors: bool) -> anyhow::Result<SourceHealthReport> {
+    let config = state.config();
+    let custom_targets = custom_upstreams(&config.upstreams)
+        .into_iter()
+        .map(|(target, _)| target)
+        .collect::<HashSet<_>>();
+    let total = PROBES.len() + custom_targets.len();
     let mut items = state.database.source_health().await?;
+    items.retain(|item| {
+        PROBES.iter().any(|probe| probe.target == item.target_code)
+            || custom_targets.contains(&item.target_code)
+    });
     if !include_errors {
         for item in &mut items {
             item.error = None;
@@ -214,15 +225,15 @@ pub async fn report(state: &AppState, include_errors: bool) -> anyhow::Result<So
         .iter()
         .filter(|item| item.status == "disabled")
         .count();
-    let known = items.len().min(PROBES.len());
+    let known = items.len().min(total);
     Ok(SourceHealthReport {
         running: is_running(),
-        total: PROBES.len(),
+        total,
         healthy,
         degraded,
         unhealthy,
         disabled,
-        unknown: PROBES.len().saturating_sub(known),
+        unknown: total.saturating_sub(known),
         last_checked_at: items.iter().map(|item| item.checked_at).max(),
         items,
     })
@@ -234,7 +245,7 @@ pub async fn run(state: AppState) -> anyhow::Result<SourceHealthReport> {
     let config = state.config();
     let checked_at = chrono::Utc::now().timestamp();
 
-    let records = stream::iter(PROBES.iter().copied())
+    let mut records = stream::iter(PROBES.iter().copied())
         .map(|probe| {
             let state = state.clone();
             let config = config.clone();
@@ -258,6 +269,33 @@ pub async fn run(state: AppState) -> anyhow::Result<SourceHealthReport> {
         .buffer_unordered(CHECK_CONCURRENCY)
         .collect::<Vec<_>>()
         .await;
+
+    let custom_records = stream::iter(custom_upstreams(&config.upstreams))
+        .map(|(target, configured)| {
+            let state = state.clone();
+            let target = target.to_string();
+            let configured = configured.to_string();
+            let enabled = config.is_enabled("os");
+            async move {
+                if !enabled {
+                    return SourceHealthRecord {
+                        target_code: target,
+                        adapter: "os".to_string(),
+                        status: "disabled".to_string(),
+                        http_status: None,
+                        latency_ms: None,
+                        checked_at,
+                        error: None,
+                        endpoints: Vec::new(),
+                    };
+                }
+                check_custom_upstream(&state, &target, &configured, checked_at).await
+            }
+        })
+        .buffer_unordered(CHECK_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+    records.extend(custom_records);
 
     state.database.replace_source_health(&records).await?;
     report(&state, true).await
@@ -306,10 +344,51 @@ async fn check_probe(
             .buffer_unordered(CHECK_CONCURRENCY)
             .collect::<Vec<_>>()
             .await;
+    summarize_endpoints(probe.target, probe.adapter, endpoints, checked_at)
+}
+
+async fn check_custom_upstream(
+    state: &AppState,
+    target: &str,
+    configured: &str,
+    checked_at: i64,
+) -> SourceHealthRecord {
+    let configured_endpoints = configured
+        .split(',')
+        .map(str::trim)
+        .filter(|endpoint| !endpoint.is_empty())
+        .enumerate()
+        .map(|(position, endpoint)| (position as u32, endpoint.to_string()))
+        .collect::<Vec<_>>();
+    let endpoints = stream::iter(configured_endpoints)
+        .map(|(position, endpoint)| {
+            let state = state.clone();
+            async move { check_custom_endpoint(&state, position, &endpoint, checked_at).await }
+        })
+        .buffer_unordered(CHECK_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+    summarize_endpoints(target, "os", endpoints, checked_at)
+}
+
+fn summarize_endpoints(
+    target: &str,
+    adapter: &str,
+    mut endpoints: Vec<SourceEndpointHealthRecord>,
+    checked_at: i64,
+) -> SourceHealthRecord {
     if endpoints.is_empty() {
-        return failed_record(probe, checked_at, "no upstream configured");
+        return SourceHealthRecord {
+            target_code: target.to_string(),
+            adapter: adapter.to_string(),
+            status: "unhealthy".to_string(),
+            http_status: None,
+            latency_ms: None,
+            checked_at,
+            error: Some("no upstream configured".to_string()),
+            endpoints,
+        };
     }
-    let mut endpoints = endpoints;
     endpoints.sort_by_key(|endpoint| endpoint.position);
     let available = endpoints
         .iter()
@@ -339,14 +418,66 @@ async fn check_probe(
         .filter_map(|endpoint| endpoint.latency_ms)
         .max();
     SourceHealthRecord {
-        target_code: probe.target.to_string(),
-        adapter: probe.adapter.to_string(),
+        target_code: target.to_string(),
+        adapter: adapter.to_string(),
         status: status.to_string(),
         http_status,
         latency_ms,
         checked_at,
         error,
         endpoints,
+    }
+}
+
+async fn check_custom_endpoint(
+    state: &AppState,
+    position: u32,
+    configured: &str,
+    checked_at: i64,
+) -> SourceEndpointHealthRecord {
+    let started = Instant::now();
+    let parsed = endpoint_url(configured, "");
+    let endpoint = Url::parse(configured)
+        .as_ref()
+        .map(redacted_endpoint)
+        .unwrap_or_else(|_| configured.to_string());
+    let result = match parsed {
+        Ok(url) => proxy::probe_endpoint(state, Method::GET, url).await,
+        Err(error) => {
+            return SourceEndpointHealthRecord {
+                position,
+                endpoint,
+                status: "unhealthy".to_string(),
+                http_status: None,
+                latency_ms: Some(started.elapsed().as_millis() as u64),
+                checked_at,
+                error: Some(short_error(error.to_string())),
+            };
+        }
+    };
+    match result {
+        Ok(response) => {
+            let status = response.status();
+            let healthy = status.is_success() || status.is_redirection();
+            SourceEndpointHealthRecord {
+                position,
+                endpoint,
+                status: if healthy { "healthy" } else { "unhealthy" }.to_string(),
+                http_status: Some(status.as_u16()),
+                latency_ms: Some(started.elapsed().as_millis() as u64),
+                checked_at,
+                error: (!healthy).then(|| format!("HTTP {}", status.as_u16())),
+            }
+        }
+        Err(error) => SourceEndpointHealthRecord {
+            position,
+            endpoint,
+            status: "unhealthy".to_string(),
+            http_status: error.status().map(|status| status.as_u16()),
+            latency_ms: Some(started.elapsed().as_millis() as u64),
+            checked_at,
+            error: Some(short_error(error.to_string())),
+        },
     }
 }
 
@@ -532,6 +663,15 @@ fn os_upstream<'a>(upstreams: &'a Upstreams, path: &str) -> Option<&'a str> {
     })
 }
 
+fn custom_upstreams(upstreams: &Upstreams) -> Vec<(String, String)> {
+    upstreams
+        .additional_os
+        .iter()
+        .filter(|(target, _)| !PROBES.iter().any(|probe| probe.target == target.as_str()))
+        .map(|(target, configured)| (target.clone(), configured.clone()))
+        .collect()
+}
+
 fn short_error(mut value: String) -> String {
     const MAX_CHARS: usize = 240;
     if value.chars().count() > MAX_CHARS {
@@ -641,6 +781,10 @@ mod tests {
         let (database, _) = crate::database::Database::open(":memory:").await.unwrap();
         let mut config = crate::config::Config::default();
         config.upstreams.maven = format!("http://{unavailable}, http://{available}");
+        config
+            .upstreams
+            .additional_os
+            .insert("clickhouse".to_string(), format!("http://{available}"));
         let state = AppState {
             config: std::sync::Arc::new(std::sync::RwLock::new(config.clone())),
             database: std::sync::Arc::new(database),
@@ -673,16 +817,30 @@ mod tests {
         assert_eq!(record.endpoints.len(), 2);
         assert_eq!(record.endpoints[0].http_status, Some(403));
         assert_eq!(record.endpoints[1].http_status, Some(200));
+        let custom_record = check_custom_upstream(
+            &state,
+            "clickhouse",
+            &format!("http://{available}"),
+            1_721_880_000,
+        )
+        .await;
+        assert_eq!(custom_record.target_code, "clickhouse");
+        assert_eq!(custom_record.adapter, "os");
+        assert_eq!(custom_record.status, "healthy");
+        assert_eq!(custom_record.endpoints[0].http_status, Some(200));
         state
             .database
-            .replace_source_health(&[record])
+            .replace_source_health(&[record, custom_record])
             .await
             .unwrap();
         let report = report(&state, true).await.unwrap();
-        assert_eq!(report.total, 60);
+        assert_eq!(report.total, 61);
         assert_eq!(report.degraded, 1);
         assert_eq!(report.unknown, 59);
-        assert_eq!(report.items[0].endpoints.len(), 2);
+        assert!(report
+            .items
+            .iter()
+            .any(|item| item.target_code == "maven" && item.endpoints.len() == 2));
         unavailable_server.abort();
         available_server.abort();
     }
