@@ -3,6 +3,38 @@
 All notable changes to MirrorProxy are documented in this file. Release tags
 follow semantic versioning.
 
+## [1.3.2] - 2026-08-17
+
+### Source health and build reliability
+
+- Added administrator-defined `additional_os` repositories to automatic and
+  manual source-health checks, including endpoint status, latency, aggregate
+  counts, and cleanup of stale results after a repository is removed.
+- Made release GeoIP downloads reproducible by pinning the ip2region data to a
+  verified upstream commit and matching SHA-256 checksums instead of combining
+  mutable `master` URLs with fixed hashes.
+
+### Web console
+
+- Reworked the public, account, and administrator layouts for narrow mobile
+  viewports without horizontal page overflow, while giving desktop
+  administration pages more usable width.
+- Kept dense administrator navigation discoverable with compact labels and a
+  visible horizontal scrollbar on smaller screens.
+- Replaced browser-native confirmations with consistent, accessible in-app
+  dialogs for cache purge, account and session revocation, routing-address
+  rotation, custom repository deletion, and other sensitive operations.
+- Improved destructive-action hit areas and responsive configuration forms.
+
+### Security and documentation
+
+- Updated vulnerable transitive `undici` and `nanoid` dependencies without
+  broad frontend framework upgrades; the official npm audit is clean.
+- Reframed the English and Chinese README around practical deployment value,
+  supported source coverage, team controls, and operational visibility.
+- Retired completed implementation-plan documents and directed ongoing work to
+  GitHub Issues, Milestones, and release notes.
+
 ## [1.3.1] - 2026-08-03
 
 ### Custom software repositories
@@ -149,3 +181,4 @@ Multi-instance clustering and high availability are intentionally outside the
 [1.2.0]: https://github.com/inbjo/MirrorProxy/compare/v1.1.0...v1.2.0
 [1.3.0]: https://github.com/inbjo/MirrorProxy/compare/v1.2.0...v1.3.0
 [1.3.1]: https://github.com/inbjo/MirrorProxy/compare/v1.3.0...v1.3.1
+[1.3.2]: https://github.com/inbjo/MirrorProxy/compare/v1.3.1...v1.3.2
