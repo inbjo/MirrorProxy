@@ -6,7 +6,14 @@ set -Eeuo pipefail
 # caller's package-manager configuration.
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-port="${MIRRORPROXY_SMOKE_PORT:-39102}"
+select_available_port() {
+  python3 -c 'import socket
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])'
+}
+
+port="${MIRRORPROXY_SMOKE_PORT:-$(select_available_port)}"
 base="http://127.0.0.1:${port}"
 startup_timeout="${MIRRORPROXY_SMOKE_STARTUP_TIMEOUT:-300}"
 

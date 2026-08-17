@@ -34,7 +34,7 @@ Navigation uses N9 edge-aligned minimal. The footer uses Ft2 inline single line.
 
 ## Spacing
 
-Use the named 4-point scale in `tokens.css`. Component CSS must reference tokens
+Use the named 4-point scale in `web/src/tokens.css`. Component CSS must reference tokens
 rather than introduce raw spacing values when touched.
 
 ## Motion
@@ -70,9 +70,9 @@ rather than introduce raw spacing values when touched.
 
 ## Exports
 
-### tokens.css
+### web/src/tokens.css
 
-The canonical source is [`tokens.css`](tokens.css).
+The canonical source is [`web/src/tokens.css`](web/src/tokens.css).
 
 ### Tailwind v4 `@theme`
 

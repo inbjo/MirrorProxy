@@ -13,9 +13,11 @@ follow semantic versioning.
 - Made release GeoIP downloads reproducible by pinning the ip2region data to a
   verified upstream commit and matching SHA-256 checksums instead of combining
   mutable `master` URLs with fixed hashes.
-- Included the root design-token stylesheet in the Docker frontend stage and
-  added a source-contract check so container builds cannot drift from normal
-  frontend builds.
+- Moved the web-only design-token stylesheet into `web/src` so normal and
+  Docker frontend builds use the same context, with a source-contract check to
+  prevent future drift.
+- Replaced the fixed client-smoke listen port with an OS-assigned ephemeral
+  port to avoid collisions with concurrent runner processes.
 
 ### Web console
 

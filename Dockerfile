@@ -7,7 +7,6 @@ WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci
-COPY tokens.css /app/tokens.css
 COPY web/ ./
 RUN npm run build
 
