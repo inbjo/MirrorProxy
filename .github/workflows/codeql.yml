@@ -38,6 +38,21 @@ jobs:
         with:
           components: rust-src
 
+      - name: Configure Rust extractor paths
+        if: matrix.language == 'rust'
+        shell: bash
+        run: |
+          task_rust_sysroot="$(rustc --print sysroot)"
+          task_rust_src="${task_rust_sysroot}/lib/rustlib/src/rust/library"
+          task_proc_macro_server="${task_rust_sysroot}/libexec/rust-analyzer-proc-macro-srv"
+          test -d "${task_rust_src}"
+          test -x "${task_proc_macro_server}"
+          {
+            echo "CODEQL_EXTRACTOR_RUST_OPTION_SYSROOT=${task_rust_sysroot}"
+            echo "CODEQL_EXTRACTOR_RUST_OPTION_SYSROOT_SRC=${task_rust_src}"
+            echo "CODEQL_EXTRACTOR_RUST_OPTION_PROC_MACRO_SERVER=${task_proc_macro_server}"
+          } >> "${GITHUB_ENV}"
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
