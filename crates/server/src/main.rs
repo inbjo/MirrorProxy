@@ -6271,23 +6271,23 @@ mod tests {
 
     #[test]
     fn generated_admin_credentials_log_contains_username_and_password() {
-        let message = initial_admin_credentials_log("admin", "generated-password", true);
+        let generated_password = uuid::Uuid::new_v4().to_string();
+        let message = initial_admin_credentials_log("admin", &generated_password, true);
 
         let mut lines = message.lines();
         assert_eq!(lines.next(), Some(""));
         assert_eq!(lines.next(), Some("INITIAL ADMIN USERNAME: admin"));
-        assert_eq!(
-            lines.next(),
-            Some("INITIAL ADMIN PASSWORD: generated-password")
-        );
+        let expected_password_line = format!("INITIAL ADMIN PASSWORD: {generated_password}");
+        assert_eq!(lines.next(), Some(expected_password_line.as_str()));
     }
 
     #[test]
     fn configured_admin_password_is_not_printed() {
-        let message = initial_admin_credentials_log("admin", "secret", false);
+        let configured_password = uuid::Uuid::new_v4().to_string();
+        let message = initial_admin_credentials_log("admin", &configured_password, false);
         assert!(message.contains("INITIAL ADMIN USERNAME: admin"));
         assert!(message.contains("configured by MIRRORPROXY_ADMIN_PASSWORD (not shown)"));
-        assert!(!message.contains("secret"));
+        assert!(!message.contains(&configured_password));
     }
 
     #[test]

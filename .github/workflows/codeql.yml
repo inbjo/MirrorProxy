@@ -1,0 +1,69 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: rust
+            build-mode: manual
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        if: matrix.language == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        if: matrix.language == 'rust'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web console for embedded server assets
+        if: matrix.language == 'rust'
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Build complete Rust workspace
+        if: matrix.build-mode == 'manual'
+        run: |
+          cargo clean
+          cargo build --workspace --all-targets --locked
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
