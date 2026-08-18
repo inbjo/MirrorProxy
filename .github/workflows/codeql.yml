@@ -32,6 +32,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Install Rust analysis toolchain
+        if: matrix.language == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-src
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
