@@ -57,14 +57,13 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.2
       - name: Audit Rust dependencies
-        uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # RUSTSEC-2023-0071 affects RSA private-key operations. MirrorProxy only
-          # reaches rsa through openidconnect for public-key signature verification,
-          # and the advisory currently has no patched rsa release.
-          ignore: RUSTSEC-2023-0071
+        # RUSTSEC-2023-0071 affects RSA private-key operations. MirrorProxy only
+        # reaches rsa through openidconnect for public-key signature verification,
+        # and the advisory currently has no patched rsa release.
+        run: cargo audit --ignore RUSTSEC-2023-0071
       - name: Audit web dependencies
         working-directory: web
         run: |
