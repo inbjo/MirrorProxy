@@ -174,7 +174,7 @@ pub fn parse_oci_path(path: &str) -> Result<OciTarget, ProxyError> {
 
     let marker_index = parts
         .iter()
-        .position(|part| matches!(*part, "manifests" | "blobs" | "tags"))
+        .position(|part| matches!(*part, "manifests" | "blobs" | "tags" | "referrers"))
         .ok_or(ProxyError::InvalidUrl)?;
 
     if marker_index == 0 || marker_index + 1 >= parts.len() {
@@ -316,6 +316,20 @@ mod tests {
         let k8s = parse_oci_path("registry.k8s.io/pause/manifests/3.8").unwrap();
         assert_eq!(k8s.registry, OciRegistry::Kubernetes);
         assert_eq!(k8s.repository, "pause");
+    }
+
+    #[test]
+    fn parses_oci_referrers_path() {
+        let target = parse_oci_path(
+            "ghcr.io/agentscope/qwenpaw/referrers/sha256:b170f205b6e46dcb5f35af839daa334132de869804686204cba357cc1b07f02f",
+        )
+        .unwrap();
+        assert_eq!(target.registry, OciRegistry::Ghcr);
+        assert_eq!(target.repository, "agentscope/qwenpaw");
+        assert_eq!(
+            target.suffix,
+            "referrers/sha256:b170f205b6e46dcb5f35af839daa334132de869804686204cba357cc1b07f02f"
+        );
     }
 
     #[test]

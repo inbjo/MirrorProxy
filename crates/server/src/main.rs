@@ -2026,7 +2026,10 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
         )
         .route("/npm", get(npm::root).head(npm::root))
         .route("/npm/", get(npm::root).head(npm::root))
-        .route("/npm/{*path}", get(npm::proxy).head(npm::proxy))
+        .route(
+            "/npm/{*path}",
+            get(npm::proxy).head(npm::proxy).post(npm::proxy),
+        )
         .route("/nvm", get(nvm::root).head(nvm::root))
         .route("/nvm/", get(nvm::root).head(nvm::root))
         .route("/nvm/{*path}", get(nvm::proxy).head(nvm::proxy))

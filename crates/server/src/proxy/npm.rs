@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, HeaderMap, HeaderValue},
+    http::{header, HeaderMap, HeaderValue, Method},
     response::Response,
 };
 use bytes::Bytes;
@@ -56,15 +56,12 @@ async fn proxy_npm_path(
         format!("/{clean_path}")
     };
     let url = proxy::build_url(&config.upstreams.npm, &upstream_path, query)?;
-    let method = request
-        .as_ref()
-        .map(|req| req.method().clone())
-        .unwrap_or(axum::http::Method::GET);
-    let headers = request
-        .as_ref()
-        .map(|req| req.headers())
-        .cloned()
-        .unwrap_or_default();
+    let (method, headers, body) = request
+        .map(|request| {
+            let (parts, body) = request.into_parts();
+            (parts.method, parts.headers, Some(body))
+        })
+        .unwrap_or_else(|| (Method::GET, HeaderMap::new(), None));
 
     if is_metadata_request(&clean_path) {
         let response = proxy::get_with_fallback(&state, url).await?;
@@ -87,11 +84,32 @@ async fn proxy_npm_path(
             .map_err(|_| ProxyError::InvalidHeader);
     }
 
+    if method == Method::POST {
+        if !is_audit_request(&clean_path) {
+            return Err(ProxyError::MethodNotAllowed);
+        }
+        return proxy::forward_with_body(
+            &state,
+            method,
+            url,
+            &headers,
+            body.expect("proxied request includes a body"),
+        )
+        .await;
+    }
+
     proxy::forward(&state, method, url, &headers).await
 }
 
 fn is_metadata_request(path: &str) -> bool {
-    !path.is_empty() && !path.contains("/-/") && !path.ends_with(".tgz")
+    !path.is_empty() && !path.starts_with("-/") && !path.contains("/-/") && !path.ends_with(".tgz")
+}
+
+fn is_audit_request(path: &str) -> bool {
+    matches!(
+        path,
+        "-/npm/v1/security/advisories/bulk" | "-/npm/v1/security/audits/quick"
+    )
 }
 
 fn sanitize_npm_path(path: &str) -> Result<String, ProxyError> {
@@ -169,7 +187,9 @@ fn rewrite_npm_tarball(url: &str, public_base_url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use axum::{body::to_bytes, http::Request, routing::post, Router};
     use serde_json::json;
+    use tower::ServiceExt;
 
     use super::*;
 
@@ -179,12 +199,55 @@ mod tests {
         assert!(is_metadata_request("@scope%2fpkg"));
         assert!(!is_metadata_request("react/-/react-1.0.0.tgz"));
         assert!(!is_metadata_request("@scope/pkg/-/pkg-1.0.0.tgz"));
+        assert!(!is_metadata_request("-/npm/v1/security/audits/quick"));
     }
 
     #[test]
     fn rejects_path_traversal() {
         assert!(sanitize_npm_path("../react").is_err());
         assert!(sanitize_npm_path("@scope/pkg").is_ok());
+    }
+
+    #[test]
+    fn detects_npm_audit_requests() {
+        assert!(is_audit_request("-/npm/v1/security/advisories/bulk"));
+        assert!(is_audit_request("-/npm/v1/security/audits/quick"));
+        assert!(!is_audit_request("react"));
+        assert!(!is_audit_request("-/package/search"));
+    }
+
+    #[tokio::test]
+    async fn forwards_npm_audit_post_body() {
+        let upstream = Router::new().route(
+            "/-/npm/v1/security/audits/quick",
+            post(|body: String| async move { body }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let mut config = crate::config::Config::default();
+        config.upstreams.npm = format!("http://{address}");
+        let app = crate::build_router(config).await.unwrap();
+        let payload = r#"{"name":"example","version":"1.0.0"}"#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/npm/-/npm/v1/security/audits/quick")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            payload
+        );
+        task.abort();
     }
 
     #[test]
