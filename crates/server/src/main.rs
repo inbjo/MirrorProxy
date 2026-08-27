@@ -5798,6 +5798,17 @@ struct SourceCatalogResponse {
     targets: Vec<SourceTargetSummary>,
     sources: Vec<TargetSourceSummary>,
     templates: Vec<SourceTemplateSummary>,
+    container_registries: Vec<ContainerRegistrySummary>,
+}
+
+#[derive(Serialize)]
+struct ContainerRegistrySummary {
+    code: &'static str,
+    name: &'static str,
+    host: &'static str,
+    aliases: &'static [&'static str],
+    example_image: &'static str,
+    legacy: bool,
 }
 
 #[derive(Serialize)]
@@ -5912,6 +5923,17 @@ async fn source_catalog(State(state): State<AppState>) -> impl IntoResponse {
                 scope: template.scope.as_str(),
                 template: template.template,
                 requires_sudo: template.requires_sudo,
+            })
+            .collect(),
+        container_registries: catalog::CONTAINER_REGISTRIES
+            .iter()
+            .map(|registry| ContainerRegistrySummary {
+                code: registry.code,
+                name: registry.name,
+                host: registry.host,
+                aliases: registry.aliases,
+                example_image: registry.example_image,
+                legacy: registry.legacy,
             })
             .collect(),
     })
@@ -8484,6 +8506,12 @@ on_exceeded = "stop_proxy"
                     .as_str()
                     .unwrap()
                     .contains("[source.crates-io]")));
+        assert!(value["container_registries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|registry| registry["host"] == "mcr.microsoft.com"
+                && registry["example_image"] == "mcr.microsoft.com/dotnet/runtime:8.0"));
     }
 
     #[tokio::test]

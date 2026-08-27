@@ -10,8 +10,6 @@ use crate::{config::Upstreams, proxy, AppState};
 
 use super::ProxyError;
 
-const DOCKER_HUB_SERVICE: &str = "registry.docker.io";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OciTarget {
     pub registry: OciRegistry,
@@ -25,6 +23,9 @@ pub enum OciRegistry {
     Ghcr,
     Quay,
     Kubernetes,
+    Gcr,
+    Mcr,
+    Elastic,
 }
 
 pub async fn root(State(state): State<AppState>) -> Result<Response, ProxyError> {
@@ -160,6 +161,9 @@ fn build_upstream_url(
         OciRegistry::Ghcr => &upstreams.ghcr,
         OciRegistry::Quay => &upstreams.quay,
         OciRegistry::Kubernetes => &upstreams.kubernetes,
+        OciRegistry::Gcr => &upstreams.gcr,
+        OciRegistry::Mcr => &upstreams.mcr,
+        OciRegistry::Elastic => &upstreams.elastic,
     };
     let path = format!("/v2/{}/{}", target.repository, target.suffix);
     proxy::build_url(base, &path, query)
@@ -187,6 +191,12 @@ pub fn parse_oci_path(path: &str) -> Result<OciTarget, ProxyError> {
         "ghcr.io" => (OciRegistry::Ghcr, &repo_parts[1..]),
         "quay.io" => (OciRegistry::Quay, &repo_parts[1..]),
         "registry.k8s.io" => (OciRegistry::Kubernetes, &repo_parts[1..]),
+        // k8s.gcr.io is a frozen legacy endpoint. Keep accepting old image
+        // references while serving them from the current Kubernetes registry.
+        "k8s.gcr.io" => (OciRegistry::Kubernetes, &repo_parts[1..]),
+        "gcr.io" => (OciRegistry::Gcr, &repo_parts[1..]),
+        "mcr.microsoft.com" => (OciRegistry::Mcr, &repo_parts[1..]),
+        "docker.elastic.co" => (OciRegistry::Elastic, &repo_parts[1..]),
         _ => (OciRegistry::DockerHub, repo_parts),
     };
 
@@ -246,7 +256,7 @@ async fn fetch_bearer_token(
     challenge: &BearerChallenge,
 ) -> Result<String, ProxyError> {
     let mut url = Url::parse(&challenge.realm).map_err(|_| ProxyError::InvalidUrl)?;
-    if let Some(service) = challenge.service.as_deref().or(Some(DOCKER_HUB_SERVICE)) {
+    if let Some(service) = challenge.service.as_deref() {
         url.query_pairs_mut().append_pair("service", service);
     }
     if let Some(scope) = &challenge.scope {
@@ -316,6 +326,24 @@ mod tests {
         let k8s = parse_oci_path("registry.k8s.io/pause/manifests/3.8").unwrap();
         assert_eq!(k8s.registry, OciRegistry::Kubernetes);
         assert_eq!(k8s.repository, "pause");
+
+        let legacy_k8s = parse_oci_path("k8s.gcr.io/pause/manifests/3.8").unwrap();
+        assert_eq!(legacy_k8s.registry, OciRegistry::Kubernetes);
+        assert_eq!(legacy_k8s.repository, "pause");
+
+        let gcr = parse_oci_path("gcr.io/google-containers/pause/manifests/3.9").unwrap();
+        assert_eq!(gcr.registry, OciRegistry::Gcr);
+        assert_eq!(gcr.repository, "google-containers/pause");
+
+        let mcr = parse_oci_path("mcr.microsoft.com/dotnet/runtime/manifests/8.0").unwrap();
+        assert_eq!(mcr.registry, OciRegistry::Mcr);
+        assert_eq!(mcr.repository, "dotnet/runtime");
+
+        let elastic =
+            parse_oci_path("docker.elastic.co/elasticsearch/elasticsearch/manifests/8.13.4")
+                .unwrap();
+        assert_eq!(elastic.registry, OciRegistry::Elastic);
+        assert_eq!(elastic.repository, "elasticsearch/elasticsearch");
     }
 
     #[test]
@@ -330,6 +358,37 @@ mod tests {
             target.suffix,
             "referrers/sha256:b170f205b6e46dcb5f35af839daa334132de869804686204cba357cc1b07f02f"
         );
+    }
+
+    #[test]
+    fn builds_new_registry_upstream_urls() {
+        let upstreams = Upstreams::default();
+        for (path, expected) in [
+            (
+                "gcr.io/google-containers/pause/manifests/3.9",
+                "https://gcr.io/v2/google-containers/pause/manifests/3.9",
+            ),
+            (
+                "mcr.microsoft.com/dotnet/runtime/manifests/8.0",
+                "https://mcr.microsoft.com/v2/dotnet/runtime/manifests/8.0",
+            ),
+            (
+                "docker.elastic.co/elasticsearch/elasticsearch/manifests/8.13.4",
+                "https://docker.elastic.co/v2/elasticsearch/elasticsearch/manifests/8.13.4",
+            ),
+            (
+                "k8s.gcr.io/pause/manifests/3.8",
+                "https://registry.k8s.io/v2/pause/manifests/3.8",
+            ),
+        ] {
+            let target = parse_oci_path(path).unwrap();
+            assert_eq!(
+                build_upstream_url(&upstreams, &target, None)
+                    .unwrap()
+                    .as_str(),
+                expected
+            );
+        }
     }
 
     #[test]

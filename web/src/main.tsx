@@ -233,6 +233,15 @@ type SourceCatalog = {
   targets: SourceTarget[]
   sources: TargetSource[]
   templates: SourceTemplate[]
+  container_registries?: ContainerRegistryTarget[]
+}
+type ContainerRegistryTarget = {
+  code: string
+  name: string
+  host: string
+  aliases: string[]
+  example_image: string
+  legacy: boolean
 }
 type MirrorProvider = {
   code: string
@@ -394,7 +403,18 @@ const messages = {
     quickGithubTitle: 'GitHub link acceleration',
     quickGithubHint: 'Paste a github.com, raw.githubusercontent.com, or release download URL.',
     quickDockerTitle: 'Docker image acceleration',
-    quickDockerHint: 'Supports nginx, ghcr.io/org/image:tag, and quay.io/org/image.',
+    quickDockerHint: 'Supports Docker Hub, GHCR, Quay, Kubernetes, GCR, MCR, and Elastic public images.',
+    registryWorkbench: 'Container registry workbench',
+    registryWorkbenchHint: 'Validate one image reference or rewrite Compose and Dockerfile content against registries this server actually supports.',
+    singleImage: 'Single image',
+    composeFile: 'Compose YAML',
+    dockerfile: 'Dockerfile',
+    dockerEngine: 'Docker Engine',
+    k3sConfig: 'K3s',
+    platformConfigHint: 'Generated configuration applies to Docker Hub only; use explicit image rewrites for other registries.',
+    registryInputHint: 'Paste an image reference or configuration content',
+    unsupportedRegistry: 'This registry is not supported by the current MirrorProxy server.',
+    legacyRegistry: 'Legacy alias',
     proxyLink: 'Proxy link',
     pullCommand: 'Pull command',
     sourceCatalogHeading: 'Choose a source configuration',
@@ -426,7 +446,7 @@ const messages = {
     closeConfig: 'Close configuration',
     githubDesc: 'Proxy repository pages, release assets, raw files, archives, and Composer GitHub dist URLs.',
     composerDesc: 'Use MirrorProxy as a Packagist-compatible Composer repository.',
-    ociDesc: 'Pull Docker Hub, GHCR, Quay, and Kubernetes public images through the same registry endpoint.',
+    ociDesc: 'Pull Docker Hub, GHCR, Quay, Kubernetes, GCR, MCR, and Elastic public images through the same registry endpoint.',
     npmDesc: 'Use MirrorProxy as an npm-compatible registry for npm, yarn, and pnpm public packages.',
     goDesc: 'Point GOPROXY at MirrorProxy and fetch public Go modules through proxy.golang.org.',
     cratesDesc: 'Use MirrorProxy as a Cargo sparse registry mirror for crates.io public packages.',
@@ -490,7 +510,18 @@ const messages = {
     quickGithubTitle: 'GitHub 地址加速',
     quickGithubHint: '输入 github.com、raw.githubusercontent.com 或 release 下载地址。',
     quickDockerTitle: 'Docker 镜像加速',
-    quickDockerHint: '支持 nginx、ghcr.io/org/image:tag、quay.io/org/image。',
+    quickDockerHint: '支持 Docker Hub、GHCR、Quay、Kubernetes、GCR、MCR、Elastic 的公开镜像。',
+    registryWorkbench: '容器 Registry 配置台',
+    registryWorkbenchHint: '基于服务器真实支持列表校验单个镜像，或批量转换 Compose 与 Dockerfile。',
+    singleImage: '单个镜像',
+    composeFile: 'Compose YAML',
+    dockerfile: 'Dockerfile',
+    dockerEngine: 'Docker Engine',
+    k3sConfig: 'K3s',
+    platformConfigHint: '生成的运行时配置仅作用于 Docker Hub；其他 Registry 请显式改写镜像地址。',
+    registryInputHint: '粘贴镜像地址或配置内容',
+    unsupportedRegistry: '当前 MirrorProxy 服务端尚不支持这个 Registry。',
+    legacyRegistry: '旧版兼容',
     proxyLink: '代理链接',
     pullCommand: '拉取命令',
     sourceCatalogHeading: '按类型选择配置',
@@ -522,7 +553,7 @@ const messages = {
     closeConfig: '关闭配置',
     githubDesc: '代理仓库页面、release 文件、raw 文件、archive，以及 Composer 中常见的 GitHub dist 地址。',
     composerDesc: '将 MirrorProxy 配置为兼容 Packagist 的 Composer 仓库。',
-    ociDesc: '通过同一个 registry 地址拉取 Docker Hub、GHCR、Quay 和 Kubernetes 公开镜像。',
+    ociDesc: '通过同一个 Registry 地址拉取 Docker Hub、GHCR、Quay、Kubernetes、GCR、MCR 和 Elastic 公开镜像。',
     npmDesc: '将 MirrorProxy 作为兼容 npm registry 的公开包代理，npm、yarn、pnpm 可共用。',
     goDesc: '将 GOPROXY 指向 MirrorProxy，通过 proxy.golang.org 拉取公开 Go modules。',
     cratesDesc: '将 MirrorProxy 配置为 Cargo sparse registry 镜像，代理 crates.io 公开包。',
@@ -994,7 +1025,7 @@ function AccelerationWorkbench({ baseUrl, config, catalog, health, labels, onCop
   const [selectedCategories, setSelectedCategories] = React.useState<Record<SourceTarget['category'], boolean>>({ lang: false, os: false, repo: false })
   const [sourceQuery, setSourceQuery] = React.useState('')
   const githubLink = githubInput.trim() ? `${baseUrl}/${githubInput.trim().replace(/^\/+/, '')}` : ''
-  const dockerImage = dockerInput.trim().replace(/^docker:\/\//, '').replace(/^https?:\/\//, '')
+  const dockerImage = normalizeContainerImage(dockerInput, catalog?.container_registries ?? [])
   const dockerCommand = dockerImage ? `docker pull ${new URL(baseUrl).host}/${dockerImage}` : ''
   const filteredTargets = React.useMemo(() => {
     if (!catalog) return []
@@ -1028,6 +1059,7 @@ function AccelerationWorkbench({ baseUrl, config, catalog, health, labels, onCop
       <LinkConverter title={labels.quickGithubTitle} icon={<Github size={19} />} hint={labels.quickGithubHint} value={githubInput} onChange={setGithubInput} output={githubLink} outputLabel={labels.proxyLink} placeholder="https://github.com/owner/repo/releases/download/…" copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-github'} onCopy={() => githubLink && onCopy('quick-github', githubLink)} />
       <LinkConverter title={labels.quickDockerTitle} icon={<Container size={19} />} hint={labels.quickDockerHint} value={dockerInput} onChange={setDockerInput} output={dockerCommand} outputLabel={labels.pullCommand} placeholder="ghcr.io/owner/image:latest" copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-docker'} onCopy={() => dockerCommand && onCopy('quick-docker', dockerCommand)} />
     </div>
+    {catalog?.container_registries?.length ? <ContainerRegistryWorkbench registries={catalog.container_registries} baseUrl={baseUrl} labels={labels} copied={copied} onCopy={onCopy} /> : null}
     <InstallClientPanel baseUrl={baseUrl} labels={labels} copied={copied} onCopy={onCopy} />
     {catalog ? <div className="source-workbench">
       <div className="source-workbench-head"><div><h2>{labels.sourceCatalogHeading}</h2><p>{labels.sourceCatalogHint}</p></div><code>{baseUrl}</code></div>
@@ -1044,6 +1076,57 @@ function AccelerationWorkbench({ baseUrl, config, catalog, health, labels, onCop
       })}</div> : <p className="source-no-results">{labels.sourceNoResults}</p>}
     </div> : null}
     {selectedTarget && catalog ? <SourceConfigModal target={selectedTarget} health={healthByTarget.get(selectedTarget.code)} baseUrl={baseUrl} catalog={catalog} labels={labels} copied={copied} onCopy={onCopy} onClose={() => setSelectedTarget(null)} /> : null}
+  </section>
+}
+
+export function normalizeContainerImage(input: string, registries: ContainerRegistryTarget[]) {
+  let image = input.trim().replace(/^docker\s+pull\s+/i, '').replace(/^docker:\/\//, '').replace(/^https?:\/\//, '')
+  image = image.split(/\s+#/)[0].trim().replace(/^\/+/, '')
+  if (!image || /\s/.test(image)) return ''
+  const [first, ...rest] = image.split('/')
+  const dockerHosts = new Set(['docker.io', 'registry-1.docker.io'])
+  if (dockerHosts.has(first)) return rest.join('/')
+  const explicitHost = first.includes('.') || first.includes(':') || first === 'localhost'
+  if (!explicitHost) return image
+  const supported = registries.some((registry) => registry.host === first || registry.aliases.includes(first))
+  return supported ? image : ''
+}
+
+export function rewriteContainerConfig(content: string, kind: 'compose' | 'dockerfile', baseUrl: string, registries: ContainerRegistryTarget[]) {
+  const mirrorHost = new URL(baseUrl).host
+  const rewrite = (image: string) => {
+    const normalized = normalizeContainerImage(image, registries)
+    return normalized ? `${mirrorHost}/${normalized}` : image
+  }
+  if (kind === 'compose') {
+    return content.split('\n').map((line) => line.replace(/^(\s*image\s*:\s*)(["']?)([^\s"'#]+)(["']?)(\s*(?:#.*)?)$/, (_all, prefix, quote, image, closing, suffix) => `${prefix}${quote}${rewrite(image)}${closing}${suffix}`)).join('\n')
+  }
+  return content.split('\n').map((line) => line.replace(/^(\s*FROM\s+(?:--platform=\S+\s+)?)(\S+)(.*)$/i, (_all, prefix, image, suffix) => `${prefix}${rewrite(image)}${suffix}`)).join('\n')
+}
+
+function ContainerRegistryWorkbench({ registries, baseUrl, labels, copied, onCopy }: { registries: ContainerRegistryTarget[]; baseUrl: string; labels: Record<string, string>; copied: string | null; onCopy: (id: string, value: string) => void }) {
+  const [mode, setMode] = React.useState<'image' | 'compose' | 'dockerfile' | 'engine' | 'k3s'>('image')
+  const [input, setInput] = React.useState(registries.find((item) => !item.legacy)?.example_image ?? 'nginx:latest')
+  const normalized = mode === 'image' ? normalizeContainerImage(input, registries) : ''
+  const output = mode === 'image'
+    ? (normalized ? `docker pull ${new URL(baseUrl).host}/${normalized}` : '')
+    : mode === 'engine'
+      ? `mirrorproxy set docker --mirror mirrorproxy --base-url ${baseUrl} --scope system --dry-run\nsudo mirrorproxy set docker --mirror mirrorproxy --base-url ${baseUrl} --scope system\n# Review running containers, then apply during a maintenance window:\nsudo systemctl restart docker`
+      : mode === 'k3s'
+        ? `mirrors:\n  docker.io:\n    endpoint:\n      - "${baseUrl}"`
+        : rewriteContainerConfig(input, mode, baseUrl, registries)
+  const unsupported = mode === 'image' && input.trim() && !normalized
+  const selectRegistry = (registry: ContainerRegistryTarget) => { setMode('image'); setInput(registry.example_image) }
+
+  return <section className="registry-workbench">
+    <div className="registry-workbench-head"><div><span className="eyebrow">OCI DISTRIBUTION</span><h2>{labels.registryWorkbench}</h2><p>{labels.registryWorkbenchHint}</p></div><span className="registry-count">{registries.filter((item) => !item.legacy).length} REGISTRIES</span></div>
+    <div className="registry-rail">{registries.map((registry) => <button type="button" className={registry.example_image === input ? 'registry-chip active' : 'registry-chip'} onClick={() => selectRegistry(registry)} key={registry.code}><span>{registry.name}</span><code>{registry.host}</code>{registry.legacy ? <em>{labels.legacyRegistry}</em> : null}</button>)}</div>
+    <div className="registry-editor">
+      <div className="registry-modes"><button className={mode === 'image' ? 'active' : ''} onClick={() => setMode('image')}>{labels.singleImage}</button><button className={mode === 'compose' ? 'active' : ''} onClick={() => setMode('compose')}>{labels.composeFile}</button><button className={mode === 'dockerfile' ? 'active' : ''} onClick={() => setMode('dockerfile')}>{labels.dockerfile}</button><button className={mode === 'engine' ? 'active' : ''} onClick={() => setMode('engine')}>{labels.dockerEngine}</button><button className={mode === 'k3s' ? 'active' : ''} onClick={() => setMode('k3s')}>{labels.k3sConfig}</button></div>
+      {mode === 'engine' || mode === 'k3s' ? <p className="registry-platform-hint"><ShieldCheck size={16} />{labels.platformConfigHint}</p> : <label><span>{labels.registryInputHint}</span><textarea rows={mode === 'image' ? 3 : 9} value={input} onChange={(event) => setInput(event.target.value)} placeholder={mode === 'compose' ? 'services:\n  app:\n    image: ghcr.io/owner/app:latest' : mode === 'dockerfile' ? 'FROM mcr.microsoft.com/dotnet/runtime:8.0' : 'mcr.microsoft.com/dotnet/runtime:8.0'} /></label>}
+      {unsupported ? <p className="registry-error"><CircleAlert size={16} />{labels.unsupportedRegistry}</p> : null}
+      {output ? <div className="registry-output"><div><span>{labels.proxyLink}</span><button onClick={() => onCopy('registry-output', output)}><Clipboard size={15} />{copied === 'registry-output' ? labels.copied : labels.copy}</button></div><pre><code>{output}</code></pre></div> : null}
+    </div>
   </section>
 }
 

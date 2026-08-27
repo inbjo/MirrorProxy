@@ -9,7 +9,7 @@
 | 类别 | 代表目标 |
 | --- | --- |
 | 代码与发布 | GitHub、GitHub Raw、Git smart HTTP clone。 |
-| OCI | Docker Hub、GHCR、Quay、Kubernetes Registry、Homebrew OCI。 |
+| OCI | Docker Hub、GHCR、Quay、Kubernetes Registry、GCR、Microsoft MCR、Elastic Registry、Homebrew OCI。 |
 | 语言生态 | Composer、npm、Go、Maven、RubyGems、NuGet、CPAN、CRAN、Hackage、Julia、LuaRocks、Clojars、CocoaPods、Pub、Anaconda、PyPI、Cargo。 |
 | 工具链 | Rustup、NVM、Homebrew、WinGet、TeX Live、ELPA、Nix、Guix、Flatpak。 |
 | 操作系统仓库 | Debian、Ubuntu、Fedora、Arch、Alpine、openSUSE、Void、Gentoo、FreeBSD，以及 OpenWrt、Termux、MSYS2、ROS 和配置的额外目录源。 |

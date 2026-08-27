@@ -127,6 +127,32 @@ button {
 .policy-note svg { flex: 0 0 auto; margin-top: 1px; }
 .policy-note strong { display: block; color: var(--text); font-size: 11px; }
 .policy-note p { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.registry-workbench { position: relative; overflow: hidden; margin-top: 20px; padding: 26px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 14px; background: linear-gradient(135deg, color-mix(in srgb, var(--panel-strong) 94%, var(--accent) 6%), var(--panel)); }
+.registry-workbench::after { position: absolute; top: -120px; right: -90px; width: 260px; height: 260px; border: 1px solid color-mix(in srgb, var(--accent) 16%, transparent); border-radius: 50%; content: ""; pointer-events: none; }
+.registry-workbench-head { position: relative; z-index: 1; display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+.registry-workbench-head h2 { margin: 7px 0 5px; font-size: 27px; }
+.registry-workbench-head p { max-width: 720px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.registry-count { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 999px; color: var(--accent-strong); background: var(--panel-strong); font: 800 10px var(--font-mono); white-space: nowrap; }
+.registry-rail { position: relative; z-index: 1; display: flex; gap: 8px; overflow-x: auto; margin: 20px -4px 0; padding: 4px 4px 10px; }
+.registry-chip { display: grid; flex: 0 0 168px; gap: 4px; min-height: 68px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--panel-strong); cursor: pointer; text-align: left; }
+.registry-chip:hover, .registry-chip.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel-strong)); }
+.registry-chip span { overflow: hidden; font-size: 12px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.registry-chip code { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.registry-chip em { width: max-content; padding: 2px 5px; border-radius: 4px; color: var(--color-warning-strong); background: var(--color-warning-soft); font-size: 9px; font-style: normal; font-weight: 800; }
+.registry-editor { position: relative; z-index: 1; margin-top: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel) 92%, transparent); }
+.registry-modes { display: flex; gap: 6px; margin-bottom: 14px; }
+.registry-modes button { min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--panel-strong); cursor: pointer; font-size: 11px; font-weight: 800; }
+.registry-modes button.active { border-color: var(--accent); color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 10%, var(--panel-strong)); }
+.registry-editor label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.registry-editor textarea { width: 100%; resize: vertical; padding: 12px; border: 1px solid var(--line); border-radius: 8px; outline: 0; color: var(--code); background: var(--code-bg); font: 11px/1.65 var(--font-mono); }
+.registry-editor textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent); }
+.registry-error { display: flex; gap: 7px; align-items: center; margin-top: 10px; color: var(--color-error-strong); font-size: 12px; }
+.registry-platform-hint { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.registry-output { margin-top: 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); border-radius: 8px; }
+.registry-output > div { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 8%, var(--panel-strong)); font-size: 10px; font-weight: 800; }
+.registry-output button { display: inline-flex; gap: 5px; align-items: center; border: 0; color: var(--accent-strong); background: transparent; cursor: pointer; font-size: 10px; font-weight: 800; }
+.registry-output pre { max-height: 280px; margin: 0; overflow: auto; padding: 13px; background: var(--code-bg); }
+.registry-output code { color: var(--code); font: 11px/1.65 var(--font-mono); white-space: pre-wrap; }
 .source-workbench { padding: 26px; }.source-workbench-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; }.source-workbench-head h2 { margin: 7px 0 5px; font-size: 27px; }.source-workbench-head p { color: var(--muted); font-size: 13px; }.source-workbench-head > code { padding: 8px 10px; border-radius: 7px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 11%, transparent); font-size: 12px; }
 .source-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 22px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel-strong) 85%, var(--accent) 5%); }.source-filters { display: flex; flex-wrap: wrap; gap: 7px; }.source-filter { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: var(--panel); font-size: 12px; font-weight: 700; cursor: pointer; transition: background .18s var(--ease-out); }.source-filter input { width: 14px; height: 14px; accent-color: var(--accent); }.source-filter.active { border-color: color-mix(in srgb, var(--accent) 70%, var(--line)); color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 11%, var(--panel)); }.source-search { display: flex; align-items: center; gap: 8px; min-width: min(100%, 280px); padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: var(--panel); }.source-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }.source-search input { width: 100%; min-width: 0; height: 34px; border: 0; outline: 0; color: var(--text); background: transparent; font: inherit; font-size: 12px; }.source-no-results { margin: 24px 0 0; padding: 26px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); text-align: center; }.source-card-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }.source-tile { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; min-height: 94px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--panel-strong); cursor: pointer; text-align: left; transition: background .18s var(--ease-out); }.source-tile > svg { color: var(--accent-strong); }.source-tile:hover { background: color-mix(in srgb, var(--accent) 9%, var(--panel-strong)); }.source-tile.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--panel-strong)); }.source-tile-unhealthy { border-color: color-mix(in srgb, var(--color-error) 55%, var(--line)); }.source-tile-degraded { border-color: color-mix(in srgb, var(--color-warning) 55%, var(--line)); background: color-mix(in srgb, var(--color-warning) 4%, var(--panel-strong)); }.source-tile > span:not(.source-tile-meta) { display: grid; min-width: 0; gap: 4px; }.source-tile strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }.source-tile small { color: var(--muted); font-size: 11px; }.source-tile em { padding: 5px 6px; border-radius: 6px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 11%, transparent); font-size: 10px; font-style: normal; white-space: nowrap; }.source-tile-meta { display: grid; justify-items: end; gap: 7px; }
 .config-modal-backdrop { position: fixed; z-index: var(--z-modal); inset: 0; display: grid; place-items: center; padding: 24px; background: var(--color-overlay); backdrop-filter: blur(7px); }.config-modal { position: relative; width: min(720px, 100%); max-height: min(800px, calc(100dvh - 48px)); overflow: auto; padding: 30px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 15px; background: var(--panel); box-shadow: 0 28px 90px var(--color-overlay); }.config-modal h2 { margin: 8px 0 7px; font-size: 30px; }.config-modal > p { max-width: 570px; color: var(--muted); font-size: 14px; line-height: 1.6; }.config-modal-close { position: absolute; top: 18px; right: 18px; display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--panel-strong); cursor: pointer; }.config-option { display: grid; gap: 7px; min-width: 0; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }.config-option > span { color: var(--accent-strong); font-weight: 800; }.config-option p { color: var(--muted); font-size: 12px; line-height: 1.5; }.config-option pre { max-width: 100%; margin: 0; overflow: hidden; }.config-option code { max-width: 100%; white-space: pre; }.config-option button { min-height: 34px; justify-self: start; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 14%, var(--panel-strong)); }
@@ -1765,7 +1791,8 @@ p {
   }
 
   .accelerator-hero,
-  .source-workbench-head {
+  .source-workbench-head,
+  .registry-workbench-head {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1828,6 +1855,9 @@ p {
   .custom-source-row, .custom-source-add { grid-template-columns: 1fr; }
   .custom-source-path { grid-column: auto; padding-inline: 0; }
   .custom-source-delete { justify-self: end; width: var(--control-min); }
+  .registry-workbench { padding: 18px; }
+  .registry-chip { flex-basis: 148px; }
+  .registry-modes { display: grid; grid-template-columns: 1fr; }
   .app-confirm-actions { align-items: stretch; flex-direction: column-reverse; }
   .app-confirm-actions button { width: 100%; }
   .admin-tab-toolbar { padding: 22px 16px 14px; }

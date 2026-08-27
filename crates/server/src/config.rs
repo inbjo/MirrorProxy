@@ -98,6 +98,12 @@ pub struct Upstreams {
     pub quay: String,
     #[serde(default = "default_kubernetes_registry")]
     pub kubernetes: String,
+    #[serde(default = "default_gcr_registry")]
+    pub gcr: String,
+    #[serde(default = "default_mcr_registry")]
+    pub mcr: String,
+    #[serde(default = "default_elastic_registry")]
+    pub elastic: String,
     #[serde(default = "default_npm_registry")]
     pub npm: String,
     #[serde(default = "default_nvm_repository")]
@@ -1123,6 +1129,9 @@ impl Config {
         validate_http_url("upstreams.ghcr", &self.upstreams.ghcr)?;
         validate_http_url("upstreams.quay", &self.upstreams.quay)?;
         validate_http_url("upstreams.kubernetes", &self.upstreams.kubernetes)?;
+        validate_http_url("upstreams.gcr", &self.upstreams.gcr)?;
+        validate_http_url("upstreams.mcr", &self.upstreams.mcr)?;
+        validate_http_url("upstreams.elastic", &self.upstreams.elastic)?;
         validate_http_url("upstreams.npm", &self.upstreams.npm)?;
         validate_http_url("upstreams.nvm", &self.upstreams.nvm)?;
         validate_http_url("upstreams.opam", &self.upstreams.opam)?;
@@ -1207,6 +1216,9 @@ impl Config {
             &upstreams.ghcr,
             &upstreams.quay,
             &upstreams.kubernetes,
+            &upstreams.gcr,
+            &upstreams.mcr,
+            &upstreams.elastic,
             &upstreams.npm,
             &upstreams.nvm,
             &upstreams.opam,
@@ -1302,6 +1314,9 @@ impl Config {
             "ghcr" => &upstreams.ghcr,
             "quay" => &upstreams.quay,
             "kubernetes" => &upstreams.kubernetes,
+            "gcr" => &upstreams.gcr,
+            "mcr" => &upstreams.mcr,
+            "elastic" => &upstreams.elastic,
             "npm" => &upstreams.npm,
             "nvm" => &upstreams.nvm,
             "opam" => &upstreams.opam,
@@ -1468,6 +1483,9 @@ impl Default for Upstreams {
             ghcr: default_ghcr_registry(),
             quay: default_quay_registry(),
             kubernetes: default_kubernetes_registry(),
+            gcr: default_gcr_registry(),
+            mcr: default_mcr_registry(),
+            elastic: default_elastic_registry(),
             npm: default_npm_registry(),
             nvm: default_nvm_repository(),
             opam: default_opam_repository(),
@@ -2290,6 +2308,18 @@ fn default_quay_registry() -> String {
 
 fn default_kubernetes_registry() -> String {
     "https://registry.k8s.io".to_string()
+}
+
+fn default_gcr_registry() -> String {
+    "https://gcr.io".to_string()
+}
+
+fn default_mcr_registry() -> String {
+    "https://mcr.microsoft.com".to_string()
+}
+
+fn default_elastic_registry() -> String {
+    "https://docker.elastic.co".to_string()
 }
 
 fn default_npm_registry() -> String {

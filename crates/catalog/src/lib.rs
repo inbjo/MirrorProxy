@@ -113,6 +113,83 @@ pub struct SourceTemplate {
     pub requires_sudo: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContainerRegistry {
+    pub code: &'static str,
+    pub name: &'static str,
+    pub host: &'static str,
+    pub aliases: &'static [&'static str],
+    pub example_image: &'static str,
+    pub legacy: bool,
+}
+
+pub const CONTAINER_REGISTRIES: &[ContainerRegistry] = &[
+    ContainerRegistry {
+        code: "docker-hub",
+        name: "Docker Hub",
+        host: "docker.io",
+        aliases: &["registry-1.docker.io"],
+        example_image: "nginx:latest",
+        legacy: false,
+    },
+    ContainerRegistry {
+        code: "ghcr",
+        name: "GitHub Container Registry",
+        host: "ghcr.io",
+        aliases: &[],
+        example_image: "ghcr.io/astral-sh/uv:latest",
+        legacy: false,
+    },
+    ContainerRegistry {
+        code: "quay",
+        name: "Quay",
+        host: "quay.io",
+        aliases: &[],
+        example_image: "quay.io/prometheus/prometheus:latest",
+        legacy: false,
+    },
+    ContainerRegistry {
+        code: "kubernetes",
+        name: "Kubernetes Registry",
+        host: "registry.k8s.io",
+        aliases: &["k8s.gcr.io"],
+        example_image: "registry.k8s.io/pause:3.10",
+        legacy: false,
+    },
+    ContainerRegistry {
+        code: "gcr",
+        name: "Google Container Registry",
+        host: "gcr.io",
+        aliases: &[],
+        example_image: "gcr.io/distroless/static-debian12:nonroot",
+        legacy: false,
+    },
+    ContainerRegistry {
+        code: "mcr",
+        name: "Microsoft Container Registry",
+        host: "mcr.microsoft.com",
+        aliases: &[],
+        example_image: "mcr.microsoft.com/dotnet/runtime:8.0",
+        legacy: false,
+    },
+    ContainerRegistry {
+        code: "elastic",
+        name: "Elastic Container Registry",
+        host: "docker.elastic.co",
+        aliases: &[],
+        example_image: "docker.elastic.co/elasticsearch/elasticsearch:8.13.4",
+        legacy: false,
+    },
+    ContainerRegistry {
+        code: "kubernetes-legacy",
+        name: "Kubernetes legacy alias",
+        host: "k8s.gcr.io",
+        aliases: &[],
+        example_image: "k8s.gcr.io/pause:3.8",
+        legacy: true,
+    },
+];
+
 macro_rules! template_only_os_target {
     ($code:literal, $name:literal, [$($alias:literal),* $(,)?], $modes:expr) => {
         SourceTarget { code: $code, name: $name, category: SourceCategory::OperatingSystem, aliases: &[$($alias),*], supported_modes: $modes, default_scope: SourceScope::System }

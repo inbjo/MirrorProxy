@@ -10,7 +10,7 @@ endpoints, attempted in order.
 | Category | Representative targets |
 | --- | --- |
 | Code and releases | GitHub, GitHub Raw, Git smart HTTP clone. |
-| OCI | Docker Hub, GHCR, Quay, Kubernetes Registry, Homebrew OCI. |
+| OCI | Docker Hub, GHCR, Quay, Kubernetes Registry, GCR, Microsoft MCR, Elastic Registry, and Homebrew OCI. |
 | Language ecosystems | Composer, npm, Go, Maven, RubyGems, NuGet, CPAN, CRAN, Hackage, Julia, LuaRocks, Clojars, CocoaPods, Pub, Anaconda, PyPI, Cargo. |
 | Toolchains | Rustup, NVM, Homebrew, WinGet, TeX Live, ELPA, Nix, Guix, Flatpak. |
 | Operating systems | Debian, Ubuntu, Fedora, Arch, Alpine, openSUSE, Void, Gentoo, FreeBSD, plus OpenWrt, Termux, MSYS2, ROS, and configured extra static directories. |

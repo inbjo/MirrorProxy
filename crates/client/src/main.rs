@@ -537,7 +537,7 @@ fn apply_source_set_at(
     if original_content
         .as_deref()
         .is_some_and(|content| !content.trim().is_empty())
-        && command.target_code != "github"
+        && !matches!(command.target_code, "github" | "docker")
         && !force
     {
         anyhow::bail!(
@@ -551,6 +551,11 @@ fn apply_source_set_at(
             anyhow::bail!("github supports only user-scope configuration writes");
         }
         github_config_content(original_content.as_deref(), &command.repo_url)?
+    } else if command.target_code == "docker" {
+        if scope != CliSourceScope::System {
+            anyhow::bail!("docker supports only system-scope configuration writes");
+        }
+        docker_config_content(original_content.as_deref(), &command.repo_url)?
     } else {
         source_config_content(command.target_code, scope, &command.repo_url, distribution)?
     };
@@ -577,6 +582,22 @@ fn apply_source_set_at(
         config_path: config_path.to_path_buf(),
         rollback_path: rollback_path.to_path_buf(),
     })
+}
+
+fn docker_config_content(original: Option<&str>, repo_url: &str) -> anyhow::Result<String> {
+    let mut config = match original.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => serde_json::from_str::<serde_json::Value>(value)
+            .context("existing Docker daemon configuration is not valid JSON")?,
+        None => serde_json::json!({}),
+    };
+    let object = config.as_object_mut().ok_or_else(|| {
+        anyhow::anyhow!("existing Docker daemon configuration must be a JSON object")
+    })?;
+    object.insert(
+        "registry-mirrors".to_string(),
+        serde_json::json!([docker_registry_mirror_url(repo_url)?]),
+    );
+    Ok(serde_json::to_string_pretty(&config)? + "\n")
 }
 
 #[cfg(test)]
@@ -1796,6 +1817,36 @@ mod tests {
         apply_source_reset("docker", CliSourceScope::System, &directory, false).unwrap();
         assert!(!applied.config_path.exists());
 
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn docker_system_source_set_merges_existing_configuration_and_restores_it() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrorproxy-client-docker-merge-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        let config_path = directory.join("etc/docker/daemon.json");
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        let original = "{\n  \"data-root\": \"/srv/docker\",\n  \"live-restore\": true\n}\n";
+        fs::write(&config_path, original).unwrap();
+        let docker = PlannedSourceCommand {
+            target_code: "docker",
+            provider_code: "mirrorproxy",
+            repo_url: "https://mirror.example/v2/".to_string(),
+            command: String::new(),
+        };
+
+        apply_source_set(&docker, CliSourceScope::System, &directory, None, false).unwrap();
+        let merged: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(merged["data-root"], "/srv/docker");
+        assert_eq!(merged["live-restore"], true);
+        assert_eq!(merged["registry-mirrors"][0], "https://mirror.example");
+
+        apply_source_reset("docker", CliSourceScope::System, &directory, false).unwrap();
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
         fs::remove_dir_all(directory).unwrap();
     }
 

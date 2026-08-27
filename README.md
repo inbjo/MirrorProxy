@@ -64,7 +64,7 @@ administrator-defined static operating-system repositories:
 | Category | Supported sources and ecosystems |
 | --- | --- |
 | Code and release assets | GitHub, GitHub Raw, read-only Git smart HTTP clone |
-| Containers and OCI | Docker Hub, GitHub Container Registry, Quay, Kubernetes Registry, Homebrew OCI |
+| Containers and OCI | Docker Hub, GitHub Container Registry, Quay, Kubernetes Registry, GCR, Microsoft MCR, Elastic Registry, Homebrew OCI |
 | JavaScript / Node.js | npm, NVM, Bun through the npm protocol |
 | Python | PyPI / pip, Poetry, uv, PDM, Anaconda |
 | Rust / Go | crates.io / Cargo, Rustup, Go Modules |

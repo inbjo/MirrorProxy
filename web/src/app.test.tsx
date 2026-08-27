@@ -1,6 +1,12 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { App, sourceManualCommand } from './main'
+import { App, normalizeContainerImage, rewriteContainerConfig, sourceManualCommand } from './main'
+
+const containerRegistries = [
+  { code: 'docker-hub', name: 'Docker Hub', host: 'docker.io', aliases: ['registry-1.docker.io'], example_image: 'nginx:latest', legacy: false },
+  { code: 'ghcr', name: 'GHCR', host: 'ghcr.io', aliases: [], example_image: 'ghcr.io/owner/app:latest', legacy: false },
+  { code: 'mcr', name: 'MCR', host: 'mcr.microsoft.com', aliases: [], example_image: 'mcr.microsoft.com/dotnet/runtime:8.0', legacy: false },
+]
 
 describe('App preferences', () => {
   afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); window.history.replaceState({}, '', '/') })
@@ -25,6 +31,18 @@ describe('App preferences', () => {
     fireEvent.click(githubInput.parentElement!.querySelector('button')!)
     await waitFor(() => expect(writeText).toHaveBeenCalled())
     expect(screen.getAllByText('Copied').at(-1)).toBeTruthy()
+  })
+
+  it('validates supported container registries before generating proxy paths', () => {
+    expect(normalizeContainerImage('docker.io/library/nginx:latest', containerRegistries)).toBe('library/nginx:latest')
+    expect(normalizeContainerImage('mcr.microsoft.com/dotnet/runtime:8.0', containerRegistries)).toBe('mcr.microsoft.com/dotnet/runtime:8.0')
+    expect(normalizeContainerImage('nvcr.io/nvidia/pytorch:latest', containerRegistries)).toBe('')
+  })
+
+  it('rewrites Compose and Dockerfile image references without changing unsupported registries', () => {
+    expect(rewriteContainerConfig('services:\n  api:\n    image: ghcr.io/owner/app:1', 'compose', 'https://mirror.example', containerRegistries)).toContain('image: mirror.example/ghcr.io/owner/app:1')
+    expect(rewriteContainerConfig('FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/runtime:8.0 AS base', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('FROM --platform=linux/amd64 mirror.example/mcr.microsoft.com/dotnet/runtime:8.0 AS base')
+    expect(rewriteContainerConfig('FROM nvcr.io/nvidia/pytorch:latest', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('FROM nvcr.io/nvidia/pytorch:latest')
   })
 
   it('shows accelerated stable client installers and the GitHub footer', async () => {

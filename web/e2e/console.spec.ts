@@ -12,6 +12,10 @@ const sources = {
   targets: [{ code: 'npm', name: 'npm', category: 'lang', aliases: [], supported_modes: ['proxy'], default_scope: 'user' }],
   sources: [{ target_code: 'npm', provider_code: 'mirrorproxy', repo_url: '/npm/', speed_url: null, capability: 'proxy' }],
   templates: [{ target_code: 'npm', os_family: 'any', scope: 'user', template: 'npm config set registry {repo_url}', requires_sudo: false }],
+  container_registries: [
+    { code: 'docker-hub', name: 'Docker Hub', host: 'docker.io', aliases: ['registry-1.docker.io'], example_image: 'nginx:latest', legacy: false },
+    { code: 'mcr', name: 'Microsoft Container Registry', host: 'mcr.microsoft.com', aliases: [], example_image: 'mcr.microsoft.com/dotnet/runtime:8.0', legacy: false },
+  ],
 }
 
 const adminConfig = {
@@ -144,6 +148,21 @@ test('copies a generated proxy command', async ({ page }) => {
   const copyButton = converter.getByRole('button')
   await copyButton.click()
   await expect(copyButton).toContainText('Copied')
+})
+
+test('validates and rewrites container registry references', async ({ page }) => {
+  await page.goto('/')
+  const workbench = page.locator('.registry-workbench')
+  await expect(workbench.getByRole('heading', { name: 'Container registry workbench' })).toBeVisible()
+  await workbench.getByRole('button', { name: /Microsoft Container Registry/ }).click()
+  await expect(workbench).toContainText('docker pull mirror.example/mcr.microsoft.com/dotnet/runtime:8.0')
+  await workbench.getByRole('button', { name: 'Compose YAML' }).click()
+  await workbench.getByRole('textbox').fill('services:\n  api:\n    image: mcr.microsoft.com/dotnet/runtime:8.0')
+  await expect(workbench).toContainText('image: mirror.example/mcr.microsoft.com/dotnet/runtime:8.0')
+  await workbench.getByRole('button', { name: 'Docker Engine' }).click()
+  await expect(workbench).toContainText('mirrorproxy set docker --mirror mirrorproxy --base-url https://mirror.example --scope system --dry-run')
+  await workbench.getByRole('button', { name: 'K3s' }).click()
+  await expect(workbench).toContainText('docker.io:')
 })
 
 test('signs in and saves an updated runtime configuration', async ({ page }) => {
