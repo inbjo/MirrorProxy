@@ -543,6 +543,9 @@ fn default_smtp_settings() -> SmtpSettings {
     }
 }
 
+// Axum responses are intentionally propagated intact so handlers can preserve
+// status codes, headers, and response bodies without an extra allocation.
+#[allow(clippy::result_large_err)]
 async fn enqueue_plain_email(
     state: &AppState,
     recipient: &str,
@@ -552,6 +555,7 @@ async fn enqueue_plain_email(
     enqueue_email(state, recipient, subject, body, None).await
 }
 
+#[allow(clippy::result_large_err)]
 async fn enqueue_email(
     state: &AppState,
     recipient: &str,
