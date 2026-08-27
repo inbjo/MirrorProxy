@@ -3,6 +3,39 @@
 All notable changes to MirrorProxy are documented in this file. Release tags
 follow semantic versioning.
 
+## [1.4.0] - 2026-08-27
+
+### Container registries and client compatibility
+
+- Added public-image proxy support for GitLab Container Registry, NVIDIA NGC
+  Catalog (`nvcr.io`), and Oracle Container Registry, including catalog,
+  configuration, administration-console, and OCI routing coverage.
+- Expanded OCI support for GCR, Microsoft Artifact Registry, Elastic Registry,
+  Kubernetes Registry, Quay, GitHub Container Registry, and Red Hat Registry.
+- Added real manifest, platform-selection, config-blob, and SHA-256 verification
+  to CI for the new public registries. Private-project credentials remain out of
+  scope and are rejected by configuration validation.
+- Improved Go module, npm, and OCI adapter compatibility for additional native
+  client request forms.
+
+### Security and CI reliability
+
+- Preserved encrypted runtime configuration when renaming the initial
+  administrator with `MIRRORPROXY_MASTER_KEY`, fixing the failure reported in
+  GitHub Issue #6 and adding encrypted-storage regression coverage.
+- Updated `h2` to incorporate upstream empty-frame resource-limit fixes.
+- Restored warning-free Clippy checks on Rust 1.98 while preserving complete
+  Axum error responses.
+- Updated GitHub Actions and CodeQL configuration to supported runtimes and
+  added Rust source/security-analysis coverage.
+
+### Documentation
+
+- Added bilingual Docker Engine/Desktop, containerd/K3s, NAS, panel, and other
+  runtime deployment guides to the Wiki source.
+- Documented public-only registry boundaries, routing examples, verification,
+  rollback, caching, and troubleshooting guidance.
+
 ## [1.3.2] - 2026-08-17
 
 ### Source health and build reliability
