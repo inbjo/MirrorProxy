@@ -6,6 +6,9 @@ const containerRegistries = [
   { code: 'docker-hub', name: 'Docker Hub', host: 'docker.io', aliases: ['registry-1.docker.io'], example_image: 'nginx:latest', legacy: false },
   { code: 'ghcr', name: 'GHCR', host: 'ghcr.io', aliases: [], example_image: 'ghcr.io/owner/app:latest', legacy: false },
   { code: 'mcr', name: 'MCR', host: 'mcr.microsoft.com', aliases: [], example_image: 'mcr.microsoft.com/dotnet/runtime:8.0', legacy: false },
+  { code: 'gitlab', name: 'GitLab', host: 'registry.gitlab.com', aliases: [], example_image: 'registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-latest', legacy: false },
+  { code: 'nvcr', name: 'NVCR', host: 'nvcr.io', aliases: [], example_image: 'nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04', legacy: false },
+  { code: 'oracle', name: 'Oracle', host: 'container-registry.oracle.com', aliases: [], example_image: 'container-registry.oracle.com/os/oraclelinux:9-slim', legacy: false },
 ]
 
 describe('App preferences', () => {
@@ -36,13 +39,17 @@ describe('App preferences', () => {
   it('validates supported container registries before generating proxy paths', () => {
     expect(normalizeContainerImage('docker.io/library/nginx:latest', containerRegistries)).toBe('library/nginx:latest')
     expect(normalizeContainerImage('mcr.microsoft.com/dotnet/runtime:8.0', containerRegistries)).toBe('mcr.microsoft.com/dotnet/runtime:8.0')
-    expect(normalizeContainerImage('nvcr.io/nvidia/pytorch:latest', containerRegistries)).toBe('')
+    expect(normalizeContainerImage('nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04', containerRegistries)).toBe('nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04')
+    expect(normalizeContainerImage('registry.gitlab.com/group/project/image:latest', containerRegistries)).toBe('registry.gitlab.com/group/project/image:latest')
+    expect(normalizeContainerImage('container-registry.oracle.com/os/oraclelinux:9-slim', containerRegistries)).toBe('container-registry.oracle.com/os/oraclelinux:9-slim')
+    expect(normalizeContainerImage('registry.example.com/private/image:latest', containerRegistries)).toBe('')
   })
 
   it('rewrites Compose and Dockerfile image references without changing unsupported registries', () => {
     expect(rewriteContainerConfig('services:\n  api:\n    image: ghcr.io/owner/app:1', 'compose', 'https://mirror.example', containerRegistries)).toContain('image: mirror.example/ghcr.io/owner/app:1')
     expect(rewriteContainerConfig('FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/runtime:8.0 AS base', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('FROM --platform=linux/amd64 mirror.example/mcr.microsoft.com/dotnet/runtime:8.0 AS base')
-    expect(rewriteContainerConfig('FROM nvcr.io/nvidia/pytorch:latest', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('FROM nvcr.io/nvidia/pytorch:latest')
+    expect(rewriteContainerConfig('FROM nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('FROM mirror.example/nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04')
+    expect(rewriteContainerConfig('FROM registry.example.com/private/image:latest', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('FROM registry.example.com/private/image:latest')
   })
 
   it('shows accelerated stable client installers and the GitHub footer', async () => {

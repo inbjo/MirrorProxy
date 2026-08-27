@@ -26,6 +26,9 @@ pub enum OciRegistry {
     Gcr,
     Mcr,
     Elastic,
+    Gitlab,
+    Nvcr,
+    Oracle,
 }
 
 pub async fn root(State(state): State<AppState>) -> Result<Response, ProxyError> {
@@ -164,6 +167,9 @@ fn build_upstream_url(
         OciRegistry::Gcr => &upstreams.gcr,
         OciRegistry::Mcr => &upstreams.mcr,
         OciRegistry::Elastic => &upstreams.elastic,
+        OciRegistry::Gitlab => &upstreams.gitlab,
+        OciRegistry::Nvcr => &upstreams.nvcr,
+        OciRegistry::Oracle => &upstreams.oracle,
     };
     let path = format!("/v2/{}/{}", target.repository, target.suffix);
     proxy::build_url(base, &path, query)
@@ -197,6 +203,9 @@ pub fn parse_oci_path(path: &str) -> Result<OciTarget, ProxyError> {
         "gcr.io" => (OciRegistry::Gcr, &repo_parts[1..]),
         "mcr.microsoft.com" => (OciRegistry::Mcr, &repo_parts[1..]),
         "docker.elastic.co" => (OciRegistry::Elastic, &repo_parts[1..]),
+        "registry.gitlab.com" => (OciRegistry::Gitlab, &repo_parts[1..]),
+        "nvcr.io" => (OciRegistry::Nvcr, &repo_parts[1..]),
+        "container-registry.oracle.com" => (OciRegistry::Oracle, &repo_parts[1..]),
         _ => (OciRegistry::DockerHub, repo_parts),
     };
 
@@ -344,6 +353,26 @@ mod tests {
                 .unwrap();
         assert_eq!(elastic.registry, OciRegistry::Elastic);
         assert_eq!(elastic.repository, "elasticsearch/elasticsearch");
+
+        let gitlab = parse_oci_path(
+            "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper/manifests/x86_64-latest",
+        )
+        .unwrap();
+        assert_eq!(gitlab.registry, OciRegistry::Gitlab);
+        assert_eq!(
+            gitlab.repository,
+            "gitlab-org/gitlab-runner/gitlab-runner-helper"
+        );
+
+        let nvcr = parse_oci_path("nvcr.io/nvidia/cuda/manifests/12.6.0-base-ubuntu22.04").unwrap();
+        assert_eq!(nvcr.registry, OciRegistry::Nvcr);
+        assert_eq!(nvcr.repository, "nvidia/cuda");
+
+        let oracle =
+            parse_oci_path("container-registry.oracle.com/os/oraclelinux/manifests/9-slim")
+                .unwrap();
+        assert_eq!(oracle.registry, OciRegistry::Oracle);
+        assert_eq!(oracle.repository, "os/oraclelinux");
     }
 
     #[test]
@@ -379,6 +408,18 @@ mod tests {
             (
                 "k8s.gcr.io/pause/manifests/3.8",
                 "https://registry.k8s.io/v2/pause/manifests/3.8",
+            ),
+            (
+                "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper/manifests/x86_64-latest",
+                "https://registry.gitlab.com/v2/gitlab-org/gitlab-runner/gitlab-runner-helper/manifests/x86_64-latest",
+            ),
+            (
+                "nvcr.io/nvidia/cuda/manifests/12.6.0-base-ubuntu22.04",
+                "https://nvcr.io/v2/nvidia/cuda/manifests/12.6.0-base-ubuntu22.04",
+            ),
+            (
+                "container-registry.oracle.com/os/oraclelinux/manifests/9-slim",
+                "https://container-registry.oracle.com/v2/os/oraclelinux/manifests/9-slim",
             ),
         ] {
             let target = parse_oci_path(path).unwrap();

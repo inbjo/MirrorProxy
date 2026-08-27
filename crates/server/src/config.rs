@@ -104,6 +104,12 @@ pub struct Upstreams {
     pub mcr: String,
     #[serde(default = "default_elastic_registry")]
     pub elastic: String,
+    #[serde(default = "default_gitlab_registry")]
+    pub gitlab: String,
+    #[serde(default = "default_nvcr_registry")]
+    pub nvcr: String,
+    #[serde(default = "default_oracle_registry")]
+    pub oracle: String,
     #[serde(default = "default_npm_registry")]
     pub npm: String,
     #[serde(default = "default_nvm_repository")]
@@ -1132,6 +1138,9 @@ impl Config {
         validate_http_url("upstreams.gcr", &self.upstreams.gcr)?;
         validate_http_url("upstreams.mcr", &self.upstreams.mcr)?;
         validate_http_url("upstreams.elastic", &self.upstreams.elastic)?;
+        validate_http_url("upstreams.gitlab", &self.upstreams.gitlab)?;
+        validate_http_url("upstreams.nvcr", &self.upstreams.nvcr)?;
+        validate_http_url("upstreams.oracle", &self.upstreams.oracle)?;
         validate_http_url("upstreams.npm", &self.upstreams.npm)?;
         validate_http_url("upstreams.nvm", &self.upstreams.nvm)?;
         validate_http_url("upstreams.opam", &self.upstreams.opam)?;
@@ -1219,6 +1228,9 @@ impl Config {
             &upstreams.gcr,
             &upstreams.mcr,
             &upstreams.elastic,
+            &upstreams.gitlab,
+            &upstreams.nvcr,
+            &upstreams.oracle,
             &upstreams.npm,
             &upstreams.nvm,
             &upstreams.opam,
@@ -1486,6 +1498,9 @@ impl Default for Upstreams {
             gcr: default_gcr_registry(),
             mcr: default_mcr_registry(),
             elastic: default_elastic_registry(),
+            gitlab: default_gitlab_registry(),
+            nvcr: default_nvcr_registry(),
+            oracle: default_oracle_registry(),
             npm: default_npm_registry(),
             nvm: default_nvm_repository(),
             opam: default_opam_repository(),
@@ -2322,6 +2337,18 @@ fn default_elastic_registry() -> String {
     "https://docker.elastic.co".to_string()
 }
 
+fn default_gitlab_registry() -> String {
+    "https://registry.gitlab.com".to_string()
+}
+
+fn default_nvcr_registry() -> String {
+    "https://nvcr.io".to_string()
+}
+
+fn default_oracle_registry() -> String {
+    "https://container-registry.oracle.com".to_string()
+}
+
 fn default_npm_registry() -> String {
     "https://registry.npmjs.org".to_string()
 }
@@ -2983,6 +3010,22 @@ insecure_skip_verify = true
             },
         );
         assert!(config.validate().is_err());
+
+        for registry in ["gitlab", "nvcr", "oracle"] {
+            config.upstream_auth.clear();
+            config.upstream_auth.insert(
+                registry.to_string(),
+                UpstreamAuth {
+                    username: None,
+                    password: None,
+                    bearer_token: Some("private-token".to_string()),
+                },
+            );
+            assert!(
+                config.validate().is_err(),
+                "public-only registry {registry} must reject configured credentials"
+            );
+        }
     }
 
     #[test]

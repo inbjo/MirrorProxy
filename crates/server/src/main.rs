@@ -1524,6 +1524,12 @@ fn config_value(config: &Config, key: &str) -> Option<String> {
         "upstreams.ghcr" => Some(config.upstreams.ghcr.clone()),
         "upstreams.quay" => Some(config.upstreams.quay.clone()),
         "upstreams.kubernetes" => Some(config.upstreams.kubernetes.clone()),
+        "upstreams.gcr" => Some(config.upstreams.gcr.clone()),
+        "upstreams.mcr" => Some(config.upstreams.mcr.clone()),
+        "upstreams.elastic" => Some(config.upstreams.elastic.clone()),
+        "upstreams.gitlab" => Some(config.upstreams.gitlab.clone()),
+        "upstreams.nvcr" => Some(config.upstreams.nvcr.clone()),
+        "upstreams.oracle" => Some(config.upstreams.oracle.clone()),
         "upstreams.npm" => Some(config.upstreams.npm.clone()),
         "upstreams.nvm" => Some(config.upstreams.nvm.clone()),
         "upstreams.opam" => Some(config.upstreams.opam.clone()),
@@ -1619,6 +1625,12 @@ fn config_entries(config: &Config) -> Vec<(String, String)> {
         "upstreams.ghcr",
         "upstreams.quay",
         "upstreams.kubernetes",
+        "upstreams.gcr",
+        "upstreams.mcr",
+        "upstreams.elastic",
+        "upstreams.gitlab",
+        "upstreams.nvcr",
+        "upstreams.oracle",
         "upstreams.npm",
         "upstreams.nvm",
         "upstreams.opam",
@@ -3899,6 +3911,9 @@ fn passkey_not_configured_response() -> Response {
     conflict_response("administrator passkey authentication is not configured")
 }
 
+// Authentication failures are complete Axum responses that callers return
+// directly; boxing them would add allocation and churn at every call site.
+#[allow(clippy::result_large_err)]
 async fn require_admin_with_token(
     headers: &HeaderMap,
     state: &AppState,
@@ -5607,6 +5622,7 @@ fn valid_user_email(value: &str) -> bool {
         })
 }
 
+#[allow(clippy::result_large_err)]
 async fn require_super_admin(
     headers: &HeaderMap,
     state: &AppState,
@@ -8512,6 +8528,17 @@ on_exceeded = "stop_proxy"
             .iter()
             .any(|registry| registry["host"] == "mcr.microsoft.com"
                 && registry["example_image"] == "mcr.microsoft.com/dotnet/runtime:8.0"));
+        for host in [
+            "registry.gitlab.com",
+            "nvcr.io",
+            "container-registry.oracle.com",
+        ] {
+            assert!(value["container_registries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|registry| registry["host"] == host && registry["legacy"] == false));
+        }
     }
 
     #[tokio::test]

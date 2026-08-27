@@ -15,6 +15,9 @@ const sources = {
   container_registries: [
     { code: 'docker-hub', name: 'Docker Hub', host: 'docker.io', aliases: ['registry-1.docker.io'], example_image: 'nginx:latest', legacy: false },
     { code: 'mcr', name: 'Microsoft Container Registry', host: 'mcr.microsoft.com', aliases: [], example_image: 'mcr.microsoft.com/dotnet/runtime:8.0', legacy: false },
+    { code: 'gitlab', name: 'GitLab Container Registry', host: 'registry.gitlab.com', aliases: [], example_image: 'registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-latest', legacy: false },
+    { code: 'nvcr', name: 'NVIDIA NGC Container Registry', host: 'nvcr.io', aliases: [], example_image: 'nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04', legacy: false },
+    { code: 'oracle', name: 'Oracle Container Registry', host: 'container-registry.oracle.com', aliases: [], example_image: 'container-registry.oracle.com/os/oraclelinux:9-slim', legacy: false },
   ],
 }
 
@@ -163,6 +166,8 @@ test('validates and rewrites container registry references', async ({ page }) =>
   await expect(workbench).toContainText('mirrorproxy set docker --mirror mirrorproxy --base-url https://mirror.example --scope system --dry-run')
   await workbench.getByRole('button', { name: 'K3s' }).click()
   await expect(workbench).toContainText('docker.io:')
+  await workbench.getByRole('button', { name: /GitLab Container Registry/ }).click()
+  await expect(workbench).toContainText('docker pull mirror.example/registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-latest')
 })
 
 test('signs in and saves an updated runtime configuration', async ({ page }) => {

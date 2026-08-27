@@ -181,6 +181,31 @@ pub const CONTAINER_REGISTRIES: &[ContainerRegistry] = &[
         legacy: false,
     },
     ContainerRegistry {
+        code: "gitlab",
+        name: "GitLab Container Registry",
+        host: "registry.gitlab.com",
+        aliases: &[],
+        example_image:
+            "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-latest",
+        legacy: false,
+    },
+    ContainerRegistry {
+        code: "nvcr",
+        name: "NVIDIA NGC Container Registry",
+        host: "nvcr.io",
+        aliases: &[],
+        example_image: "nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04",
+        legacy: false,
+    },
+    ContainerRegistry {
+        code: "oracle",
+        name: "Oracle Container Registry",
+        host: "container-registry.oracle.com",
+        aliases: &[],
+        example_image: "container-registry.oracle.com/os/oraclelinux:9-slim",
+        legacy: false,
+    },
+    ContainerRegistry {
         code: "kubernetes-legacy",
         name: "Kubernetes legacy alias",
         host: "k8s.gcr.io",

@@ -102,6 +102,36 @@ smoke_curl() {
     "$1"
 }
 
+smoke_public_oci_image() {
+  local name="$1"
+  local repository="$2"
+  local tag="$3"
+  local prefix="${base}/v2/${repository}"
+  local manifest="${work}/${name}-manifest.json"
+  local child_manifest="${work}/${name}-child-manifest.json"
+  local config_blob="${work}/${name}-config"
+  local media_type child_digest config_digest actual_digest
+
+  curl --fail --silent --show-error --retry 3 --retry-all-errors \
+    --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+    --output "${manifest}" "${prefix}/manifests/${tag}"
+  media_type="$(jq --raw-output '.mediaType // empty' "${manifest}")"
+  if [[ "${media_type}" == *index* || "${media_type}" == *manifest.list* ]]; then
+    child_digest="$(jq --raw-output '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' "${manifest}" | head -n 1)"
+    test -n "${child_digest}"
+    curl --fail --silent --show-error --retry 3 --retry-all-errors \
+      --header 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+      --output "${child_manifest}" "${prefix}/manifests/${child_digest}"
+    manifest="${child_manifest}"
+  fi
+  config_digest="$(jq --raw-output '.config.digest // empty' "${manifest}")"
+  test -n "${config_digest}"
+  curl --fail --silent --show-error --retry 3 --retry-all-errors \
+    --output "${config_blob}" "${prefix}/blobs/${config_digest}"
+  actual_digest="sha256:$(sha256sum "${config_blob}" | awk '{print $1}')"
+  test "${actual_digest}" = "${config_digest}"
+}
+
 cat >"${config}" <<EOF
 listen_addr = "127.0.0.1:${port}"
 database_path = "${work}/mirrorproxy.sqlite3"
@@ -119,6 +149,9 @@ kubernetes = "https://registry.k8s.io"
 gcr = "https://gcr.io"
 mcr = "https://mcr.microsoft.com"
 elastic = "https://docker.elastic.co"
+gitlab = "https://registry.gitlab.com"
+nvcr = "https://nvcr.io"
+oracle = "https://container-registry.oracle.com"
 npm = "https://registry.npmjs.org"
 go_proxy = "https://proxy.golang.org"
 crates_index = "https://index.crates.io"
@@ -139,6 +172,16 @@ cargo run --quiet --package mirrorproxy-server --bin mirrorproxy-server -- \
   --config "${config}" >"${server_log}" 2>&1 &
 pid=$!
 wait_for_server
+
+if [[ "${MIRRORPROXY_SMOKE_OCI_ONLY:-0}" == "1" ]]; then
+  command -v jq >/dev/null
+  smoke_public_oci_image gitlab \
+    registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper x86_64-latest
+  smoke_public_oci_image nvcr nvcr.io/nvidia/cuda 12.6.0-base-ubuntu22.04
+  smoke_public_oci_image oracle container-registry.oracle.com/os/oraclelinux 9-slim
+  printf '%s\n' 'public OCI smoke passed: gitlab-oci nvcr-oci oracle-oci'
+  exit 0
+fi
 
 git clone --quiet --depth 1 "${base}/https://github.com/octocat/Hello-World.git" "${work}/git-clone"
 test -f "${work}/git-clone/README"
@@ -219,6 +262,14 @@ if [[ "${MIRRORPROXY_SMOKE_DOCKER:-0}" == "1" ]]; then
   docker pull "127.0.0.1:${port}/library/busybox:1.36.1" >/dev/null
 fi
 
+if [[ "${MIRRORPROXY_SMOKE_OCI_PUBLIC:-0}" == "1" ]]; then
+  command -v jq >/dev/null
+  smoke_public_oci_image gitlab \
+    registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper x86_64-latest
+  smoke_public_oci_image nvcr nvcr.io/nvidia/cuda 12.6.0-base-ubuntu22.04
+  smoke_public_oci_image oracle container-registry.oracle.com/os/oraclelinux 9-slim
+fi
+
 if [[ "${MIRRORPROXY_SMOKE_NATIVE_EXTENDED:-0}" == "1" ]]; then
   command -v brew >/dev/null
   command -v nix >/dev/null
@@ -248,6 +299,9 @@ if [[ "${MIRRORPROXY_SMOKE_NATIVE_EXTENDED:-0}" == "1" ]]; then
   RUSTUP_DIST_SERVER="${base}/rustup" \
     RUSTUP_UPDATE_ROOT="${base}/rustup/rustup" \
     rustup check >/dev/null
+fi
+if [[ "${MIRRORPROXY_SMOKE_OCI_PUBLIC:-0}" == "1" ]]; then
+  smoke_targets+=" gitlab-oci nvcr-oci oracle-oci"
 fi
 
 # Some adapters do not have a lightweight client available on every CI image.
