@@ -1133,12 +1133,16 @@ impl Database {
             .await?;
         if let Some(row) = runtime_config {
             let raw: String = row.try_get("value")?;
-            let mut config: Config = serde_json::from_str(&raw)
+            let value = self.secrets.open("settings.runtime_config", &raw)?;
+            let mut config: Config = serde_json::from_str(&value)
                 .context("stored runtime configuration is invalid JSON")?;
             if config.webauthn.break_glass_username == username {
                 config.webauthn.break_glass_username = new_username.to_string();
+                let value = self
+                    .secrets
+                    .seal("settings.runtime_config", &serde_json::to_string(&config)?)?;
                 sqlx::query("UPDATE settings SET value = ?, version = version + 1, updated_at = ? WHERE key = 'runtime_config'")
-                    .bind(serde_json::to_string(&config)?)
+                    .bind(value)
                     .bind(now)
                     .execute(&mut *transaction)
                     .await?;
@@ -4346,7 +4350,8 @@ mod tests {
 
     #[tokio::test]
     async fn username_change_and_password_reset_follow_the_renamed_initial_admin() {
-        let (database, credentials) = Database::open(":memory:").await.unwrap();
+        let (mut database, credentials) = Database::open(":memory:").await.unwrap();
+        database.secrets = SecretCipher::from_test_key([19_u8; 32]);
         let credentials = credentials.unwrap();
         let mut config = Config::default();
         config.webauthn.break_glass_username = credentials.username.clone();
@@ -4391,6 +4396,12 @@ mod tests {
                 .break_glass_username,
             "recovered-admin"
         );
+        let stored: String =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'runtime_config'")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert!(stored.starts_with("enc:"));
         let replacement = database
             .reset_initial_admin_password("cli")
             .await
@@ -4444,6 +4455,53 @@ mod tests {
             .await
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn username_change_preserves_encrypted_config_for_an_unrelated_break_glass_admin() {
+        let (mut database, credentials) = Database::open(":memory:").await.unwrap();
+        database.secrets = SecretCipher::from_test_key([23_u8; 32]);
+        let credentials = credentials.unwrap();
+        let mut config = Config::default();
+        config.webauthn.break_glass_username = "separate-break-glass".to_string();
+        database
+            .save_runtime_config("system", &config, "seed runtime configuration")
+            .await
+            .unwrap();
+        let stored_before: String =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'runtime_config'")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert!(stored_before.starts_with("enc:"));
+
+        assert_eq!(
+            database
+                .change_admin_username(
+                    &credentials.username,
+                    &credentials.password,
+                    "renamed-admin",
+                )
+                .await
+                .unwrap(),
+            AdminUsernameChangeOutcome::Changed
+        );
+
+        let stored_after: String =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'runtime_config'")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert_eq!(stored_after, stored_before);
+        assert_eq!(
+            database
+                .load_or_seed_runtime_config(Config::default())
+                .await
+                .unwrap()
+                .webauthn
+                .break_glass_username,
+            "separate-break-glass"
+        );
     }
 
     #[tokio::test]
