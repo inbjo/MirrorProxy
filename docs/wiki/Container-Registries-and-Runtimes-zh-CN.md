@@ -4,6 +4,12 @@ MirrorProxy 通过一个 OCI Distribution 端点代理多个公开容器仓库�
 Registry 配置台”读取 `/api/sources` 返回的真实能力列表，可校验单个镜像，也可转换
 Compose YAML 和 Dockerfile。
 
+按使用环境选择详细教程：
+
+- [Docker Engine 与桌面运行时](Docker-Engine-and-Desktop-zh-CN)
+- [containerd 与 K3s](Containerd-and-K3s-zh-CN)
+- [NAS、面板与其他运行时](NAS-Panels-and-Other-Runtimes-zh-CN)
+
 ## 支持范围
 
 | Registry | 原始镜像 | MirrorProxy 路径 |
@@ -15,13 +21,18 @@ Compose YAML 和 Dockerfile。
 | GCR | `gcr.io/project/image:tag` | `<本站域名>/gcr.io/project/image:tag` |
 | Microsoft MCR | `mcr.microsoft.com/dotnet/runtime:8.0` | `<本站域名>/mcr.microsoft.com/dotnet/runtime:8.0` |
 | Elastic | `docker.elastic.co/elasticsearch/elasticsearch:8.13.4` | `<本站域名>/docker.elastic.co/elasticsearch/elasticsearch:8.13.4` |
+| GitLab | `registry.gitlab.com/group/project/image:tag` | `<本站域名>/registry.gitlab.com/group/project/image:tag` |
+| NVIDIA NVCR | `nvcr.io/nvidia/cuda:tag` | `<本站域名>/nvcr.io/nvidia/cuda:tag` |
+| Oracle | `container-registry.oracle.com/os/oraclelinux:tag` | `<本站域名>/container-registry.oracle.com/os/oraclelinux:tag` |
 
-`k8s.gcr.io` 仅作为旧地址兼容输入，实际使用 `registry.k8s.io` 上游。NVCR、Oracle
-Container Registry 和 GitLab Container Registry 尚未列为受支持目标，不要只改写地址后
-假定它们可用。
+`k8s.gcr.io` 仅作为旧地址兼容输入，实际使用 `registry.k8s.io` 上游。
 
 当前适配器面向公开镜像的 `GET`/`HEAD` 拉取。私有镜像、需要点击接受许可的镜像、推送、
 删除以及签名写入不属于公开代理承诺。
+
+GitLab 私有项目、NGC 组织/团队镜像，以及要求登录或先接受条款的 Oracle 镜像不会借用
+MirrorProxy 服务端凭据；上游的 `401`/`403` 会作为权限边界保留。列入支持矩阵只表示能够
+匿名拉取该 Registry 中的公开项目。
 
 ## Docker Engine：Docker Hub 全局加速
 
@@ -71,7 +82,7 @@ Docker Desktop 的 Docker Engine 设置中合并以下字段，然后点击 Appl
 
 ## Compose 与 Dockerfile
 
-对 GHCR、Quay、Kubernetes、GCR、MCR 和 Elastic，显式改写镜像地址：
+对 Docker Hub 之外的受支持 Registry，显式改写镜像地址：
 
 ```yaml
 services:
@@ -120,5 +131,9 @@ Deployment、DaemonSet 或离线清单中显式改写完整镜像地址；不要
 3. `401` 可能是正常 Bearer challenge；`403` 常表示上游许可或权限限制。
 4. 大镜像验证应同时检查 manifest 与 blob，而不只检查 `/v2/` 返回 200。
 5. 不要使用未固定版本、未校验内容的 `curl | sh` 或 `wget | bash` 安装方式。
+6. 配置后仍直连上游时，确认改的是当前运行时真正读取的文件；Docker、containerd 与 K3s
+   不共用配置。
+7. `manifest unknown` 通常表示镜像路径或标签不存在；NAS 图形界面搜索失败也不等于命令行
+   拉取失败。
 
 [English](Container-Registries-and-Runtimes)

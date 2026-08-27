@@ -4,6 +4,12 @@ MirrorProxy exposes one OCI Distribution endpoint for multiple public container 
 Container Registry Workbench on the home page reads the live `/api/sources` capability catalog,
 validates image references, and rewrites Compose YAML or Dockerfiles.
 
+Choose the guide for your environment:
+
+- [Docker Engine and desktop runtimes](Docker-Engine-and-Desktop)
+- [containerd and K3s](Containerd-and-K3s)
+- [NAS, panels, and other runtimes](NAS-Panels-and-Other-Runtimes)
+
 ## Supported registries
 
 | Registry | Original image | MirrorProxy path |
@@ -15,11 +21,19 @@ validates image references, and rewrites Compose YAML or Dockerfiles.
 | GCR | `gcr.io/project/image:tag` | `<mirror-host>/gcr.io/project/image:tag` |
 | Microsoft MCR | `mcr.microsoft.com/dotnet/runtime:8.0` | `<mirror-host>/mcr.microsoft.com/dotnet/runtime:8.0` |
 | Elastic | `docker.elastic.co/elasticsearch/elasticsearch:8.13.4` | `<mirror-host>/docker.elastic.co/elasticsearch/elasticsearch:8.13.4` |
+| GitLab | `registry.gitlab.com/group/project/image:tag` | `<mirror-host>/registry.gitlab.com/group/project/image:tag` |
+| NVIDIA NVCR | `nvcr.io/nvidia/cuda:tag` | `<mirror-host>/nvcr.io/nvidia/cuda:tag` |
+| Oracle | `container-registry.oracle.com/os/oraclelinux:tag` | `<mirror-host>/container-registry.oracle.com/os/oraclelinux:tag` |
 
 `k8s.gcr.io` is accepted only as a legacy input alias and is served from the current
-`registry.k8s.io` upstream. NVCR, Oracle Container Registry, and GitLab Container Registry are not
-yet supported targets. The OCI adapter is a public, read-only `GET`/`HEAD` pull path; private-image
-credentials, license acceptance, pushes, deletes, and signing writes are outside this contract.
+`registry.k8s.io` upstream. The OCI adapter is a public, read-only `GET`/`HEAD` pull path;
+private-image credentials, license acceptance, pushes, deletes, and signing writes are outside this
+contract.
+
+Private GitLab projects, NGC organization or team images, and Oracle images that require login or
+license acceptance never borrow server-side MirrorProxy credentials. Upstream `401` and `403`
+responses remain authorization boundaries. A registry in this table means that anonymous public
+projects can be pulled, not that private content is available.
 
 ## Docker Engine: global Docker Hub acceleration
 
@@ -94,5 +108,9 @@ assume Docker's `registry-mirrors` setting covers GHCR, Quay, GCR, or MCR.
 2. Treat `401` as a possible Bearer challenge; `403` commonly indicates upstream policy.
 3. Verify both manifests and blobs rather than relying on a successful `/v2/` ping.
 4. Avoid unversioned, unchecked `curl | sh` or `wget | bash` installers.
+5. If traffic still goes directly upstream, confirm that you edited the file used by the active
+   runtime. Docker, containerd, and K3s do not share configuration.
+6. `manifest unknown` usually means the image path or tag does not exist. A failed search in a NAS
+   GUI does not prove that command-line pulls are broken.
 
 [简体中文](Container-Registries-and-Runtimes-zh-CN)
