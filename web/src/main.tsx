@@ -1086,7 +1086,9 @@ export function normalizeContainerImage(input: string, registries: ContainerRegi
   const [first, ...rest] = image.split('/')
   const dockerHosts = new Set(['docker.io', 'registry-1.docker.io'])
   if (dockerHosts.has(first)) return rest.join('/')
-  const explicitHost = first.includes('.') || first.includes(':') || first === 'localhost'
+  // A colon in a single-component reference separates its tag or digest
+  // algorithm (nginx:latest, nginx@sha256:...), not a registry port.
+  const explicitHost = rest.length > 0 && (first.includes('.') || first.includes(':') || first === 'localhost')
   if (!explicitHost) return image
   const supported = registries.some((registry) => registry.host === first || registry.aliases.includes(first))
   return supported ? image : ''
@@ -1095,6 +1097,9 @@ export function normalizeContainerImage(input: string, registries: ContainerRegi
 export function rewriteContainerConfig(content: string, kind: 'compose' | 'dockerfile', baseUrl: string, registries: ContainerRegistryTarget[]) {
   const mirrorHost = new URL(baseUrl).host
   const rewrite = (image: string) => {
+    // scratch is a Dockerfile sentinel rather than a pullable image. Variable
+    // references cannot be validated safely until the client expands them.
+    if (image === 'scratch' || image.includes('$')) return image
     const normalized = normalizeContainerImage(image, registries)
     return normalized ? `${mirrorHost}/${normalized}` : image
   }
@@ -1104,9 +1109,25 @@ export function rewriteContainerConfig(content: string, kind: 'compose' | 'docke
   return content.split('\n').map((line) => line.replace(/^(\s*FROM\s+(?:--platform=\S+\s+)?)(\S+)(.*)$/i, (_all, prefix, image, suffix) => `${prefix}${rewrite(image)}${suffix}`)).join('\n')
 }
 
+type RegistryWorkbenchMode = 'image' | 'compose' | 'dockerfile' | 'engine' | 'k3s'
+type RegistryEditableMode = Extract<RegistryWorkbenchMode, 'image' | 'compose' | 'dockerfile'>
+
+export function containerRegistryInputTemplate(registry: ContainerRegistryTarget, mode: RegistryEditableMode) {
+  if (mode === 'compose') return `services:\n  app:\n    image: ${registry.example_image}`
+  if (mode === 'dockerfile') return `FROM ${registry.example_image}`
+  return registry.example_image
+}
+
 function ContainerRegistryWorkbench({ registries, baseUrl, labels, copied, onCopy }: { registries: ContainerRegistryTarget[]; baseUrl: string; labels: Record<string, string>; copied: string | null; onCopy: (id: string, value: string) => void }) {
-  const [mode, setMode] = React.useState<'image' | 'compose' | 'dockerfile' | 'engine' | 'k3s'>('image')
-  const [input, setInput] = React.useState(registries.find((item) => !item.legacy)?.example_image ?? 'nginx:latest')
+  const initialRegistry = registries.find((item) => !item.legacy) ?? registries[0]
+  const [mode, setMode] = React.useState<RegistryWorkbenchMode>('image')
+  const [selectedRegistryCode, setSelectedRegistryCode] = React.useState(initialRegistry.code)
+  const [inputs, setInputs] = React.useState<Record<RegistryEditableMode, string>>(() => ({
+    image: containerRegistryInputTemplate(initialRegistry, 'image'),
+    compose: containerRegistryInputTemplate(initialRegistry, 'compose'),
+    dockerfile: containerRegistryInputTemplate(initialRegistry, 'dockerfile'),
+  }))
+  const input = mode === 'image' || mode === 'compose' || mode === 'dockerfile' ? inputs[mode] : ''
   const normalized = mode === 'image' ? normalizeContainerImage(input, registries) : ''
   const output = mode === 'image'
     ? (normalized ? `docker pull ${new URL(baseUrl).host}/${normalized}` : '')
@@ -1116,16 +1137,30 @@ function ContainerRegistryWorkbench({ registries, baseUrl, labels, copied, onCop
         ? `mirrors:\n  docker.io:\n    endpoint:\n      - "${baseUrl}"`
         : rewriteContainerConfig(input, mode, baseUrl, registries)
   const unsupported = mode === 'image' && input.trim() && !normalized
-  const selectRegistry = (registry: ContainerRegistryTarget) => { setMode('image'); setInput(registry.example_image) }
+  const outputLabel = mode === 'image' ? labels.pullCommand : mode === 'compose' ? labels.composeFile : mode === 'dockerfile' ? labels.dockerfile : mode === 'engine' ? labels.dockerEngine : labels.k3sConfig
+  const selectRegistry = (registry: ContainerRegistryTarget) => {
+    setMode('image')
+    setSelectedRegistryCode(registry.code)
+    setInputs({
+      image: containerRegistryInputTemplate(registry, 'image'),
+      compose: containerRegistryInputTemplate(registry, 'compose'),
+      dockerfile: containerRegistryInputTemplate(registry, 'dockerfile'),
+    })
+  }
+  const updateInput = (value: string) => {
+    if (mode === 'image' || mode === 'compose' || mode === 'dockerfile') {
+      setInputs((current) => ({ ...current, [mode]: value }))
+    }
+  }
 
   return <section className="registry-workbench">
     <div className="registry-workbench-head"><div><span className="eyebrow">OCI DISTRIBUTION</span><h2>{labels.registryWorkbench}</h2><p>{labels.registryWorkbenchHint}</p></div><span className="registry-count">{registries.filter((item) => !item.legacy).length} REGISTRIES</span></div>
-    <div className="registry-rail">{registries.map((registry) => <button type="button" className={registry.example_image === input ? 'registry-chip active' : 'registry-chip'} onClick={() => selectRegistry(registry)} key={registry.code}><span>{registry.name}</span><code>{registry.host}</code>{registry.legacy ? <em>{labels.legacyRegistry}</em> : null}</button>)}</div>
+    <div className="registry-rail">{registries.map((registry) => <button type="button" className={registry.code === selectedRegistryCode ? 'registry-chip active' : 'registry-chip'} aria-pressed={registry.code === selectedRegistryCode} onClick={() => selectRegistry(registry)} key={registry.code}><span>{registry.name}</span><code>{registry.host}</code>{registry.legacy ? <em>{labels.legacyRegistry}</em> : null}</button>)}</div>
     <div className="registry-editor">
       <div className="registry-modes"><button className={mode === 'image' ? 'active' : ''} onClick={() => setMode('image')}>{labels.singleImage}</button><button className={mode === 'compose' ? 'active' : ''} onClick={() => setMode('compose')}>{labels.composeFile}</button><button className={mode === 'dockerfile' ? 'active' : ''} onClick={() => setMode('dockerfile')}>{labels.dockerfile}</button><button className={mode === 'engine' ? 'active' : ''} onClick={() => setMode('engine')}>{labels.dockerEngine}</button><button className={mode === 'k3s' ? 'active' : ''} onClick={() => setMode('k3s')}>{labels.k3sConfig}</button></div>
-      {mode === 'engine' || mode === 'k3s' ? <p className="registry-platform-hint"><ShieldCheck size={16} />{labels.platformConfigHint}</p> : <label><span>{labels.registryInputHint}</span><textarea rows={mode === 'image' ? 3 : 9} value={input} onChange={(event) => setInput(event.target.value)} placeholder={mode === 'compose' ? 'services:\n  app:\n    image: ghcr.io/owner/app:latest' : mode === 'dockerfile' ? 'FROM mcr.microsoft.com/dotnet/runtime:8.0' : 'mcr.microsoft.com/dotnet/runtime:8.0'} /></label>}
+      {mode === 'engine' || mode === 'k3s' ? <p className="registry-platform-hint"><ShieldCheck size={16} />{labels.platformConfigHint}</p> : <label><span>{labels.registryInputHint}</span><textarea rows={mode === 'image' ? 3 : 9} value={input} onChange={(event) => updateInput(event.target.value)} placeholder={mode === 'compose' ? 'services:\n  app:\n    image: ghcr.io/owner/app:latest' : mode === 'dockerfile' ? 'FROM mcr.microsoft.com/dotnet/runtime:8.0' : 'mcr.microsoft.com/dotnet/runtime:8.0'} /></label>}
       {unsupported ? <p className="registry-error"><CircleAlert size={16} />{labels.unsupportedRegistry}</p> : null}
-      {output ? <div className="registry-output"><div><span>{labels.proxyLink}</span><button onClick={() => onCopy('registry-output', output)}><Clipboard size={15} />{copied === 'registry-output' ? labels.copied : labels.copy}</button></div><pre><code>{output}</code></pre></div> : null}
+      {output ? <div className="registry-output"><div><span>{outputLabel}</span><button onClick={() => onCopy('registry-output', output)}><Clipboard size={15} />{copied === 'registry-output' ? labels.copied : labels.copy}</button></div><pre><code>{output}</code></pre></div> : null}
     </div>
   </section>
 }

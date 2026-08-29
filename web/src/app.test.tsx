@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { App, normalizeContainerImage, rewriteContainerConfig, sourceManualCommand } from './main'
+import { App, containerRegistryInputTemplate, normalizeContainerImage, rewriteContainerConfig, sourceManualCommand } from './main'
 
 const containerRegistries = [
   { code: 'docker-hub', name: 'Docker Hub', host: 'docker.io', aliases: ['registry-1.docker.io'], example_image: 'nginx:latest', legacy: false },
@@ -37,19 +37,36 @@ describe('App preferences', () => {
   })
 
   it('validates supported container registries before generating proxy paths', () => {
+    expect(normalizeContainerImage('nginx:latest', containerRegistries)).toBe('nginx:latest')
+    expect(normalizeContainerImage('ubuntu@sha256:0123456789abcdef', containerRegistries)).toBe('ubuntu@sha256:0123456789abcdef')
+    expect(normalizeContainerImage('owner/image:latest', containerRegistries)).toBe('owner/image:latest')
     expect(normalizeContainerImage('docker.io/library/nginx:latest', containerRegistries)).toBe('library/nginx:latest')
+    expect(normalizeContainerImage('registry-1.docker.io/library/nginx:latest', containerRegistries)).toBe('library/nginx:latest')
     expect(normalizeContainerImage('mcr.microsoft.com/dotnet/runtime:8.0', containerRegistries)).toBe('mcr.microsoft.com/dotnet/runtime:8.0')
     expect(normalizeContainerImage('nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04', containerRegistries)).toBe('nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04')
     expect(normalizeContainerImage('registry.gitlab.com/group/project/image:latest', containerRegistries)).toBe('registry.gitlab.com/group/project/image:latest')
     expect(normalizeContainerImage('container-registry.oracle.com/os/oraclelinux:9-slim', containerRegistries)).toBe('container-registry.oracle.com/os/oraclelinux:9-slim')
+    expect(normalizeContainerImage('localhost:5000/private/image:latest', containerRegistries)).toBe('')
     expect(normalizeContainerImage('registry.example.com/private/image:latest', containerRegistries)).toBe('')
   })
 
   it('rewrites Compose and Dockerfile image references without changing unsupported registries', () => {
+    expect(rewriteContainerConfig('services:\n  web:\n    image: nginx:latest', 'compose', 'https://mirror.example', containerRegistries)).toContain('image: mirror.example/nginx:latest')
+    expect(rewriteContainerConfig('services:\n  web:\n    image: ubuntu@sha256:0123456789abcdef', 'compose', 'https://mirror.example', containerRegistries)).toContain('image: mirror.example/ubuntu@sha256:0123456789abcdef')
     expect(rewriteContainerConfig('services:\n  api:\n    image: ghcr.io/owner/app:1', 'compose', 'https://mirror.example', containerRegistries)).toContain('image: mirror.example/ghcr.io/owner/app:1')
     expect(rewriteContainerConfig('FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/runtime:8.0 AS base', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('FROM --platform=linux/amd64 mirror.example/mcr.microsoft.com/dotnet/runtime:8.0 AS base')
     expect(rewriteContainerConfig('FROM nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('FROM mirror.example/nvcr.io/nvidia/cuda:12.6.0-base-ubuntu22.04')
     expect(rewriteContainerConfig('FROM registry.example.com/private/image:latest', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('FROM registry.example.com/private/image:latest')
+    expect(rewriteContainerConfig('FROM scratch', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('FROM scratch')
+    expect(rewriteContainerConfig('ARG BASE_IMAGE=nginx:latest\nFROM ${BASE_IMAGE}', 'dockerfile', 'https://mirror.example', containerRegistries)).toBe('ARG BASE_IMAGE=nginx:latest\nFROM ${BASE_IMAGE}')
+    expect(rewriteContainerConfig('services:\n  api:\n    image: ${REGISTRY}/owner/app:latest', 'compose', 'https://mirror.example', containerRegistries)).toContain('image: ${REGISTRY}/owner/app:latest')
+  })
+
+  it('creates mode-appropriate starter content for each registry', () => {
+    const gitlab = containerRegistries.find((registry) => registry.code === 'gitlab')!
+    expect(containerRegistryInputTemplate(gitlab, 'image')).toBe(gitlab.example_image)
+    expect(containerRegistryInputTemplate(gitlab, 'compose')).toBe(`services:\n  app:\n    image: ${gitlab.example_image}`)
+    expect(containerRegistryInputTemplate(gitlab, 'dockerfile')).toBe(`FROM ${gitlab.example_image}`)
   })
 
   it('shows accelerated stable client installers and the GitHub footer', async () => {
