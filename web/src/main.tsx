@@ -36,8 +36,11 @@ import {
   X,
 } from 'lucide-react'
 import './styles.css'
+import { installCsrfFetch } from './csrf-fetch'
 import { readStoredPreference } from './preferences'
 import { CacheOperations, TeamTargetAccess } from './v13-operations'
+
+installCsrfFetch()
 
 type Locale = 'en' | 'zh'
 type Theme = 'light' | 'dark'
@@ -685,6 +688,9 @@ function UserPage() {
   }, [])
 
   React.useEffect(() => { loadProfile().catch(() => undefined) }, [loadProfile])
+  React.useEffect(() => {
+    fetch('/api/auth/session').catch(() => undefined)
+  }, [])
   React.useEffect(() => {
     Promise.all([
       fetch('/api/public-config').then((response) => response.ok ? response.json() as Promise<PublicConfig> : Promise.reject()),

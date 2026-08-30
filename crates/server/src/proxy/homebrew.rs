@@ -53,6 +53,7 @@ pub async fn proxy(
     upstream.set_query(request.uri().query());
     super::oci::forward_with_public_auth(
         &state,
+        super::oci::OciRegistry::Ghcr,
         request.method().clone(),
         upstream,
         request.headers(),

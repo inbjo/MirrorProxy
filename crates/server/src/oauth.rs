@@ -26,8 +26,8 @@ use url::Url;
 use crate::{
     authenticated_user, bad_request_response,
     database::{AuthProvider, ExternalRegistration},
-    internal_error_response, require_super_admin, unauthorized_response, user_session_cookie,
-    valid_user_email, AppState,
+    internal_error_response, require_super_admin, unauthorized_response, user_csrf_cookie,
+    user_session_cookie, valid_user_email, AppState,
 };
 
 const FLOW_COOKIE: &str = "mirrorproxy_oauth_state";
@@ -1214,7 +1214,10 @@ fn callback_redirect(path: &str, session: Option<&str>) -> Response {
             .map(user_session_cookie)
             .unwrap_or_else(clear_flow_cookie),
     );
-    if session.is_some() {
+    if let Some(session) = session {
+        response
+            .headers_mut()
+            .append(header::SET_COOKIE, user_csrf_cookie(session));
         response
             .headers_mut()
             .append(header::SET_COOKIE, clear_flow_cookie());

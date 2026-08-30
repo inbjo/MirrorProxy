@@ -22,8 +22,8 @@ use url::Url;
 use crate::{
     bad_request_response,
     database::{Database, SmtpSettings},
-    internal_error_response, require_super_admin, unauthorized_response, user_session_cookie,
-    valid_user_email, AppState,
+    internal_error_response, require_super_admin, unauthorized_response, user_csrf_cookie,
+    user_session_cookie, valid_user_email, AppState,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -494,6 +494,9 @@ pub(crate) async fn verify_email_login(
     response
         .headers_mut()
         .insert(header::SET_COOKIE, user_session_cookie(&session.token));
+    response
+        .headers_mut()
+        .append(header::SET_COOKIE, user_csrf_cookie(&session.token));
     response
 }
 

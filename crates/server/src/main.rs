@@ -30,7 +30,7 @@ use anyhow::Context;
 use axum::{
     body::Body,
     extract::{connect_info::ConnectInfo, Path as AxumPath, Query, Request, State},
-    http::{header, uri::Authority, HeaderMap, HeaderValue, Method, StatusCode, Uri},
+    http::{header, uri::Authority, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -42,6 +42,7 @@ use clap::{Parser, Subcommand};
 use config::{AcmeConfig, Config, OutboundProxyConfig};
 use database::{AdminUsernameChangeOutcome, Database, ProxyTrafficRecord};
 use geoip::{AccessDecision, GeoIpService, GeoLocation, IpAccessPolicy, IpNetwork};
+use hmac::{Hmac, Mac};
 use mirrorproxy_catalog as catalog;
 use observability::Observability;
 use opentelemetry::trace::TracerProvider as _;
@@ -55,6 +56,7 @@ use proxy::{
 };
 use reqwest::{Certificate, Client, ClientBuilder, NoProxy, Proxy, Url};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -66,9 +68,13 @@ use webauthn_rs::prelude::{
 
 const QUOTA_RESERVATION_BYTES: u64 = 8 * 1024 * 1024;
 const ADMIN_SESSION_COOKIE: &str = "mirrorproxy_admin_session";
+const ADMIN_CSRF_COOKIE: &str = "__Host-mirrorproxy_admin_csrf";
 const SESSION_COOKIE_MAX_AGE_SECS: i64 = 24 * 60 * 60;
 const USER_SESSION_COOKIE: &str = "mirrorproxy_user_session";
+const USER_CSRF_COOKIE: &str = "__Host-mirrorproxy_user_csrf";
 const USER_SESSION_COOKIE_MAX_AGE_SECS: i64 = 30 * 24 * 60 * 60;
+const CSRF_HEADER: &str = "x-mirrorproxy-csrf";
+const CSRF_CONTEXT: &[u8] = b"MirrorProxy browser CSRF token v1";
 
 #[derive(Clone, Debug)]
 pub struct UserRoutingContext {
@@ -2177,6 +2183,7 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
             state.clone(),
             user_routing_middleware,
         ))
+        .layer(middleware::from_fn(csrf_protection_middleware))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             strip_untrusted_forwarded_headers,
@@ -2379,6 +2386,99 @@ async fn user_routing_middleware(
             internal_error_response()
         }
     }
+}
+
+async fn csrf_protection_middleware(request: Request, next: Next) -> Response {
+    if !matches!(
+        *request.method(),
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    ) {
+        return next.run(request).await;
+    }
+
+    let path = request.uri().path();
+    let session_cookie = if path.starts_with("/admin/api/")
+        && !matches!(
+            path,
+            "/admin/api/auth/login"
+                | "/admin/api/auth/passkey/login/start"
+                | "/admin/api/auth/passkey/login/finish"
+        ) {
+        cookie_value(request.headers(), ADMIN_SESSION_COOKIE)
+    } else if path.starts_with("/api/account/") || path == "/api/auth/logout" {
+        cookie_value(request.headers(), USER_SESSION_COOKIE)
+    } else {
+        None
+    };
+
+    let Some(session_token) = session_cookie else {
+        return next.run(request).await;
+    };
+
+    if !request_has_same_origin(request.headers())
+        || !valid_csrf_header(request.headers(), session_token)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "invalid CSRF proof" })),
+        )
+            .into_response();
+    }
+
+    next.run(request).await
+}
+
+fn request_has_same_origin(headers: &HeaderMap) -> bool {
+    let supplied =
+        header_value(headers, header::ORIGIN).or_else(|| header_value(headers, header::REFERER));
+    let Some(url) = supplied.and_then(|value| Url::parse(value).ok()) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.host_str().is_none()
+    {
+        return false;
+    }
+    let Some(authority) = forwarded_header_value(headers, "x-forwarded-host")
+        .or_else(|| header_value(headers, header::HOST))
+        .and_then(|value| value.parse::<Authority>().ok())
+    else {
+        return false;
+    };
+    if !url
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case(authority.host()))
+        || match authority.port_u16() {
+            Some(port) => url.port_or_known_default() != Some(port),
+            None => url.port().is_some(),
+        }
+    {
+        return false;
+    }
+    forwarded_header_value(headers, "x-forwarded-proto")
+        .map_or(true, |scheme| scheme.eq_ignore_ascii_case(url.scheme()))
+}
+
+fn valid_csrf_header(headers: &HeaderMap, session_token: &str) -> bool {
+    let Some(provided) = header_value(headers, HeaderName::from_static(CSRF_HEADER))
+        .and_then(|value| hex::decode(value).ok())
+    else {
+        return false;
+    };
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(session_token.as_bytes()) else {
+        return false;
+    };
+    mac.update(CSRF_CONTEXT);
+    mac.verify_slice(&provided).is_ok()
+}
+
+fn csrf_token(session_token: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(session_token.as_bytes())
+        .expect("HMAC accepts session tokens of every length");
+    mac.update(CSRF_CONTEXT);
+    hex::encode(mac.finalize().into_bytes())
 }
 
 fn request_host(headers: &HeaderMap) -> Option<String> {
@@ -3374,6 +3474,10 @@ async fn admin_login_response(
             }))
             .into_response();
             response.headers_mut().insert(header::SET_COOKIE, cookie);
+            response.headers_mut().append(
+                header::SET_COOKIE,
+                admin_csrf_cookie(&session.token, SESSION_COOKIE_MAX_AGE_SECS),
+            );
             response
         }
         Ok(database::AdminLoginOutcome::Success(session)) => {
@@ -3441,11 +3545,24 @@ async fn admin_cookie_logout(headers: HeaderMap, State(state): State<AppState>) 
         .headers_mut()
         .insert(header::SET_COOKIE, clear_admin_session_cookie());
     response
+        .headers_mut()
+        .append(header::SET_COOKIE, clear_admin_csrf_cookie());
+    response
 }
 
 async fn admin_session(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let session_token = admin_token(&headers).map(str::to_string);
     match authenticated_admin(&headers, &state).await {
-        Ok(Some(identity)) => Json(identity).into_response(),
+        Ok(Some(identity)) => {
+            let mut response = Json(identity).into_response();
+            if let Some(token) = session_token {
+                response.headers_mut().append(
+                    header::SET_COOKIE,
+                    admin_csrf_cookie(&token, SESSION_COOKIE_MAX_AGE_SECS),
+                );
+            }
+            response
+        }
         Ok(None) => unauthorized_response(),
         Err(error) => {
             tracing::error!(%error, "administrator session query failed");
@@ -3549,6 +3666,9 @@ async fn revoke_admin_session(
                 response
                     .headers_mut()
                     .insert(header::SET_COOKIE, clear_admin_session_cookie());
+                response
+                    .headers_mut()
+                    .append(header::SET_COOKIE, clear_admin_csrf_cookie());
             }
             response
         }
@@ -3846,6 +3966,10 @@ async fn finish_admin_passkey_login(
     response.headers_mut().insert(
         header::SET_COOKIE,
         admin_session_cookie(&session.token, SESSION_COOKIE_MAX_AGE_SECS),
+    );
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        admin_csrf_cookie(&session.token, SESSION_COOKIE_MAX_AGE_SECS),
     );
     response
 }
@@ -5468,8 +5592,17 @@ async fn admin_user_usage(
 }
 
 async fn user_session(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let session_token = user_token(&headers).map(str::to_string);
     match authenticated_user(&headers, &state).await {
-        Ok(Some(identity)) => Json(identity).into_response(),
+        Ok(Some(identity)) => {
+            let mut response = Json(identity).into_response();
+            if let Some(token) = session_token {
+                response
+                    .headers_mut()
+                    .append(header::SET_COOKIE, user_csrf_cookie(&token));
+            }
+            response
+        }
         Ok(None) => unauthorized_response(),
         Err(error) => {
             tracing::error!(%error, "user session lookup failed");
@@ -5526,6 +5659,9 @@ async fn user_logout(headers: HeaderMap, State(state): State<AppState>) -> Respo
     response
         .headers_mut()
         .insert(header::SET_COOKIE, clear_user_session_cookie());
+    response
+        .headers_mut()
+        .append(header::SET_COOKIE, clear_user_csrf_cookie());
     response
 }
 
@@ -5702,9 +5838,23 @@ fn admin_session_cookie(token: &str, max_age_secs: i64) -> HeaderValue {
     .expect("generated administrator session cookie is valid")
 }
 
+fn admin_csrf_cookie(token: &str, max_age_secs: i64) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{ADMIN_CSRF_COOKIE}={}; Path=/; Secure; SameSite=Strict; Max-Age={max_age_secs}",
+        csrf_token(token)
+    ))
+    .expect("generated administrator CSRF cookie is valid")
+}
+
 fn clear_admin_session_cookie() -> HeaderValue {
     HeaderValue::from_static(
         "mirrorproxy_admin_session=; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=0",
+    )
+}
+
+fn clear_admin_csrf_cookie() -> HeaderValue {
+    HeaderValue::from_static(
+        "__Host-mirrorproxy_admin_csrf=; Path=/; Secure; SameSite=Strict; Max-Age=0",
     )
 }
 
@@ -5715,9 +5865,23 @@ pub fn user_session_cookie(token: &str) -> HeaderValue {
     .expect("generated user session cookie is valid")
 }
 
+pub fn user_csrf_cookie(token: &str) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{USER_CSRF_COOKIE}={}; Path=/; Secure; SameSite=Lax; Max-Age={USER_SESSION_COOKIE_MAX_AGE_SECS}",
+        csrf_token(token)
+    ))
+    .expect("generated user CSRF cookie is valid")
+}
+
 fn clear_user_session_cookie() -> HeaderValue {
     HeaderValue::from_static(
         "mirrorproxy_user_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+    )
+}
+
+fn clear_user_csrf_cookie() -> HeaderValue {
+    HeaderValue::from_static(
+        "__Host-mirrorproxy_user_csrf=; Path=/; Secure; SameSite=Lax; Max-Age=0",
     )
 }
 
@@ -6022,6 +6186,70 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[tokio::test]
+    async fn cookie_authenticated_mutations_require_same_origin_csrf_proof() {
+        let app = Router::new()
+            .route(
+                "/admin/api/acme/renew",
+                post(|| async { StatusCode::ACCEPTED }),
+            )
+            .layer(middleware::from_fn(csrf_protection_middleware));
+        let session = "test-admin-session";
+        let valid_csrf = csrf_token(session);
+
+        for (origin, csrf, expected) in [
+            (
+                "https://tenant.mirror.example",
+                valid_csrf.as_str(),
+                StatusCode::FORBIDDEN,
+            ),
+            ("https://mirror.example", "", StatusCode::FORBIDDEN),
+            (
+                "https://mirror.example",
+                valid_csrf.as_str(),
+                StatusCode::ACCEPTED,
+            ),
+        ] {
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri("/admin/api/acme/renew")
+                .header(header::HOST, "mirror.example")
+                .header(header::ORIGIN, origin)
+                .header(header::COOKIE, format!("{ADMIN_SESSION_COOKIE}={session}"));
+            if !csrf.is_empty() {
+                request = request.header(CSRF_HEADER, csrf);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn bearer_only_control_mutations_do_not_require_browser_csrf_proof() {
+        let app = Router::new()
+            .route(
+                "/admin/api/acme/renew",
+                post(|| async { StatusCode::ACCEPTED }),
+            )
+            .layer(middleware::from_fn(csrf_protection_middleware));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/admin/api/acme/renew")
+                    .header(header::AUTHORIZATION, "Bearer service-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
 
     #[test]
     fn systemd_unit_uses_explicit_paths_and_optional_low_port_capability() {

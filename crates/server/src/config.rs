@@ -33,6 +33,10 @@ pub struct Config {
     pub enabled_proxies: Vec<String>,
     #[serde(default)]
     pub upstreams: Upstreams,
+    /// Additional HTTPS origins trusted to issue OCI bearer tokens. The
+    /// challenged registry origin itself is always trusted.
+    #[serde(default = "default_oci_token_issuers")]
+    pub oci_token_issuers: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub timeout: TimeoutConfig,
     #[serde(default)]
@@ -1141,6 +1145,26 @@ impl Config {
         validate_http_url("upstreams.gitlab", &self.upstreams.gitlab)?;
         validate_http_url("upstreams.nvcr", &self.upstreams.nvcr)?;
         validate_http_url("upstreams.oracle", &self.upstreams.oracle)?;
+        for (registry, issuers) in &self.oci_token_issuers {
+            if !matches!(
+                registry.as_str(),
+                "docker_hub"
+                    | "ghcr"
+                    | "quay"
+                    | "kubernetes"
+                    | "gcr"
+                    | "mcr"
+                    | "elastic"
+                    | "gitlab"
+                    | "nvcr"
+                    | "oracle"
+            ) {
+                anyhow::bail!("oci_token_issuers contains unknown registry: {registry}");
+            }
+            for (index, issuer) in issuers.iter().enumerate() {
+                validate_https_origin(&format!("oci_token_issuers.{registry}[{index}]"), issuer)?;
+            }
+        }
         validate_http_url("upstreams.npm", &self.upstreams.npm)?;
         validate_http_url("upstreams.nvm", &self.upstreams.nvm)?;
         validate_http_url("upstreams.opam", &self.upstreams.opam)?;
@@ -1400,6 +1424,7 @@ impl Default for Config {
             trusted_proxies: default_trusted_proxies(),
             enabled_proxies: default_enabled_proxies(),
             upstreams: Upstreams::default(),
+            oci_token_issuers: default_oci_token_issuers(),
             timeout: TimeoutConfig::default(),
             upstream_selection: UpstreamSelectionConfig::default(),
             rate_limit: RateLimitConfig::default(),
@@ -2654,6 +2679,37 @@ fn default_request_event_retention_days() -> u32 {
     30
 }
 
+fn default_oci_token_issuers() -> BTreeMap<String, Vec<String>> {
+    BTreeMap::from([
+        (
+            "docker_hub".to_string(),
+            vec!["https://auth.docker.io".to_string()],
+        ),
+        (
+            "elastic".to_string(),
+            vec!["https://docker-auth.elastic.co".to_string()],
+        ),
+        ("gitlab".to_string(), vec!["https://gitlab.com".to_string()]),
+    ])
+}
+
+fn validate_https_origin(field: &str, value: &str) -> anyhow::Result<()> {
+    let url = Url::parse(value).map_err(|error| anyhow::anyhow!("{field} is invalid: {error}"))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!(
+            "{field} must be an HTTPS origin without a path, query, credentials, or fragment"
+        );
+    }
+    Ok(())
+}
+
 fn validate_http_url(field: &str, value: &str) -> anyhow::Result<()> {
     let endpoints = value
         .split(',')
@@ -2697,6 +2753,23 @@ fn parse_env_bool(name: &str, value: &str) -> anyhow::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_oci_token_issuer_origins() {
+        let mut config = Config::default();
+        assert!(config.validate().is_ok());
+        config.oci_token_issuers.insert(
+            "docker_hub".to_string(),
+            vec!["http://auth.example/token".to_string()],
+        );
+        assert!(config.validate().is_err());
+        config.oci_token_issuers.clear();
+        config.oci_token_issuers.insert(
+            "unknown".to_string(),
+            vec!["https://auth.example".to_string()],
+        );
+        assert!(config.validate().is_err());
+    }
 
     #[test]
     fn validates_supported_global_outbound_proxy_schemes() {

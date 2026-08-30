@@ -87,6 +87,15 @@ crates_api = "https://crates.io"
 pypi_simple = "https://pypi.org/simple"
 pypi_files = "https://files.pythonhosted.org"
 
+# OCI bearer challenges may use the challenged registry origin plus these
+# explicit HTTPS token-issuer origins. Add an entry here when a custom registry
+# delegates authentication to a different public origin.
+[oci_token_issuers]
+docker_hub = ["https://auth.docker.io"]
+elastic = ["https://docker-auth.elastic.co"]
+gitlab = ["https://gitlab.com"]
+# ghcr = ["https://auth.registry.example"]
+
 [timeout]
 request_secs = 60
 
