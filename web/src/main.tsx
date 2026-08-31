@@ -1199,7 +1199,7 @@ function InstallCommand({ title, hint, command, copied, copyLabel, copiedLabel, 
 }
 
 function InstallCode({ command, copied, copyLabel, copiedLabel, onCopy }: { command: string; copied: boolean; copyLabel: string; copiedLabel: string; onCopy: () => void }) {
-  return <div className="install-command"><code className="scrollbar-thin scrollbar-track-transparent scrollbar-thumb-slate-400 dark:scrollbar-thumb-slate-600">{command}</code><button onClick={onCopy}><Clipboard size={15} /> {copied ? copiedLabel : copyLabel}</button></div>
+  return <div className="install-command"><code>{command}</code><button onClick={onCopy}><Clipboard size={15} /> {copied ? copiedLabel : copyLabel}</button></div>
 }
 
 function LinkConverter({ title, icon, hint, value, onChange, output, outputLabel, placeholder, copyLabel, copiedLabel, copied, onCopy }: { title: string; icon: React.ReactNode; hint: string; value: string; onChange: (value: string) => void; output: string; outputLabel: string; placeholder: string; copyLabel: string; copiedLabel: string; copied: boolean; onCopy: () => void }) {
@@ -1228,7 +1228,7 @@ function SourceConfigModal({ target, health, baseUrl, catalog, labels, copied, o
 }
 
 function ConfigOption({ title, description, value, copyLabel, copiedLabel, copied, onCopy }: { title: string; description: string; value: string; copyLabel: string; copiedLabel: string; copied: boolean; onCopy: () => void }) {
-  return <section className="config-option"><span>{title}</span><p>{description}</p><pre><code className="modal-command-scrollbar scrollbar-thin scrollbar-track-transparent scrollbar-thumb-slate-400 scrollbar-thumb-rounded-full">{value}</code></pre><button onClick={onCopy}>{copied ? copiedLabel : copyLabel}</button></section>
+  return <section className="config-option"><span>{title}</span><p>{description}</p><pre><code className="modal-command-scrollbar">{value}</code></pre><button onClick={onCopy}>{copied ? copiedLabel : copyLabel}</button></section>
 }
 
 function sourceCategoryIcon(category: SourceTarget['category']) {
