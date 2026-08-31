@@ -75,6 +75,9 @@ const USER_CSRF_COOKIE: &str = "__Host-mirrorproxy_user_csrf";
 const USER_SESSION_COOKIE_MAX_AGE_SECS: i64 = 30 * 24 * 60 * 60;
 const CSRF_HEADER: &str = "x-mirrorproxy-csrf";
 const CSRF_CONTEXT: &[u8] = b"MirrorProxy browser CSRF token v1";
+const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https:; manifest-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'";
+const PERMISSIONS_POLICY: &str = "accelerometer=(), ambient-light-sensor=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(self), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(self), screen-wake-lock=(), usb=()";
+const STRICT_TRANSPORT_SECURITY: &str = "max-age=63072000";
 
 #[derive(Clone, Debug)]
 pub struct UserRoutingContext {
@@ -2197,6 +2200,10 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),
+            security_headers_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
             observability_middleware,
         ))
         .with_state(state.clone());
@@ -2298,6 +2305,61 @@ fn acme_environment_managed() -> bool {
                     | "AWS_SESSION_TOKEN"
             )
     })
+}
+
+async fn security_headers_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let secure_transport = request_uses_https(&request, &state.config());
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+    );
+    headers.insert(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    headers.insert(
+        HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static(PERMISSIONS_POLICY),
+    );
+    if secure_transport {
+        headers.insert(
+            HeaderName::from_static("strict-transport-security"),
+            HeaderValue::from_static(STRICT_TRANSPORT_SECURITY),
+        );
+    } else {
+        headers.remove(HeaderName::from_static("strict-transport-security"));
+    }
+    response
+}
+
+fn request_uses_https(request: &Request, config: &Config) -> bool {
+    if request.uri().scheme_str() == Some("https") || config.acme.direct_https {
+        return true;
+    }
+    if Url::parse(&config.public_base_url).is_ok_and(|url| url.scheme() == "https") {
+        return true;
+    }
+    let trusted_peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .is_some_and(|peer| config.is_trusted_proxy(peer.0.ip()));
+    trusted_peer
+        && forwarded_header_value(request.headers(), "x-forwarded-proto")
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https"))
 }
 
 fn build_webauthn(config: &Config) -> anyhow::Result<Option<Arc<Webauthn>>> {
@@ -6186,6 +6248,80 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    fn assert_security_headers(headers: &HeaderMap, expect_hsts: bool) {
+        assert_eq!(
+            headers.get("content-security-policy"),
+            Some(&HeaderValue::from_static(CONTENT_SECURITY_POLICY))
+        );
+        assert_eq!(
+            headers.get("x-frame-options"),
+            Some(&HeaderValue::from_static("DENY"))
+        );
+        assert_eq!(
+            headers.get("x-content-type-options"),
+            Some(&HeaderValue::from_static("nosniff"))
+        );
+        assert_eq!(
+            headers.get("referrer-policy"),
+            Some(&HeaderValue::from_static("strict-origin-when-cross-origin"))
+        );
+        assert_eq!(
+            headers.get("permissions-policy"),
+            Some(&HeaderValue::from_static(PERMISSIONS_POLICY))
+        );
+        assert_eq!(
+            headers
+                .get("strict-transport-security")
+                .and_then(|value| value.to_str().ok()),
+            expect_hsts.then_some(STRICT_TRANSPORT_SECURITY)
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_include_security_headers_and_https_enables_hsts() {
+        let app = build_router(Config {
+            public_base_url: "https://mirror.example".to_string(),
+            ..Config::default()
+        })
+        .await
+        .unwrap();
+
+        for uri in ["/", "/api/public-config"] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_security_headers(response.headers(), true);
+        }
+    }
+
+    #[tokio::test]
+    async fn hsts_requires_a_verified_https_delivery_path() {
+        let app = build_router(Config::default()).await.unwrap();
+        let mut untrusted_request = Request::builder()
+            .uri("/healthz")
+            .header("x-forwarded-proto", "https")
+            .body(Body::empty())
+            .unwrap();
+        untrusted_request.extensions_mut().insert(ConnectInfo(
+            "198.51.100.10:4242".parse::<SocketAddr>().unwrap(),
+        ));
+        let response = app.clone().oneshot(untrusted_request).await.unwrap();
+        assert_security_headers(response.headers(), false);
+
+        let mut trusted_request = Request::builder()
+            .uri("/healthz")
+            .header("x-forwarded-proto", "https")
+            .body(Body::empty())
+            .unwrap();
+        trusted_request
+            .extensions_mut()
+            .insert(ConnectInfo("127.0.0.1:4242".parse::<SocketAddr>().unwrap()));
+        let response = app.oneshot(trusted_request).await.unwrap();
+        assert_security_headers(response.headers(), true);
+    }
 
     #[tokio::test]
     async fn cookie_authenticated_mutations_require_same_origin_csrf_proof() {
