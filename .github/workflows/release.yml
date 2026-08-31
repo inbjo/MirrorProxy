@@ -291,7 +291,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: nightly
-          name: MirrorProxy Nightly
+          name: Nightly
           body: |
             Automated rolling build from `main` at `${{ github.sha }}`.
 
