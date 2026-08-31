@@ -3,6 +3,35 @@
 All notable changes to MirrorProxy are documented in this file. Release tags
 follow semantic versioning.
 
+## [1.4.1] - 2026-08-31
+
+### Security hardening
+
+- Added same-origin and session-bound CSRF proof validation for cookie-backed
+  administrator and account mutations, while preserving bearer-token API use.
+- Restricted OCI bearer-token challenges to HTTPS issuers explicitly trusted
+  for each registry, rejected credentials and fragments, disabled redirects,
+  pinned validated DNS results, and blocked private or special-use addresses.
+- Added validated `oci_token_issuers` configuration with safe defaults for
+  Docker Hub, Elastic Registry, and GitLab Container Registry.
+
+### Registry workbench and web console
+
+- Fixed Docker Hub shorthand references such as `nginx:latest`, Compose and
+  Dockerfile starter templates, per-mode editor state, active registry state,
+  output labels, and Docker Engine/K3s guidance.
+- Preserved Dockerfile sentinel and variable references instead of rewriting
+  `scratch` or unresolved image variables.
+- Unified horizontal and vertical scroll containers on the Tailwind scrollbar
+  design tokens, including registry, administration, command, and traffic views.
+
+### CI reliability
+
+- Updated Clippy compatibility for Rust 1.98 and taught the real administrator
+  smoke test to send the new CSRF proof.
+- Aligned browser regression tests with Tailwind's generated scrollbar metrics
+  and added coverage for the Registry rail.
+
 ## [1.4.0] - 2026-08-27
 
 ### Container registries and client compatibility

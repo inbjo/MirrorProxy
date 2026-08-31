@@ -2008,11 +2008,11 @@ dependencies = [
 
 [[package]]
 name = "mirrorproxy-catalog"
-version = "1.4.0"
+version = "1.4.1"
 
 [[package]]
 name = "mirrorproxy-cli"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2024,7 +2024,7 @@ dependencies = [
 
 [[package]]
 name = "mirrorproxy-server"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "argon2",
