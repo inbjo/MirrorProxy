@@ -108,6 +108,12 @@ test('offers accelerated stable client installers and a project footer', async (
   expect(dimensions.every(({ buttonHeight, codeHeight }) => buttonHeight === 48 && codeHeight === 48)).toBe(true)
   expect(dimensions.every(({ scrollbarWidth }) => scrollbarWidth === 'thin')).toBe(true)
   expect(await page.locator('html').evaluate((element) => getComputedStyle(element).scrollbarWidth)).toBe('thin')
+  const registryScrollbar = await page.locator('.registry-rail').evaluate((element) => ({
+    scrollbarWidth: getComputedStyle(element).scrollbarWidth,
+    scrollbarHeight: getComputedStyle(element, '::-webkit-scrollbar').height,
+    overflowX: getComputedStyle(element).overflowX,
+  }))
+  expect(registryScrollbar).toEqual({ scrollbarWidth: 'thin', scrollbarHeight: '8px', overflowX: 'auto' })
   await page.setViewportSize({ width: 500, height: 900 })
   await page.locator('.source-tile').first().click()
   const configModal = page.locator('.config-modal')
@@ -121,7 +127,7 @@ test('offers accelerated stable client installers and a project footer', async (
     clientWidth: element.clientWidth,
   })))
   expect(optionScrollbars).toHaveLength(3)
-  expect(optionScrollbars.every(({ scrollbarWidth, scrollbarHeight, overflowX }) => scrollbarWidth === 'thin' && scrollbarHeight === '6px' && overflowX === 'auto')).toBe(true)
+  expect(optionScrollbars.every(({ scrollbarWidth, scrollbarHeight, overflowX }) => scrollbarWidth === 'thin' && scrollbarHeight === '8px' && overflowX === 'auto')).toBe(true)
   expect(optionScrollbars.some(({ scrollWidth, clientWidth }) => scrollWidth > clientWidth)).toBe(true)
   await expect(page.locator('.site-footer')).not.toContainText('Powered By')
   await expect(page.locator('.site-footer')).toContainText(`© ${new Date().getFullYear()} Private mirror service`)
