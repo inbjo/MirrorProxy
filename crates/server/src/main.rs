@@ -2458,7 +2458,7 @@ fn request_has_same_origin(headers: &HeaderMap) -> bool {
         return false;
     }
     forwarded_header_value(headers, "x-forwarded-proto")
-        .map_or(true, |scheme| scheme.eq_ignore_ascii_case(url.scheme()))
+        .is_none_or(|scheme| scheme.eq_ignore_ascii_case(url.scheme()))
 }
 
 fn valid_csrf_header(headers: &HeaderMap, session_token: &str) -> bool {

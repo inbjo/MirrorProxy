@@ -408,7 +408,7 @@ fn is_public_address(address: IpAddr) -> bool {
                     && segments[3] == 0)
                 && address
                     .to_ipv4_mapped()
-                    .map_or(true, |address| is_public_address(IpAddr::V4(address)))
+                    .is_none_or(|address| is_public_address(IpAddr::V4(address)))
         }
     }
 }
