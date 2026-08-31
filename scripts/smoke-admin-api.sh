@@ -65,10 +65,15 @@ curl --fail --silent --cookie-jar "$cookie_jar" \
   -H 'content-type: application/json' \
   -d '{"username":"admin","password":"MirrorProxy-Smoke-Password-1!"}' \
   "http://$listen_addr/admin/api/auth/login" >/dev/null
+csrf_token="$(awk '$6 == "__Host-mirrorproxy_admin_csrf" { print $7 }' "$cookie_jar")"
+test -n "$csrf_token"
 curl --fail --silent --cookie "$cookie_jar" "http://$listen_addr/admin/api/config" >/dev/null
 curl --fail --silent --cookie "$cookie_jar" "http://$management_addr/admin/api/config" >/dev/null
 curl --fail --silent --cookie "$cookie_jar" "http://$management_addr/admin/api/cache" >/dev/null
-curl --fail --silent --cookie "$cookie_jar" -X DELETE "http://$management_addr/admin/api/cache" >/dev/null
+curl --fail --silent --cookie "$cookie_jar" \
+  -H "Origin: http://$management_addr" \
+  -H "X-MirrorProxy-CSRF: $csrf_token" \
+  -X DELETE "http://$management_addr/admin/api/cache" >/dev/null
 
 kill "$server_pid"
 wait "$server_pid"
