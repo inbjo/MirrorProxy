@@ -159,6 +159,37 @@ test('copies a generated proxy command', async ({ page }) => {
   await expect(copyButton).toContainText('Copied')
 })
 
+test('aligns quick converter controls across cards on desktop', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 900 })
+  await page.goto('/')
+
+  const cards = page.locator('.quick-converters .link-converter')
+  await expect(cards.first()).toBeVisible()
+  await cards.nth(1).locator('.converter-title p').evaluate((el) => {
+    el.textContent =
+      'Supports public images from Docker Hub, GHCR, GitLab, Quay, Kubernetes, GCR, MCR, Elastic, NVCR, and Oracle Container Registry.'
+  })
+
+  const boxes = await cards.evaluateAll(cards =>
+    cards.map((card) => {
+      const input = card.querySelector('.converter-input input')
+      const button = card.querySelector('.converter-input button')
+      if (!input || !button) return null
+      const inputBox = input.getBoundingClientRect()
+      const buttonBox = button.getBoundingClientRect()
+      return { inputTop: inputBox.top, inputHeight: inputBox.height, buttonTop: buttonBox.top, buttonHeight: buttonBox.height }
+    }),
+  )
+  expect(boxes.length).toBeGreaterThan(1)
+  for (const box of boxes) {
+    expect(box).not.toBeNull()
+    expect(Math.abs(box!.inputTop - box!.buttonTop)).toBeLessThanOrEqual(1)
+    expect(Math.abs(box!.inputHeight - box!.buttonHeight)).toBeLessThanOrEqual(1)
+  }
+  const firstTop = boxes[0]!.inputTop
+  for (const box of boxes) expect(Math.abs(box!.inputTop - firstTop)).toBeLessThanOrEqual(1)
+})
+
 test('validates and rewrites container registry references', async ({ page }) => {
   await page.goto('/')
   const workbench = page.locator('.registry-workbench')
