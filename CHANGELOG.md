@@ -3,6 +3,33 @@
 All notable changes to MirrorProxy are documented in this file. Release tags
 follow semantic versioning.
 
+## [1.4.2] - 2026-09-22
+
+### Security
+
+- Prevented upstream HTTP redirects from reaching internal or special-use
+  addresses through the shared proxy client, including OS repositories, OCI
+  manifests and blobs, and Composer metadata. Redirect destinations are
+  validated and DNS results pinned before each follow-up request.
+- Limited redirects to 10 hops, rejected HTTPS downgrades, and removed
+  credentials on cross-origin hops. Explicit IP upstreams retain same-origin
+  redirects; other redirects through an outbound proxy fail closed when the
+  proxy could resolve a different destination.
+- Replaced static test encryption keys and switched production nonce generation
+  to the cryptographic library's random API without changing stored ciphertext
+  compatibility. Updated `rustls` to 0.23.45 for RUSTSEC-2026-0285.
+- Added response security headers, including CSP and HSTS only on verified
+  HTTPS delivery paths.
+
+### Reliability and delivery
+
+- Added real OS and OCI redirect regression coverage and updated English and
+  Simplified Chinese upstream guidance.
+- Updated the web test toolchain to Vitest 5 and standardized stable and
+  Nightly Release titles.
+- Thanks to [@kta1kri](https://github.com/kta1kri) for privately reporting
+  the upstream-redirect vulnerability.
+
 ## [1.4.1] - 2026-08-31
 
 ### Security hardening
