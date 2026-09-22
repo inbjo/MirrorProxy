@@ -1,0 +1,17 @@
+Package: mirrorproxy
+Version: 1.4.2
+Architecture: arm64
+Maintainer: MirrorProxy contributors <noreply@github.com>
+Installed-Size: 1692
+Filename: pool/main/m/mirrorproxy/mirrorproxy_1.4.2_arm64.deb
+Size: 544490
+MD5sum: 4a5b5a1c80c306279619b52a779f1782
+SHA1: 2708dc469ace65c7e880acbdf0da335b2c242650
+SHA256: 2700c57bb02737dbe404e0019fdba2b4ab064724e587a25343d7ebd33a0aafa0
+Section: utils
+Priority: optional
+Homepage: https://github.com/inbjo/MirrorProxy
+Description: Standalone MirrorProxy source manager
+ Configure package managers and development tools to use MirrorProxy or
+ supported public mirrors, with safe preview, write, and rollback operations.
+
