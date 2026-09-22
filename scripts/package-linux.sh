@@ -44,7 +44,8 @@ Version: $version
 Release: 1%{?dist}
 Summary: Self-hosted package mirror proxy
 License: MIT
-BuildArch: $rpm_arch
+%define debug_package %{nil}
+%global __strip /bin/true
 Source0: mirrorproxy-server.tar.gz
 %description
 MirrorProxy server and embedded administration console.
@@ -58,5 +59,5 @@ cp -a . %{buildroot}/
 %attr(0755,root,root) /usr/bin/mirrorproxy-server
 %config(noreplace) /etc/mirrorproxy/config.toml
 EOF
-rpmbuild --define "_topdir $package_root/rpmbuild" -bb "$package_root/rpmbuild/SPECS/mirrorproxy-server.spec"
+rpmbuild --define "_topdir $package_root/rpmbuild" --target "${rpm_arch}-linux" -bb "$package_root/rpmbuild/SPECS/mirrorproxy-server.spec"
 find "$package_root/rpmbuild/RPMS" -name '*.rpm' -exec cp {} "$output_dir/" \;

@@ -85,7 +85,9 @@ jobs:
           ./scripts/package-client-deb.sh \
             "target/${{ matrix.target }}/release/mirrorproxy" \
             "$version" "${{ matrix.deb_arch }}" .
-          sha256sum mirrorproxy_*.deb >"mirrorproxy-client-${{ matrix.deb_arch }}-deb.sha256"
+          for deb in mirrorproxy_*.deb; do
+            sha256sum "$deb" >"$deb.sha256"
+          done
       - uses: actions/upload-artifact@v6
         with:
           name: client-${{ matrix.target }}
@@ -93,7 +95,7 @@ jobs:
             ${{ matrix.archive }}
             ${{ matrix.archive }}.sha256
             mirrorproxy_*.deb
-            mirrorproxy-client-*-deb.sha256
+            mirrorproxy_*.deb.sha256
           if-no-files-found: ignore
 
   server:
@@ -105,9 +107,11 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             archive: mirrorproxy-server-x86_64-unknown-linux-musl.tar.gz
+            package_arch: x86_64
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             archive: mirrorproxy-server-aarch64-unknown-linux-gnu.tar.gz
+            package_arch: aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -153,7 +157,7 @@ jobs:
           tar -czf "${{ matrix.archive }}" -C "$staging" mirrorproxy-server config.example.toml geoip
           shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
       - name: Build native Linux packages
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
@@ -161,8 +165,10 @@ jobs:
           version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/server/Cargo.toml | head -n1)"
           ./scripts/package-linux.sh \
             "target/${{ matrix.target }}/release/mirrorproxy-server" \
-            "$version" x86_64 .
-          sha256sum mirrorproxy-server_*.deb mirrorproxy-server-*.rpm > mirrorproxy-server-packages.sha256
+            "$version" "${{ matrix.package_arch }}" .
+          for package in mirrorproxy-server_*.deb mirrorproxy-server-*.rpm; do
+            sha256sum "$package" >"$package.sha256"
+          done
       - uses: actions/upload-artifact@v6
         with:
           name: server-${{ matrix.target }}
@@ -171,7 +177,8 @@ jobs:
             ${{ matrix.archive }}.sha256
             mirrorproxy-server_*.deb
             mirrorproxy-server-*.rpm
-            mirrorproxy-server-packages.sha256
+            mirrorproxy-server_*.deb.sha256
+            mirrorproxy-server-*.rpm.sha256
 
   publish:
     needs: [client, server]
