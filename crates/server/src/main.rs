@@ -2227,7 +2227,7 @@ fn build_upstream_client_builder(config: &Config) -> anyhow::Result<ClientBuilde
     let mut builder = Client::builder()
         .no_proxy()
         .user_agent(format!("MirrorProxy/{}", env!("CARGO_PKG_VERSION")))
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(request_timeout);
     for path in &config.upstream_tls.ca_certificates {
         let pem = fs::read(path)
@@ -4601,7 +4601,13 @@ async fn admin_geoip_update(
         }
         _ => return bad_request_response("ip_version must be 4 or 6".into()),
     };
-    let response = match state.client().get(url).send().await {
+    let response = match proxy::send_upstream_request(
+        &state.client(),
+        &state.config(),
+        state.client().get(url),
+    )
+    .await
+    {
         Ok(response) if response.status().is_success() => response,
         Ok(response) => {
             return bad_gateway_response(&format!("GeoIP download returned {}", response.status()))
@@ -9243,6 +9249,55 @@ on_exceeded = "stop_proxy"
             .await
             .unwrap();
         assert_eq!(foreign.status(), StatusCode::MISDIRECTED_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn os_and_oci_routes_do_not_fetch_redirected_internal_content() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let internal_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let internal_address = internal_listener.local_addr().unwrap();
+        let internal_hits = Arc::new(AtomicUsize::new(0));
+        let hits = internal_hits.clone();
+        let internal_app = Router::new().fallback(move || {
+            hits.fetch_add(1, Ordering::SeqCst);
+            async { "internal secret" }
+        });
+        let internal_server =
+            tokio::spawn(
+                async move { axum::serve(internal_listener, internal_app).await.unwrap() },
+            );
+
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream_listener.local_addr().unwrap();
+        let location = format!("http://{internal_address}/secret");
+        let upstream_app = Router::new().fallback(move || {
+            let location = location.clone();
+            async move { (StatusCode::FOUND, [(header::LOCATION, location)]) }
+        });
+        let upstream_server =
+            tokio::spawn(
+                async move { axum::serve(upstream_listener, upstream_app).await.unwrap() },
+            );
+
+        let mut config = Config::default();
+        config.upstreams.debian = format!("http://{upstream_address}");
+        config.upstreams.docker_hub = format!("http://{upstream_address}");
+        let app = build_router(config).await.unwrap();
+        for path in [
+            "/os/debian/dists/stable/Release",
+            "/v2/nginx/manifests/latest",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_GATEWAY, "{path}");
+        }
+        assert_eq!(internal_hits.load(Ordering::SeqCst), 0);
+        upstream_server.abort();
+        internal_server.abort();
     }
 
     #[tokio::test]

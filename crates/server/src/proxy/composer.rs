@@ -63,12 +63,15 @@ async fn proxy_composer_path(
             .map(|req| req.headers())
             .cloned()
             .unwrap_or_default();
-        let response = state
-            .client()
-            .get(url)
-            .headers(to_reqwest_headers(&headers))
-            .send()
-            .await?;
+        let response = super::send_upstream_request(
+            &state.client(),
+            &config,
+            state
+                .client()
+                .get(url)
+                .headers(to_reqwest_headers(&headers)),
+        )
+        .await?;
         let status = response.status();
         let is_json = response
             .headers()

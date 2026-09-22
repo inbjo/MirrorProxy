@@ -32,5 +32,12 @@ configuration in the client.
   writes remain rejected.
 - Configure private upstream credentials and Authorization forwarding per target
   and with least privilege.
+- Upstream redirects are limited to 10 hops. New destinations must resolve only
+  to public addresses, and the checked addresses are pinned for the request.
+  A private IP configured as an upstream may redirect within its own origin.
+  Redirects through an outbound proxy are limited to the same configured IP origin
+  because the outbound proxy can resolve other targets itself. If an upstream
+  fails after upgrading, configure its final trusted URL directly; do not
+  disable destination checks. Cross-origin redirects drop credentials.
 
 [简体中文](Proxy-Adapters-zh-CN)

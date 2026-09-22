@@ -137,7 +137,7 @@ async fn send_with_public_auth(
         config,
     );
 
-    let response = request.send().await?;
+    let response = super::send_upstream_request(&client, config, request).await?;
     if response.status() != reqwest::StatusCode::UNAUTHORIZED {
         return Ok(response);
     }
@@ -155,7 +155,7 @@ async fn send_with_public_auth(
     let token = fetch_bearer_token(config, registry, &challenged_url, &challenge).await?;
     let retry = super::upstream_request(&client, method, url, incoming_headers, config);
 
-    Ok(retry.bearer_auth(token).send().await?)
+    super::send_upstream_request(&client, config, retry.bearer_auth(token)).await
 }
 
 async fn response_to_axum(response: reqwest::Response) -> Result<Response, ProxyError> {
@@ -353,7 +353,9 @@ fn same_origin(left: &Url, right: &Url) -> bool {
         && left.port_or_known_default() == right.port_or_known_default()
 }
 
-async fn public_destination_addresses(url: &Url) -> Result<Vec<std::net::SocketAddr>, ProxyError> {
+pub(super) async fn public_destination_addresses(
+    url: &Url,
+) -> Result<Vec<std::net::SocketAddr>, ProxyError> {
     let host = url.host_str().ok_or(ProxyError::InvalidUrl)?;
     let port = url.port_or_known_default().ok_or(ProxyError::InvalidUrl)?;
     if let Ok(address) = host.parse::<IpAddr>() {

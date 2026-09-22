@@ -473,7 +473,10 @@ async fn check_custom_endpoint(
             position,
             endpoint,
             status: "unhealthy".to_string(),
-            http_status: error.status().map(|status| status.as_u16()),
+            http_status: match &error {
+                proxy::ProxyError::Upstream(error) => error.status().map(|status| status.as_u16()),
+                _ => None,
+            },
             latency_ms: Some(started.elapsed().as_millis() as u64),
             checked_at,
             error: Some(short_error(error.to_string())),
@@ -538,7 +541,10 @@ async fn check_endpoint(
             position,
             endpoint,
             status: "unhealthy".to_string(),
-            http_status: error.status().map(|status| status.as_u16()),
+            http_status: match &error {
+                proxy::ProxyError::Upstream(error) => error.status().map(|status| status.as_u16()),
+                _ => None,
+            },
             latency_ms: Some(started.elapsed().as_millis() as u64),
             checked_at,
             error: Some(short_error(error.to_string())),

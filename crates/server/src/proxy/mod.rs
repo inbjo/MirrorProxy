@@ -31,6 +31,7 @@ pub mod winget;
 
 use std::{
     fs,
+    net::IpAddr,
     path::{Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -82,6 +83,8 @@ pub enum ProxyError {
     Upstream(#[from] reqwest::Error),
     #[error("upstream returned invalid header")]
     InvalidHeader,
+    #[error("upstream redirect has an unsafe destination")]
+    UnsafeRedirect,
 }
 
 /// Returns the first endpoint from an ordered comma-separated upstream group.
@@ -102,6 +105,7 @@ impl ProxyError {
             Self::InvalidUrl | Self::UnsupportedTarget | Self::InvalidHeader => {
                 StatusCode::BAD_REQUEST
             }
+            Self::UnsafeRedirect => StatusCode::BAD_GATEWAY,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
         }
@@ -184,7 +188,7 @@ async fn forward_request(
             request = request.body(body);
         }
         let started_at = Instant::now();
-        let upstream = match request.send().await {
+        let upstream = match send_upstream_request(&client, &config, request).await {
             Ok(response) => response,
             Err(error) if index + 1 < candidates.len() => {
                 state
@@ -197,7 +201,7 @@ async fn forward_request(
                 state
                     .upstream_selector
                     .record_failure(candidate, &config.upstream_selection);
-                return Err(error.into());
+                return Err(error);
             }
         };
         let status = upstream.status();
@@ -270,14 +274,17 @@ pub async fn get_with_fallback(
     );
     for (index, candidate) in candidates.iter().enumerate() {
         let started_at = Instant::now();
-        let response = match upstream_request(
+        let response = match send_upstream_request(
             &client,
-            reqwest::Method::GET,
-            candidate.clone(),
-            &HeaderMap::new(),
             &config,
+            upstream_request(
+                &client,
+                reqwest::Method::GET,
+                candidate.clone(),
+                &HeaderMap::new(),
+                &config,
+            ),
         )
-        .send()
         .await
         {
             Ok(response) => response,
@@ -292,7 +299,7 @@ pub async fn get_with_fallback(
                 state
                     .upstream_selector
                     .record_failure(candidate, &config.upstream_selection);
-                return Err(error.into());
+                return Err(error);
             }
         };
         if should_failover_status(response.status()) && index + 1 < candidates.len() {
@@ -352,15 +359,139 @@ fn upstream_request(
     request
 }
 
+/// Follow data-plane redirects only after validating and pinning each new target.
+/// The initially configured upstream remains operator-controlled, including
+/// explicitly configured private addresses.
+pub(crate) async fn send_upstream_request(
+    initial_client: &reqwest::Client,
+    config: &crate::config::Config,
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, ProxyError> {
+    let mut client = initial_client.clone();
+    let mut request = request.build()?;
+    let original = request.url().clone();
+    let mut redirects = 0;
+    loop {
+        let replay = request.try_clone();
+        let previous_url = request.url().clone();
+        let method = request.method().clone();
+        let mut headers = request.headers().clone();
+        let response = client.execute(request).await?;
+        let status = response.status();
+        if !matches!(
+            status,
+            reqwest::StatusCode::MOVED_PERMANENTLY
+                | reqwest::StatusCode::FOUND
+                | reqwest::StatusCode::SEE_OTHER
+                | reqwest::StatusCode::TEMPORARY_REDIRECT
+                | reqwest::StatusCode::PERMANENT_REDIRECT
+        ) {
+            return Ok(response);
+        }
+        let Some(location) = response.headers().get(reqwest::header::LOCATION) else {
+            return Ok(response);
+        };
+        let location = location.to_str().map_err(|_| ProxyError::UnsafeRedirect)?;
+        let target = response
+            .url()
+            .join(location)
+            .map_err(|_| ProxyError::UnsafeRedirect)?;
+        if redirects == 10
+            || !matches!(target.scheme(), "http" | "https")
+            || (previous_url.scheme() == "https" && target.scheme() != "https")
+            || target.host_str().is_none()
+            || !target.username().is_empty()
+            || target.password().is_some()
+            || target.fragment().is_some()
+        {
+            return Err(ProxyError::UnsafeRedirect);
+        }
+        let same_origin = previous_url.scheme() == target.scheme()
+            && previous_url.host_str() == target.host_str()
+            && previous_url.port_or_known_default() == target.port_or_known_default();
+        let original_origin = original.scheme() == target.scheme()
+            && original.host_str() == target.host_str()
+            && original.port_or_known_default() == target.port_or_known_default();
+        let explicit_ip_origin = same_origin
+            && original_origin
+            && target
+                .host_str()
+                .and_then(|host| host.parse::<IpAddr>().ok())
+                .is_some();
+        let addresses = if explicit_ip_origin {
+            vec![std::net::SocketAddr::new(
+                target
+                    .host_str()
+                    .and_then(|host| host.parse().ok())
+                    .ok_or(ProxyError::UnsafeRedirect)?,
+                target
+                    .port_or_known_default()
+                    .ok_or(ProxyError::UnsafeRedirect)?,
+            )]
+        } else {
+            oci::public_destination_addresses(&target)
+                .await
+                .map_err(|_| ProxyError::UnsafeRedirect)?
+        };
+        // A remote HTTP/SOCKS proxy may resolve the target itself, bypassing
+        // resolve_to_addrs and the address check above.
+        if config.outbound_proxy.enabled && !explicit_ip_origin {
+            return Err(ProxyError::UnsafeRedirect);
+        }
+        let host = target.host_str().ok_or(ProxyError::UnsafeRedirect)?;
+        client = crate::build_upstream_client_builder(config)
+            .map_err(|_| ProxyError::UnsafeRedirect)?
+            .resolve_to_addrs(host, &addresses)
+            .build()?;
+        if !same_origin {
+            for name in [
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::COOKIE,
+                reqwest::header::PROXY_AUTHORIZATION,
+            ] {
+                headers.remove(name);
+            }
+        }
+        let change_to_get = method != reqwest::Method::GET
+            && method != reqwest::Method::HEAD
+            && matches!(
+                status,
+                reqwest::StatusCode::MOVED_PERMANENTLY
+                    | reqwest::StatusCode::FOUND
+                    | reqwest::StatusCode::SEE_OTHER
+            );
+        request = if change_to_get {
+            headers.remove(reqwest::header::CONTENT_LENGTH);
+            headers.remove(reqwest::header::CONTENT_TYPE);
+            headers.remove(reqwest::header::TRANSFER_ENCODING);
+            client
+                .request(reqwest::Method::GET, target)
+                .headers(headers)
+                .build()?
+        } else {
+            let Some(mut replay) = replay else {
+                return Ok(response);
+            };
+            *replay.url_mut() = target;
+            *replay.headers_mut() = headers;
+            replay
+        };
+        redirects += 1;
+    }
+}
+
 pub(crate) async fn probe_endpoint(
     state: &AppState,
     method: reqwest::Method,
     url: Url,
-) -> Result<reqwest::Response, reqwest::Error> {
+) -> Result<reqwest::Response, ProxyError> {
     let config = state.config();
-    upstream_request(&state.client(), method, url, &HeaderMap::new(), &config)
-        .send()
-        .await
+    send_upstream_request(
+        &state.client(),
+        &config,
+        upstream_request(&state.client(), method, url, &HeaderMap::new(), &config),
+    )
+    .await
 }
 
 fn cacheable_request(method: Method, headers: &HeaderMap) -> bool {
@@ -784,6 +915,7 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
     use axum::http::header;
+    use axum::{routing::get, Router};
     use std::collections::BTreeMap;
 
     #[test]
@@ -815,6 +947,68 @@ mod tests {
             request.headers()[header::AUTHORIZATION],
             "Basic bWlycm9yOnNlY3JldA=="
         );
+    }
+
+    #[tokio::test]
+    async fn redirects_stay_on_an_explicitly_configured_private_origin() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/start",
+                get(|| async { (StatusCode::FOUND, [(header::LOCATION, "/end")]) }),
+            )
+            .route("/end", get(|| async { "redirected" }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = crate::config::Config::default();
+        let client = crate::build_upstream_client(&config).unwrap();
+        let response = send_upstream_request(
+            &client,
+            &config,
+            client.get(format!("http://{address}/start")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.text().await.unwrap(), "redirected");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn redirects_to_other_loopback_origins_and_private_dns_are_rejected() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/ip",
+                get(|| async {
+                    (
+                        StatusCode::FOUND,
+                        [(header::LOCATION, "http://127.0.0.1:12345/secret")],
+                    )
+                }),
+            )
+            .route(
+                "/dns",
+                get(|| async {
+                    (
+                        StatusCode::FOUND,
+                        [(header::LOCATION, "http://localhost:12345/secret")],
+                    )
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = crate::config::Config::default();
+        let client = crate::build_upstream_client(&config).unwrap();
+        for path in ["ip", "dns"] {
+            let result = send_upstream_request(
+                &client,
+                &config,
+                client.get(format!("http://{address}/{path}")),
+            )
+            .await;
+            assert!(matches!(result, Err(ProxyError::UnsafeRedirect)), "{path}");
+        }
+        server.abort();
     }
 
     #[tokio::test]

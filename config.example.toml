@@ -32,6 +32,10 @@ local_only = true
 # Every string field accepts one or more HTTP(S) endpoints separated by commas.
 # Safe requests try the next endpoint after transport errors, 404/408/429, or
 # 5xx responses. Protocol-success and authentication responses are preserved.
+# Redirects to a different destination are followed only after public-address
+# validation and DNS pinning. Private IP redirects stay within an explicitly
+# configured IP origin; redirects through an outbound proxy are restricted to
+# that same IP origin because the proxy controls target DNS resolution.
 github = "https://github.com"
 github_raw = "https://raw.githubusercontent.com"
 packagist = "https://repo.packagist.org"
