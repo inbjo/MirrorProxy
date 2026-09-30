@@ -134,9 +134,13 @@ fn sanitize_path(path: &str) -> Result<String, ProxyError> {
 }
 
 fn rewrite_file_links(html: &str, public_base_url: &str) -> String {
-    let prefix = format!("{}/pypi/files/", public_base_url.trim_end_matches('/'));
-    html.replace("https://files.pythonhosted.org/", &prefix)
-        .replace("http://files.pythonhosted.org/", &prefix)
+    let base = public_base_url.trim_end_matches('/');
+    let files_prefix = format!("{base}/pypi/files/");
+    let packages_prefix = format!("{base}/pypi/packages/");
+    html.replace("https://files.pythonhosted.org/", &files_prefix)
+        .replace("http://files.pythonhosted.org/", &files_prefix)
+        .replace("href=\"../../packages/", &format!("href=\"{packages_prefix}"))
+        .replace("href='../../packages/", &format!("href='{packages_prefix}"))
 }
 
 #[cfg(test)]
@@ -156,6 +160,15 @@ mod tests {
         let rewritten = rewrite_file_links(html, "https://mirror.example");
         assert!(rewritten
             .contains(r#"href="https://mirror.example/pypi/files/packages/aa/pkg.whl#sha256=1""#));
+    }
+
+    #[test]
+    fn rewrites_pep503_relative_package_links() {
+        let html = r#"<a href="../../packages/aa/pkg.whl#sha256=1">pkg</a>"#;
+        let rewritten = rewrite_file_links(html, "https://mirror.example");
+        assert!(rewritten.contains(
+            r#"href="https://mirror.example/pypi/packages/aa/pkg.whl#sha256=1""#
+        ));
     }
 
     #[test]
