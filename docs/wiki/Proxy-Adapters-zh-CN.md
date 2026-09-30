@@ -20,6 +20,9 @@
 
 ## 上游与安全边界
 
+- PyPI HTML 索引支持 `../../packages/...` 下载链接，并保留查询参数和哈希片段。
+  `upstreams.pypi_files` 应设置为 `packages/` 之前的文件主机或基础目录；
+  `/pypi/packages/...` 和已有 `/pypi/files/packages/...` 路由都会保留该上游路径段。
 - 启用出站代理会影响镜像上游 HTTP 请求；ACME、DNS API 和 OAuth 等控制面请求不使用它。
 - 企业 CA 可以通过 `upstream_tls.ca_certificates` 添加 PEM；`insecure_skip_verify=true` 会关闭
   所有镜像上游 TLS 校验，只能短期排障。

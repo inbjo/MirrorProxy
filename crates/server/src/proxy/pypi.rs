@@ -39,12 +39,28 @@ pub async fn file(
     Path(path): Path<String>,
     request: axum::extract::Request,
 ) -> Result<Response, ProxyError> {
+    proxy_file_path(state, &path, request).await
+}
+
+pub async fn packages(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    request: axum::extract::Request,
+) -> Result<Response, ProxyError> {
+    proxy_file_path(state, &format!("packages/{path}"), request).await
+}
+
+async fn proxy_file_path(
+    state: AppState,
+    path: &str,
+    request: axum::extract::Request,
+) -> Result<Response, ProxyError> {
     let config = state.config();
     if !config.is_enabled("pypi") {
         return Err(ProxyError::Disabled("pypi"));
     }
 
-    let clean_path = sanitize_path(&path)?;
+    let clean_path = sanitize_path(path)?;
     let upstream_path = format!("/{clean_path}");
     let url = upstream_url(
         &config.upstreams.pypi_files,
@@ -139,7 +155,10 @@ fn rewrite_file_links(html: &str, public_base_url: &str) -> String {
     let packages_prefix = format!("{base}/pypi/packages/");
     html.replace("https://files.pythonhosted.org/", &files_prefix)
         .replace("http://files.pythonhosted.org/", &files_prefix)
-        .replace("href=\"../../packages/", &format!("href=\"{packages_prefix}"))
+        .replace(
+            "href=\"../../packages/",
+            &format!("href=\"{packages_prefix}"),
+        )
         .replace("href='../../packages/", &format!("href='{packages_prefix}"))
 }
 
@@ -166,9 +185,19 @@ mod tests {
     fn rewrites_pep503_relative_package_links() {
         let html = r#"<a href="../../packages/aa/pkg.whl#sha256=1">pkg</a>"#;
         let rewritten = rewrite_file_links(html, "https://mirror.example");
-        assert!(rewritten.contains(
-            r#"href="https://mirror.example/pypi/packages/aa/pkg.whl#sha256=1""#
-        ));
+        assert!(rewritten
+            .contains(r#"href="https://mirror.example/pypi/packages/aa/pkg.whl#sha256=1""#));
+    }
+
+    #[test]
+    fn relative_links_preserve_quotes_query_and_hash_with_public_base_path() {
+        for quote in ['"', '\''] {
+            let html = format!(
+                "<a href={quote}../../packages/aa/pkg.whl?download=1#sha256=abc{quote}>pkg</a>"
+            );
+            assert_eq!(rewrite_file_links(&html, "https://mirror.example/proxy/"),
+                format!("<a href={quote}https://mirror.example/proxy/pypi/packages/aa/pkg.whl?download=1#sha256=abc{quote}>pkg</a>"));
+        }
     }
 
     #[test]

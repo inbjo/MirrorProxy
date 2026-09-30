@@ -23,6 +23,10 @@ configuration in the client.
 
 ## Upstreams and boundaries
 
+- PyPI HTML indexes support `../../packages/...` download links, preserving query
+  strings and hash fragments. Set `upstreams.pypi_files` to the file host/base
+  directory before `packages/`; both `/pypi/packages/...` and the existing
+  `/pypi/files/packages/...` routes retain that upstream path segment.
 - An outbound proxy applies to mirror-upstream HTTP requests, not ACME, DNS APIs,
   or OAuth control-plane calls.
 - Add enterprise CA PEM files with `upstream_tls.ca_certificates`.

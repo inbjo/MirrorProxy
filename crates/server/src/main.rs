@@ -2158,7 +2158,10 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
         )
         .route("/pypi/simple/{*path}", get(pypi::simple).head(pypi::simple))
         .route("/pypi/files/{*path}", get(pypi::file).head(pypi::file))
-        .route("/pypi/packages/{*path}", get(pypi::file).head(pypi::file))
+        .route(
+            "/pypi/packages/{*path}",
+            get(pypi::packages).head(pypi::packages),
+        )
         .route(
             "/crates/api/v1/crates/{crate}/{version}/download",
             get(cratesio::download).head(cratesio::download),
@@ -9304,19 +9307,142 @@ on_exceeded = "stop_proxy"
     }
 
     #[tokio::test]
-    async fn pypi_file_path_validation_rejects_traversal() {
-        let app = build_router(Config::default()).await.unwrap();
+    async fn pypi_relative_index_links_download_from_packages_with_matching_digest() {
+        use sha2::{Digest, Sha256};
+
+        let payload = b"package archive fixture";
+        let digest = hex::encode(Sha256::digest(payload));
+        for base_path in ["", "/python"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let index_path = format!("{base_path}/simple/demo/");
+            let file_path = format!("{base_path}/packages/aa/demo.whl?download=1");
+            let html = format!(
+                "<a href=\"../../packages/aa/demo.whl?download=1#sha256={digest}\">demo.whl</a>"
+            );
+            let upstream = Router::new().fallback(move |request: Request<Body>| {
+                let html = html.clone();
+                let index_path = index_path.clone();
+                let file_path = file_path.clone();
+                async move {
+                    if request.uri().path() == index_path {
+                        ([(header::CONTENT_TYPE, "text/html")], html).into_response()
+                    } else if request.uri().to_string() == file_path {
+                        (
+                            [(header::CONTENT_TYPE, "application/octet-stream")],
+                            payload.as_slice(),
+                        )
+                            .into_response()
+                    } else {
+                        StatusCode::NOT_FOUND.into_response()
+                    }
+                }
+            });
+            let server =
+                tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+            let mut config = Config {
+                public_base_url: "https://mirror.example".to_string(),
+                ..Config::default()
+            };
+            config.upstreams.pypi_simple = format!("http://{address}{base_path}/simple");
+            config.upstreams.pypi_files = format!("http://{address}{base_path}");
+            let app = build_router(config).await.unwrap();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/pypi/simple/demo/")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let html = std::str::from_utf8(&body).unwrap();
+            let link = html
+                .split("href=\"")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap();
+            let url = reqwest::Url::parse(link).unwrap();
+            assert_eq!(url.fragment().unwrap(), format!("sha256={digest}"));
+            assert_eq!(url.path(), "/pypi/packages/aa/demo.whl");
+            for path in [
+                format!("{}?{}", url.path(), url.query().unwrap()),
+                "/pypi/files/packages/aa/demo.whl?download=1".to_string(),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                assert_eq!(body.as_ref(), payload);
+                assert_eq!(hex::encode(Sha256::digest(&body)), digest);
+            }
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("HEAD")
+                        .uri("/pypi/packages/aa/demo.whl?download=1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .is_empty());
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn pypi_packages_respects_enablement_and_proxy_classification() {
+        let config = Config {
+            enabled_proxies: vec!["npm".to_string()],
+            ..Config::default()
+        };
+        let app = build_router(config).await.unwrap();
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/pypi/files/../pkg.whl")
+                    .uri("/pypi/packages/aa/pkg.whl")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            proxy_target_for_path("/pypi/packages/aa/pkg.whl"),
+            Some("pypi")
+        );
+        assert!(is_proxy_path("/pypi/packages/aa/pkg.whl"));
+    }
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    #[tokio::test]
+    async fn pypi_file_path_validation_rejects_traversal() {
+        let app = build_router(Config::default()).await.unwrap();
+        for path in [
+            "/pypi/files/../pkg.whl",
+            "/pypi/packages/../pkg.whl",
+            "/pypi/packages/%2e%2e/pkg.whl",
+            "/pypi/packages/aa%5cbb/pkg.whl",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+        }
     }
 
     #[tokio::test]
