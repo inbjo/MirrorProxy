@@ -3,6 +3,26 @@
 All notable changes to MirrorProxy are documented in this file. Release tags
 follow semantic versioning.
 
+## [1.4.3] - 2026-09-30
+
+### PyPI compatibility
+
+- Proxy `../../packages/...` links from HTML simple indexes through the new
+  `/pypi/packages/...` route, preserving the upstream `packages/` path segment,
+  configured file-base directories, query strings, and hash fragments.
+- Preserve existing `/pypi/files/...` behavior and add actual index-to-download,
+  SHA-256, HEAD, enablement, and invalid-path regression coverage.
+- Thanks to [@comqx](https://github.com/comqx) for the relative-link fix in
+  [PR #8](https://github.com/inbjo/MirrorProxy/pull/8).
+
+### Reliability and delivery
+
+- Align the quick converter input controls across desktop cards.
+- Correct native-package checksum sidecar names and include ARM64 server
+  DEB/RPM packages in release builds.
+- Update the development-only `undici` dependency from 7.29.0 to 7.30.0 to
+  resolve dependency-audit findings.
+
 ## [1.4.2] - 2026-09-22
 
 ### Security
