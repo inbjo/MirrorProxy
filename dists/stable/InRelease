@@ -1,0 +1,42 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: amd64 arm64
+Codename: stable
+Components: main
+Date: Wed, 30 Sep 2026 08:42:15 +0000
+Description: MirrorProxy client packages
+Label: MirrorProxy
+Origin: MirrorProxy
+Suite: stable
+MD5Sum:
+ 329428d5d23e12ba09514f17001f58a6              193 Release
+ c71f6725b4fabb57a67fb71ace90c3d1              654 main/binary-amd64/Packages
+ 83c48e16c324b763eb91196cc21673ec              444 main/binary-amd64/Packages.gz
+ a2c4288e6fd93689587804a9b121a8a3              654 main/binary-arm64/Packages
+ 8f6975b852909d4705529f6ecd10e98c              448 main/binary-arm64/Packages.gz
+SHA1:
+ a8341ef2e99e3b39fe4fb7b0ff75f6d7e2f54c98              193 Release
+ 742266983a02cb1a3a871161882b3f8f7640d249              654 main/binary-amd64/Packages
+ c134ac09ac8d07fbb3ad46d6155aac2bbd424935              444 main/binary-amd64/Packages.gz
+ ec2310bed9b74630f096a019d910a6d563190179              654 main/binary-arm64/Packages
+ 54b071da884b4d391da362aa5133c45370f3c40c              448 main/binary-arm64/Packages.gz
+SHA256:
+ 160bda7e05d4c71da5b264b013f9a2f5b86af6ccfec396f97230b5756e477fc0              193 Release
+ e1298dd9701c67355bae095999fac2b264f5bab5c102184a10d5a1e22a484eda              654 main/binary-amd64/Packages
+ a1f1b224ea936f287dae71418380979e1a6705aba6da67edc1f6cf0d6128dfef              444 main/binary-amd64/Packages.gz
+ 85bfd4edb85a6449dc77469d52459a28cd011d92e928b563dec499b91c3987c2              654 main/binary-arm64/Packages
+ 9dfcb1e44804b6a70b07e2f6f0be20e13f94b33e43e708c54224048ff181b5d4              448 main/binary-arm64/Packages.gz
+SHA512:
+ 0e9c935465cf06c6a49fd2730dd02af4be4a38c92694f1a5bd7c586db6c4ca10e4dfebfdd88881e1b37dffd87dd0f5b42178d03ab16aa3910b7e489433505714              193 Release
+ 637798c4dea94f4b9448286c85a2b6707a3a398ab38a5a00e5d23dcceab5ac30b20232e27d2d17787ec7b2b37907f0a0fa4e3df3a56ca0da037abe76727ec90b              654 main/binary-amd64/Packages
+ 1302b37921896d87d8fe38ae71d587c329b24bdb84ce1d741f27d0a92dcaadf2248eccc6346cc24665b756eea73673e67eac916498d03573a18b790a68329775              444 main/binary-amd64/Packages.gz
+ 82d24f2edafcc5d0aac876e45d8cb8fc6a077b28bc66f86d384f966171d47e956f7462de1f31fba67a07b16e26b4fa8b5e8a5a9ddaee5497c69e6857f821dee2              654 main/binary-arm64/Packages
+ f83d16b84bfa8050b7252c134ec8ba997b031219445666b59e12590d2ef3a95872a43ec9981af8a4f09c3a4033ae5c8564c128b9b0685145855d24867c2105db              448 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iHUEARYKAB0WIQRx72jI5xEBlXdUVZDRRxa9Cc0wIgUCarzLaAAKCRDRRxa9Cc0w
+Ij+wAQCxOOaEY+LA47BfON6pEWepAkjz1bZeiVHLeCmOWV3BFQD/cupmo93cPp13
+MsPlU3hPhsx4Rw2l5vF9GdbS6xWChQg=
+=IGmx
+-----END PGP SIGNATURE-----
