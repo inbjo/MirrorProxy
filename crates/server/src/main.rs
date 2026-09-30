@@ -2158,6 +2158,7 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
         )
         .route("/pypi/simple/{*path}", get(pypi::simple).head(pypi::simple))
         .route("/pypi/files/{*path}", get(pypi::file).head(pypi::file))
+        .route("/pypi/packages/{*path}", get(pypi::file).head(pypi::file))
         .route(
             "/crates/api/v1/crates/{crate}/{version}/download",
             get(cratesio::download).head(cratesio::download),
@@ -3041,6 +3042,7 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
     } else if path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
+        || path.starts_with("/pypi/packages/")
     {
         Some("pypi")
     } else if path.starts_with("/crates/api/")
@@ -3277,6 +3279,7 @@ fn is_proxy_path(path: &str) -> bool {
         || path == "/pypi/simple"
         || path.starts_with("/pypi/simple/")
         || path.starts_with("/pypi/files/")
+        || path.starts_with("/pypi/packages/")
         || path.starts_with("/crates/api/")
         || path == "/crates-index"
         || path.starts_with("/crates-index/")
