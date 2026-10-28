@@ -1,0 +1,32 @@
+Architectures: amd64 arm64
+Codename: stable
+Components: main
+Date: Wed, 28 Oct 2026 06:32:58 +0000
+Description: MirrorProxy client packages
+Label: MirrorProxy
+Origin: MirrorProxy
+Suite: stable
+MD5Sum:
+ b82e1309c043f20c079ad85983718e5c              193 Release
+ bed4c716c83425b7da498a100b8ce8b9              655 main/binary-amd64/Packages
+ 056e7d7602bbe9c328be77a9fa400d07              450 main/binary-amd64/Packages.gz
+ ef6f19ade6029b50dc0296186e211067              655 main/binary-arm64/Packages
+ 937c30c6adc4f038af4cfbd8d8b63c18              448 main/binary-arm64/Packages.gz
+SHA1:
+ 8cf48e5c999f6335affcc00c112ed584d3e9fd45              193 Release
+ 934e4dbee555ab4cfe58eaf3871e46fee3f65ef2              655 main/binary-amd64/Packages
+ 36abf3aad6ddc192e1d13ea81f536927fdf30901              450 main/binary-amd64/Packages.gz
+ 7d3fac41edcba28f43029148e3dbaec3a5713b11              655 main/binary-arm64/Packages
+ b7999aa5601c544221cc2628ca7b30d4d62db7b6              448 main/binary-arm64/Packages.gz
+SHA256:
+ ce237a0dea55ec9a84e80237350a7ae132292298520a9da6b9448991e2966634              193 Release
+ 1f219b3124b56aeca671148a5eab42bdd98bab58aa24d32d5f8ac7868e659c8e              655 main/binary-amd64/Packages
+ 79a5c3af2c610e2320ed72b0c05651e4046c4764507dd3af132ab838c451848a              450 main/binary-amd64/Packages.gz
+ 27e52a242b5a5b764ba0161793b1602136f1080142ac82467c86863dd46c9b86              655 main/binary-arm64/Packages
+ 2e76a51021ee797ae45951424bda89aff5a36780c3843674545575793ce51777              448 main/binary-arm64/Packages.gz
+SHA512:
+ 09c7fc0802fec71975e8b6f5e7fba3dd7fe887ad47b99f7dca414e78f7a6bfe617a718f09f638d3926c6fdae155ff8ae2a3a3782425f635b9d529a271a6d4c2b              193 Release
+ 20525624a9809bfb7f73bdf7e1556b096da9f5c9f39c033a1d8c6837a1fd0456d581b11fe8365e237977cf745996ebe6c37ebc31e1a0da794bd058bae95e04e2              655 main/binary-amd64/Packages
+ c4f66006515bfdd484079b9d816ab35f406e1f4dd53a43af8fa592a300e5fa7a59dc18451d565e67f6f6156a994e7909da4444692575223db646d352187b6573              450 main/binary-amd64/Packages.gz
+ 4fe29578299f8d30ae7e5e302c94685397ec75cd6d79ff4ab0b8e7cb79d5960fd03c4bc9176774d6bedc7be7027d0e850561e17b323e9c53239dd4471607fa68              655 main/binary-arm64/Packages
+ 0615e008b64cc00ffe4c81acebba1355c3413d1d2d7510a50830d2a153e5af24215ee49836297013c732cd30261a0e060907822c152ada08b117c3358631d65f              448 main/binary-arm64/Packages.gz

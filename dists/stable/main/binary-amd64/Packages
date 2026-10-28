@@ -1,0 +1,17 @@
+Package: mirrorproxy
+Version: 1.7.1
+Architecture: amd64
+Maintainer: MirrorProxy contributors <noreply@github.com>
+Installed-Size: 6956
+Filename: pool/main/m/mirrorproxy/mirrorproxy_1.7.1_amd64.deb
+Size: 2240032
+MD5sum: 70989dea5f4b46ffca3b16c40e6004f4
+SHA1: 1db01fa87c6cb81e6dc600346a304290001bc3e6
+SHA256: 566981b3f0888bd2c04630096242d1c4f3a478f7b5ac752d78ba56474a480ff9
+Section: utils
+Priority: optional
+Homepage: https://github.com/inbjo/MirrorProxy
+Description: Standalone MirrorProxy source manager
+ Configure package managers and development tools to use MirrorProxy or
+ supported public mirrors, with safe preview, write, and rollback operations.
+
