@@ -5,6 +5,29 @@ follow semantic versioning.
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-11-02
+
+### Traffic accounting and usability
+
+- Settle streamed traffic when a request is cancelled, preserving request-time
+  reservation state across quota changes and user/group membership changes.
+- Track global reservations even when the global cap is disabled so settlement
+  cannot release another active request's reservation.
+- Show bilingual public notices when monthly traffic is exhausted, including
+  the reset schedule and administrator contact guidance.
+- Improve administration overview spacing, daily-statistics empty states and
+  human-readable traffic-chart tooltips.
+- Clarify Unix and PowerShell installer download errors and explicit mirror use.
+- Group Release downloads by platform, package type and architecture.
+
+### Security and build tooling
+
+- Update Hono's Node server adapter to 2.1.3 and modern glob/minimatch consumers
+  to patched versions while testing build-tool API compatibility.
+- Retain the documented Rust OIDC verification exceptions and low-severity
+  deepmerge exception. Accept only the precisely scoped legacy minimatch 3.1.5
+  build-tool advisory described in SECURITY.md; it remains unpatched.
+
 ## [1.7.1] - 2026-10-28
 
 ### Account and administration
