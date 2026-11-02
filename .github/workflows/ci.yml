@@ -39,7 +39,9 @@ jobs:
           npm run test:toolchain
           npm run build
       - name: Verify release download tables
-        run: python3 scripts/test-release-body.py
+        run: |
+          python3 scripts/test-release-body.py
+          python3 scripts/test-package-manifests.py
       - name: Verify local build cache invalidation
         run: node --test scripts/build-cache.test.mjs
       - name: PowerShell installer offline contract
@@ -111,6 +113,7 @@ jobs:
           - ubuntu-latest
           - macos-latest
           - windows-latest
+          - windows-11-arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -131,13 +134,18 @@ jobs:
             exit 1
           }
       - name: Run native client tests
+        if: matrix.os != 'windows-11-arm'
         run: cargo test --locked -p mirrorproxy-cli
-      - name: Validate distribution scripts and Debian client package
+      - name: Run Windows ARM64 client tests
+        if: matrix.os == 'windows-11-arm'
+        run: cargo test --locked -p mirrorproxy-cli --target aarch64-pc-windows-msvc
+      - name: Validate distribution scripts and Linux client packages
         if: runner.os == 'Linux'
         shell: bash
         run: |
           shellcheck \
             scripts/package-client-deb.sh \
+            scripts/package-client-rpm.sh \
             scripts/generate-apt-repository.sh \
             scripts/generate-package-manifests.sh
           cargo build --locked -p mirrorproxy-cli
@@ -145,6 +153,43 @@ jobs:
           test "$(dpkg-deb -f dist-test/mirrorproxy_1.3.1_amd64.deb Package)" = mirrorproxy
           test "$(dpkg-deb -f dist-test/mirrorproxy_1.3.1_amd64.deb Architecture)" = amd64
           dpkg-deb -c dist-test/mirrorproxy_1.3.1_amd64.deb | grep -q './usr/bin/mirrorproxy$'
+          sudo apt-get update
+          sudo apt-get install --yes rpm cpio
+          python3 scripts/test-client-packages.py target/debug/mirrorproxy
+
+  windows-server:
+    name: Windows server (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Build embedded console
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Build Windows server
+        run: cargo build --locked -p mirrorproxy-server --target ${{ matrix.target }}
+      - name: Verify Windows server protocol
+        run: python scripts/smoke-source-details.py target/${{ matrix.target }}/debug/mirrorproxy-server.exe
 
   client-smoke:
     runs-on: ubuntu-latest

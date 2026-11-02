@@ -39,6 +39,7 @@ The Release workflow runs `scripts/generate-release-body.py` against the built
 artifacts. Both stable releases and Nightly show separate client/server tables
 with operating-system and architecture columns, plus a `SHA256SUMS` link. Only
 existing archives and native packages are linked; unavailable platforms show `—`.
+Client tables include Windows, macOS and Linux; server tables include Windows and Linux only. Windows clients provide EXE/ZIP, Linux clients TAR.GZ/DEB/RPM, and macOS clients retain TAR.GZ/Homebrew. PowerShell, Scoop and WinGet support both x64 and ARM64; WinGet submits the complete generated manifests for this release.
 Stable releases include `docs/releases/vX.Y.Z.md` below the tables.
 
 When applying curated notes manually, preserve the tables by generating the

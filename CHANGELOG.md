@@ -7,6 +7,16 @@ follow semantic versioning.
 
 ## [1.7.2] - 2026-11-02
 
+### Release packages
+
+- Add native Windows ARM64 client builds, downloadable Windows x64/ARM64 client
+  executables alongside ZIP archives, and Linux x64/ARM64 client RPM packages.
+- Add Windows x64/ARM64 server ZIP archives containing the executable, example
+  configuration and GeoIP databases. Verify startup and real proxy payloads.
+- Preserve macOS Intel/Apple Silicon client archives and Homebrew support;
+  server builds target Windows and Linux only. Align the download tables,
+  PowerShell architecture detection, Scoop and WinGet manifests.
+
 ### Traffic accounting and usability
 
 - Settle streamed traffic when a request is cancelled, preserving request-time

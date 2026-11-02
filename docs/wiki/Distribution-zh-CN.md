@@ -84,11 +84,33 @@ sudo apt install mirrorproxy
 | Linux ARM64 | `mirrorproxy-client-aarch64-unknown-linux-gnu.tar.gz` |
 | macOS Intel | `mirrorproxy-client-x86_64-apple-darwin.tar.gz` |
 | macOS Apple Silicon | `mirrorproxy-client-aarch64-apple-darwin.tar.gz` |
-| Windows x64 | `mirrorproxy-client-x86_64-pc-windows-msvc.zip` |
+| Windows x64 | `mirrorproxy-client-x86_64-pc-windows-msvc.exe` / `.zip` |
+| Windows ARM64 | `mirrorproxy-client-aarch64-pc-windows-msvc.exe` / `.zip` |
 | Debian/Ubuntu x86_64 | `mirrorproxy_<version>_amd64.deb` |
 | Debian/Ubuntu ARM64 | `mirrorproxy_<version>_arm64.deb` |
+| RPM Linux x86_64 | `mirrorproxy-<version>-1.x86_64.rpm` |
+| RPM Linux ARM64 | `mirrorproxy-<version>-1.aarch64.rpm` |
 
 每个资产旁都有同名 `.sha256` 文件，发布页另有汇总 `SHA256SUMS`。安装前应验证校验和。
+
+
+客户端从 v1.7.2 起提供 Windows ARM64、独立 EXE 和 Linux RPM。Windows EXE 是便携式命令行程序，不含图形安装向导；ZIP 保留给安装脚本、Scoop 和 WinGet。macOS 使用 TAR.GZ 或 Homebrew，不提供 DMG。
+
+Linux RPM 可用 `sudo dnf install ./mirrorproxy-<version>-1.x86_64.rpm` 安装，用 `sudo dnf remove mirrorproxy` 卸载；ARM64 选择对应架构文件。卸载软件包不会自动回滚已修改的软件源，请先使用客户端的回滚功能。
+
+## 服务端资产
+
+服务端只构建 Windows 和 Linux，均提供 x64/ARM64；不构建 macOS。
+Linux 提供 TAR.GZ、DEB 和 RPM。Windows 提供 `mirrorproxy-server-<target>.zip`，
+包含 `mirrorproxy-server.exe`、`config.example.toml` 与 `geoip` 目录。
+校验后完整解压，在解压目录运行：
+
+```powershell
+.\mirrorproxy-server.exe --config config.example.toml serve
+```
+
+Windows 服务端以前台进程运行，`install` 子命令仅用于 Linux systemd。
+升级或回退时保留配置、数据库、缓存和 GeoIP 数据，只替换所需程序文件。
 
 ## 手动安装
 

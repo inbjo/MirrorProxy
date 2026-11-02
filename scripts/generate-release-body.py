@@ -22,12 +22,14 @@ def release_body(artifacts: Path, repository: str, tag: str, notes: str) -> str:
                     label = 'TAR.GZ'
                 elif name.endswith('.zip'):
                     label = 'ZIP'
+                elif name.endswith('.exe') and component == 'client' and system == 'Windows':
+                    label = 'EXE'
             if system == 'Linux':
                 deb_arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch]
                 package = 'mirrorproxy' if component == 'client' else 'mirrorproxy-server'
                 if re.fullmatch(rf'{package}_[^_]+_{deb_arch}\.deb', name):
                     label = 'DEB'
-                if component == 'server' and re.fullmatch(rf'mirrorproxy-server-.+\.{arch}\.rpm', name):
+                if re.fullmatch(rf'{package}-\d[^/]*\.{arch}\.rpm', name):
                     label = 'RPM'
             if label:
                 links.append(f'[{label}]({base}/{quote(name)})')
@@ -40,10 +42,12 @@ def release_body(artifacts: Path, repository: str, tag: str, notes: str) -> str:
     for component in ['client', 'server']:
         if component == 'server':
             sections.extend(['### Server / 服务端',
-                             'Self-host the proxy and administration console (Linux). / 自建代理服务与管理后台（Linux）。'])
-        table = ['| Architecture / 架构 | Windows | macOS | Linux |', '| --- | --- | --- | --- |']
+                             'Self-host the proxy and administration console (Windows/Linux). / 自建代理服务与管理后台（Windows/Linux）。'])
+        systems = ['Windows', 'macOS', 'Linux'] if component == 'client' else ['Windows', 'Linux']
+        table = ['| Architecture / 架构 | ' + ' | '.join(systems) + ' |',
+                 '| --- | ' + ' | '.join('---' for _ in systems) + ' |']
         for arch, label in [('x86_64', 'x86-64 (64-bit)'), ('aarch64', 'AArch64 (ARM64)')]:
-            table.append(f'| {label} | ' + ' | '.join(cell(component, arch, system) for system in ['Windows', 'macOS', 'Linux']) + ' |')
+            table.append(f'| {label} | ' + ' | '.join(cell(component, arch, system) for system in systems) + ' |')
         sections.append('\n'.join(table))
     sections.append(f'Verify downloads with [SHA256SUMS]({base}/SHA256SUMS). / 下载后请校验 SHA256SUMS。\n\n— = No package published for this platform. / 此平台暂无安装包。')
     sections.append(notes.strip())

@@ -15,13 +15,15 @@ if (-not $Setup -and -not [string]::IsNullOrWhiteSpace($BaseUrl)) { throw "-Base
 $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 if ([string]::IsNullOrWhiteSpace($architecture)) {
     try { $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() }
-    catch { throw "Unable to determine Windows architecture. Run on Windows x64 with Windows PowerShell 5.1 or PowerShell 7." }
+    catch { throw "Unable to determine Windows architecture. Run on Windows x64 or ARM64 with Windows PowerShell 5.1 or PowerShell 7." }
 }
-if ($architecture -notin @("AMD64", "X64")) {
-    throw "Unsupported Windows architecture: $architecture. Stable releases currently provide Windows x64 only."
+$target = switch ($architecture) {
+    { $_ -in @('AMD64', 'X64') } { 'x86_64-pc-windows-msvc' }
+    'ARM64' { 'aarch64-pc-windows-msvc' }
+    default { throw "Unsupported Windows architecture: $architecture. Windows x64 and ARM64 are supported." }
 }
 
-$archive = "mirrorproxy-client-x86_64-pc-windows-msvc.zip"
+$archive = "mirrorproxy-client-$target.zip"
 if ($Version -eq "latest") {
     $releaseUrl = "https://github.com/$Repository/releases/latest/download"
 } else {
@@ -39,7 +41,7 @@ $checksumPath = "$archivePath.sha256"
 
 try {
     New-Item -ItemType Directory -Path $tempDir | Out-Null
-    Write-Host "Downloading MirrorProxy $Version for Windows x64..."
+    Write-Host "Downloading MirrorProxy $Version for $target..."
     try {
         Invoke-WebRequest -UseBasicParsing -Uri (Get-DownloadUrl "$releaseUrl/$archive") -OutFile $archivePath
     } catch {

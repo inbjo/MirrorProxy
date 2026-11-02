@@ -20,6 +20,7 @@ linux_x64="mirrorproxy-client-x86_64-unknown-linux-musl.tar.gz"
 mac_x64="mirrorproxy-client-x86_64-apple-darwin.tar.gz"
 mac_arm64="mirrorproxy-client-aarch64-apple-darwin.tar.gz"
 windows_x64="mirrorproxy-client-x86_64-pc-windows-msvc.zip"
+windows_arm64="mirrorproxy-client-aarch64-pc-windows-msvc.zip"
 
 cat >"$output/mirrorproxy.rb" <<EOF
 class Mirrorproxy < Formula
@@ -59,11 +60,15 @@ cat >"$output/mirrorproxy.json" <<EOF
     "64bit": {
       "url": "${base_url}/${windows_x64}",
       "hash": "$(checksum "$windows_x64")"
+    },
+    "arm64": {
+      "url": "${base_url}/${windows_arm64}",
+      "hash": "$(checksum "$windows_arm64")"
     }
   },
   "bin": "mirrorproxy.exe",
   "checkver": { "github": "https://github.com/${repository}" },
-  "autoupdate": { "architecture": { "64bit": { "url": "https://github.com/${repository}/releases/download/v\$version/${windows_x64}" } } }
+  "autoupdate": { "architecture": { "64bit": { "url": "https://github.com/${repository}/releases/download/v\$version/${windows_x64}" }, "arm64": { "url": "https://github.com/${repository}/releases/download/v\$version/${windows_arm64}" } } }
 }
 EOF
 
@@ -93,6 +98,12 @@ Installers:
     PortableCommandAlias: mirrorproxy
   InstallerUrl: ${base_url}/${windows_x64}
   InstallerSha256: $(checksum "$windows_x64" | tr '[:lower:]' '[:upper:]')
+- Architecture: arm64
+  NestedInstallerFiles:
+  - RelativeFilePath: mirrorproxy.exe
+    PortableCommandAlias: mirrorproxy
+  InstallerUrl: ${base_url}/${windows_arm64}
+  InstallerSha256: $(checksum "$windows_arm64" | tr '[:lower:]' '[:upper:]')
 ManifestType: installer
 ManifestVersion: 1.12.0
 EOF

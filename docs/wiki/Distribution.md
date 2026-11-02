@@ -91,12 +91,36 @@ Each stable `v*` tag on [GitHub Releases](https://github.com/inbjo/MirrorProxy/r
 | Linux ARM64 | `mirrorproxy-client-aarch64-unknown-linux-gnu.tar.gz` |
 | macOS Intel | `mirrorproxy-client-x86_64-apple-darwin.tar.gz` |
 | macOS Apple Silicon | `mirrorproxy-client-aarch64-apple-darwin.tar.gz` |
-| Windows x64 | `mirrorproxy-client-x86_64-pc-windows-msvc.zip` |
+| Windows x64 | `mirrorproxy-client-x86_64-pc-windows-msvc.exe` / `.zip` |
+| Windows ARM64 | `mirrorproxy-client-aarch64-pc-windows-msvc.exe` / `.zip` |
 | Debian/Ubuntu x86_64 | `mirrorproxy_<version>_amd64.deb` |
 | Debian/Ubuntu ARM64 | `mirrorproxy_<version>_arm64.deb` |
+| RPM Linux x86_64 | `mirrorproxy-<version>-1.x86_64.rpm` |
+| RPM Linux ARM64 | `mirrorproxy-<version>-1.aarch64.rpm` |
 
 Every asset has a matching `.sha256` file, and the release also includes an
 aggregate `SHA256SUMS`. Verify the checksum before installation.
+
+
+Windows ARM64, standalone EXEs and Linux client RPMs are available from v1.7.2. Windows EXEs are portable command-line programs, without a graphical installer. ZIP archives remain available for the installer script, Scoop and WinGet. macOS uses TAR.GZ or Homebrew; no DMG is published.
+
+Install a Linux RPM with `sudo dnf install ./mirrorproxy-<version>-1.x86_64.rpm` and remove it with `sudo dnf remove mirrorproxy`; choose the matching file for ARM64. Removing the package does not undo source configuration changes; use the client's rollback first.
+
+## Server assets
+
+Server builds target Windows and Linux, both x64/ARM64; no macOS server is built.
+Linux provides TAR.GZ, DEB and RPM packages. Windows provides
+`mirrorproxy-server-<target>.zip` containing `mirrorproxy-server.exe`,
+`config.example.toml` and the `geoip` directory. Verify the checksum, extract the
+complete archive and run from the extracted directory:
+
+```powershell
+.\mirrorproxy-server.exe --config config.example.toml serve
+```
+
+The Windows server runs in the foreground; the `install` command manages Linux
+systemd only. Preserve configuration, database, cache and GeoIP data during an
+upgrade or rollback, replacing only the necessary program files.
 
 ## Manual installation
 

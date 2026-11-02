@@ -111,6 +111,24 @@ migration. The existing low-severity deepmerge exception is unchanged.
 及其传播项设置例外。其他公告、版本、安装路径或更高严重等级仍会失败。这是接受构建工具风险，
 并非依赖已修复；上游提供兼容迁移后须移除例外。原有 deepmerge 低危例外保持不变。
 
+## Dependabot resolution status / Dependabot 依赖解析状态
+
+Rechecked on 2026-11-02 after Dependabot update #1673348505 reported
+`security_update_not_possible`: npm still publishes deepmerge 4.3.1 as latest,
+and fork-ts-checker-webpack-plugin 9.1.0 still requires minimatch `^3.0.4`.
+The installed checker 8.0.0 calls minimatch as a CommonJS function; minimatch 11
+exports an object. The automatic updater therefore cannot resolve a compatible
+security upgrade for these paths. Its failed update does not clear the alerts
+or patch the dependencies. The existing narrowly scoped CI audit exceptions
+above continue to apply. Review again when upstream dependencies change.
+
+2026-11-02 复核：Dependabot 更新 #1673348505 报告
+`security_update_not_possible`。npm 最新 deepmerge 仍为 4.3.1；最新版类型检查插件
+9.1.0 仍依赖 minimatch `^3.0.4`。当前插件 8.0.0 使用 CommonJS 函数接口，
+minimatch 11 改为对象导出，因此自动更新器无法解析兼容的安全升级。
+此更新任务失败不表示告警已清除或依赖已修复；继续适用上文的限定审计例外，
+上游依赖变化后应重新复核。
+
 ## Reporting a vulnerability / 报告安全漏洞
 
 Do not disclose suspected vulnerabilities in a public issue, discussion, or

@@ -33,6 +33,7 @@ Homebrew Tap；WinGet 自动提交只在显式启用后运行。
 Release workflow 使用 `scripts/generate-release-body.py` 根据构建产物生成下载表。
 稳定版和 Nightly 均分别展示客户端、服务端的系统与架构下载入口，以及 `SHA256SUMS`
 校验链接。仅链接实际存在的压缩包和安装包，暂不支持的平台显示 `—`。
+客户端表包含 Windows、macOS、Linux；服务端表仅包含 Windows、Linux。Windows 客户端提供 EXE/ZIP，Linux 客户端提供 TAR.GZ/DEB/RPM，macOS 客户端保留 TAR.GZ/Homebrew。PowerShell、Scoop 和 WinGet 均支持 x64/ARM64；WinGet 直接提交本次发布生成的完整双架构清单。
 稳定版会在表格下方保留 `docs/releases/vX.Y.Z.md` 的详细说明。
 
 手动应用详细发布说明时，请根据下载的 Release 产物生成包含表格的完整正文，再将输出

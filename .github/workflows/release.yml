@@ -41,6 +41,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: mirrorproxy-client-x86_64-pc-windows-msvc.zip
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: mirrorproxy-client-aarch64-pc-windows-msvc.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -59,6 +62,15 @@ jobs:
           sudo apt-get install --yes gcc-aarch64-linux-gnu
       - name: Build client
         run: cargo build --locked --release -p mirrorproxy-cli --target ${{ matrix.target }}
+      - name: Verify Windows client
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "target/${{ matrix.target }}/release/mirrorproxy.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'Client version check failed' }
+          & "target/${{ matrix.target }}/release/mirrorproxy.exe" list
+          if ($LASTEXITCODE -ne 0) { throw 'Client source catalog check failed' }
+          ./scripts/test-install-windows-powershell.ps1
       - name: Package client
         if: runner.os != 'Windows'
         shell: bash
@@ -77,6 +89,10 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.target }}/release/mirrorproxy.exe" -DestinationPath $archive
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
           [IO.File]::WriteAllText("$archive.sha256", "$hash  $archive`n", [Text.Encoding]::ASCII)
+          $executable = "mirrorproxy-client-${{ matrix.target }}.exe"
+          Copy-Item "target/${{ matrix.target }}/release/mirrorproxy.exe" $executable
+          $hash = (Get-FileHash -Algorithm SHA256 $executable).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$executable.sha256", "$hash  $executable`n", [Text.Encoding]::ASCII)
       - name: Package Debian client
         if: matrix.deb_arch != ''
         shell: bash
@@ -88,6 +104,19 @@ jobs:
           for deb in mirrorproxy_*.deb; do
             sha256sum "$deb" >"$deb.sha256"
           done
+      - name: Package RPM client
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes rpm
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/client/Cargo.toml | head -n1)"
+          bash scripts/package-client-rpm.sh \
+            "target/${{ matrix.target }}/release/mirrorproxy" \
+            "$version" "${{ matrix.deb_arch }}" .
+          for rpm in mirrorproxy-*.rpm; do
+            sha256sum "$rpm" >"$rpm.sha256"
+          done
       - uses: actions/upload-artifact@v6
         with:
           name: client-${{ matrix.target }}
@@ -96,6 +125,10 @@ jobs:
             ${{ matrix.archive }}.sha256
             mirrorproxy_*.deb
             mirrorproxy_*.deb.sha256
+            mirrorproxy-*.rpm
+            mirrorproxy-*.rpm.sha256
+            mirrorproxy-client-*.exe
+            mirrorproxy-client-*.exe.sha256
           if-no-files-found: ignore
 
   server:
@@ -112,6 +145,12 @@ jobs:
             target: aarch64-unknown-linux-gnu
             archive: mirrorproxy-server-aarch64-unknown-linux-gnu.tar.gz
             package_arch: aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: mirrorproxy-server-x86_64-pc-windows-msvc.zip
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: mirrorproxy-server-aarch64-pc-windows-msvc.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -146,6 +185,7 @@ jobs:
           BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           cargo build --locked --release -p mirrorproxy-server --target ${{ matrix.target }}
       - name: Package server
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           staging="mirrorproxy-server-${{ matrix.target }}"
@@ -156,6 +196,28 @@ jobs:
           chmod +x "$staging/mirrorproxy-server"
           tar -czf "${{ matrix.archive }}" -C "$staging" mirrorproxy-server config.example.toml geoip
           shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
+      - uses: actions/setup-python@v6
+        if: runner.os == 'Windows'
+        with:
+          python-version: '3.13'
+      - name: Package and verify Windows server
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $staging = "mirrorproxy-server-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $staging | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/mirrorproxy-server.exe" "$staging/mirrorproxy-server.exe"
+          Copy-Item config.example.toml $staging
+          Copy-Item -Recurse geoip $staging
+          $archive = "${{ matrix.archive }}"
+          Compress-Archive -Path "$staging/*" -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$archive.sha256", "$hash  $archive`n", [Text.Encoding]::ASCII)
+          Expand-Archive -Path $archive -DestinationPath verified-server
+          & ./verified-server/mirrorproxy-server.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Server version check failed' }
+          python scripts/smoke-source-details.py verified-server/mirrorproxy-server.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged server protocol smoke failed' }
       - name: Build native Linux packages
         if: runner.os == 'Linux'
         shell: bash
@@ -333,11 +395,14 @@ jobs:
       - name: Install WinGetCreate
         shell: pwsh
         run: Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
-      - name: Submit package update
+      - name: Submit multi-architecture package manifests
         shell: pwsh
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
-          $url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mirrorproxy-client-x86_64-pc-windows-msvc.zip"
-          .\wingetcreate.exe update Inbjo.MirrorProxy --version $version --urls "$url|x64" --token $env:WINGET_TOKEN --submit
+          $url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mirrorproxy-winget-manifests.zip"
+          Invoke-WebRequest $url -OutFile winget-manifests.zip
+          Expand-Archive winget-manifests.zip -DestinationPath winget-manifests
+          .\wingetcreate.exe submit --no-open --token $env:WINGET_TOKEN "winget-manifests/manifests/i/Inbjo/MirrorProxy/$version"
+          if ($LASTEXITCODE -ne 0) { throw 'WinGet manifest submission failed' }
