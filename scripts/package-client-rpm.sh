@@ -31,6 +31,7 @@ License: MIT
 URL: https://github.com/inbjo/MirrorProxy
 Source0: mirrorproxy
 %define debug_package %{nil}
+%global _build_id_links none
 %global __strip /bin/true
 %description
 Configure package managers and development tools to use MirrorProxy or

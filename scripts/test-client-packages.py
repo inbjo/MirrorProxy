@@ -35,7 +35,8 @@ def main():
             installed = unpacked / 'usr/bin/mirrorproxy'
             assert installed.read_bytes() == binary.read_bytes(), installed
             assert installed.stat().st_mode & 0o777 == 0o755, installed
-            assert [p.relative_to(unpacked).as_posix() for p in unpacked.rglob('*') if p.is_file()] == ['usr/bin/mirrorproxy']
+            files = sorted(p.relative_to(unpacked).as_posix() for p in unpacked.rglob('*') if p.is_file() or p.is_symlink())
+            assert files == ['usr/bin/mirrorproxy'], files
         print(f'{arch} DEB/RPM metadata, exact executable payload, mode and absence of install scripts verified')
 
 
