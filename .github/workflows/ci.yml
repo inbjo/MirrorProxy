@@ -38,6 +38,8 @@ jobs:
           npm test
           npm run test:toolchain
           npm run build
+      - name: Verify release download tables
+        run: python3 scripts/test-release-body.py
       - name: Verify local build cache invalidation
         run: node --test scripts/build-cache.test.mjs
       - name: PowerShell installer offline contract

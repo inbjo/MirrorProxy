@@ -33,4 +33,19 @@ On a stable `v*` tag, the release workflow builds the client packages and
 manifests, signs and deploys the APT repository, and updates the Homebrew tap.
 WinGet submission runs only after it is explicitly enabled.
 
+## Release download tables
+
+The Release workflow runs `scripts/generate-release-body.py` against the built
+artifacts. Both stable releases and Nightly show separate client/server tables
+with operating-system and architecture columns, plus a `SHA256SUMS` link. Only
+existing archives and native packages are linked; unavailable platforms show `—`.
+Stable releases include `docs/releases/vX.Y.Z.md` below the tables.
+
+When applying curated notes manually, preserve the tables by generating the
+combined body from the downloaded release assets, then use that output with
+`gh release edit --notes-file`. Replacing the body with the notes file alone
+removes the download tables. Updating this generator does not modify existing
+published releases.
+
+
 [简体中文](Release-Maintenance-zh-CN)

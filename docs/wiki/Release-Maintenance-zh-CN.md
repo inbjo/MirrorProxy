@@ -28,4 +28,16 @@
 推送稳定 `v*` 标签时，Release workflow 会生成包和 manifest、签名并部署 APT 仓库、更新
 Homebrew Tap；WinGet 自动提交只在显式启用后运行。
 
+## Release 下载表格
+
+Release workflow 使用 `scripts/generate-release-body.py` 根据构建产物生成下载表。
+稳定版和 Nightly 均分别展示客户端、服务端的系统与架构下载入口，以及 `SHA256SUMS`
+校验链接。仅链接实际存在的压缩包和安装包，暂不支持的平台显示 `—`。
+稳定版会在表格下方保留 `docs/releases/vX.Y.Z.md` 的详细说明。
+
+手动应用详细发布说明时，请根据下载的 Release 产物生成包含表格的完整正文，再将输出
+用于 `gh release edit --notes-file`。直接使用详细说明文件覆盖正文会移除下载表。
+修改生成脚本不会自动变更已发布的 Release。
+
+
 [English](Release-Maintenance)

@@ -87,6 +87,30 @@ Current CI command / 当前 CI 命令：
 cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0387
 ```
 
+## Frontend build dependency status / 前端构建依赖状态
+
+Reviewed on 2026-11-02: modern build-tool consumers use `glob 14.0.3` and
+`minimatch 11.0.4`, addressing GHSA-3g3m-2fjr-6pw4 and GHSA-g3hv-75wg-m249
+in those paths. Umi's `fork-ts-checker-webpack-plugin 8.0.0` still requires the
+callable CommonJS API of `minimatch 3.1.5`; even upstream checker 9.1.0 retains
+that dependency. Replacing it with minimatch 11 breaks issue and watch filtering.
+The minimatch override therefore applies only to modern consumers. The legacy
+path remains reported by unfiltered npm audit. With explicit user approval on
+2026-11-02, the CI audit permits only GHSA-g3hv-75wg-m249 at moderate severity
+for `node_modules/minimatch` version 3.1.5 with checker version 8.0.0, including
+findings propagated from that cause. Different advisories, versions, paths,
+or elevated severity still fail. This is an accepted build-tool risk, not a
+patched dependency. Remove the exception when the checker provides a compatible
+migration. The existing low-severity deepmerge exception is unchanged.
+
+2026-11-02 复核：现代构建工具调用链已升级至 `glob 14.0.3`、`minimatch 11.0.4`，
+修复这些路径中的上述两项告警。Umi 的类型检查插件仍依赖 `minimatch 3.1.5` 的 CommonJS
+函数接口，上游最新版检查插件 9.1.0 也尚未迁移；直接替换为 minimatch 11 会破坏问题筛选与
+文件监听。因此只覆盖现代调用链。旧路径仍会被原始 npm audit 报告。经用户于 2026-11-02 明确批准，CI 审计仅对
+检查插件 8.0.0 所用 `node_modules/minimatch` 3.1.5 的 GHSA-g3hv-75wg-m249 中危告警
+及其传播项设置例外。其他公告、版本、安装路径或更高严重等级仍会失败。这是接受构建工具风险，
+并非依赖已修复；上游提供兼容迁移后须移除例外。原有 deepmerge 低危例外保持不变。
+
 ## Reporting a vulnerability / 报告安全漏洞
 
 Do not disclose suspected vulnerabilities in a public issue, discussion, or

@@ -422,7 +422,15 @@ html, .config-modal .ant-modal-body, .config-option code { scrollbar-width: thin
   border-radius: 12px;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 7%, transparent);
 }
-.admin-console .console-overview .console-section-head { margin-bottom: 24px; }
+.admin-console .console-overview { gap: 20px; }
+.admin-console .console-overview .console-section-head {
+  margin: 0;
+  padding: 20px 24px;
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.admin-console .console-overview .console-metrics { margin-bottom: 0; }
 .admin-console .console-overview .console-section-head h3 { margin-bottom: 4px; }
 .admin-console .console-overview .console-section-head p { margin: 0; color: var(--muted); }
 .admin-console .console-overview .stats-columns > .ant-pro-card .ant-pro-card-header { border-bottom: 1px solid var(--line); }

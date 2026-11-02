@@ -1320,6 +1320,8 @@ test('renders regional traffic charts in both themes without browser errors', as
   await page.goto('/admin/geo')
   const chart = page.getByRole('img', { name: 'Daily billed traffic trend' })
   await expect(chart.locator('canvas')).toBeVisible()
+  await chart.locator('canvas').hover({ position: { x: 180, y: 100 } })
+  await expect(page.locator('.g2-tooltip')).toContainText('1.0 KB')
   for (const theme of ['light', 'dark']) {
     await setTheme(page, theme)
     await page.setViewportSize({ width: 375, height: 900 })
@@ -1437,6 +1439,9 @@ test('uses the native Pro header, sider, page container and statistic cards', as
   await expect(page.locator('.console-metrics .ant-pro-statistic-card')).toHaveCount(4)
   for (const theme of ['light', 'dark']) {
     await setTheme(page, theme)
+    await expect(page.locator('.console-overview .console-section-head')).toHaveCSS('border-top-width', '1px')
+    await expect(page.locator('.console-overview .console-section-head')).toHaveCSS('margin-bottom', '0px')
+    await expect(page.locator('.console-overview .console-metrics')).toHaveCSS('margin-bottom', '0px')
     await expect(page.locator('.console-overview .console-metric').first()).toHaveCSS('border-top-width', '1px')
     await expect(page.locator('.console-overview .stats-columns > .ant-pro-card').first()).toHaveCSS('border-top-width', '1px')
     for (const width of [1440, 768, 414, 375, 320]) {

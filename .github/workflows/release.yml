@@ -264,10 +264,16 @@ jobs:
                 sha: context.sha,
               });
             }
+      - name: Generate release download tables
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
+        run: python3 scripts/generate-release-body.py release-artifacts "$GITHUB_REPOSITORY" "$RELEASE_TAG" release-body.md
       - name: Publish versioned release
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         uses: softprops/action-gh-release@v3
         with:
+          name: ${{ github.ref_name }}
+          body_path: release-body.md
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
@@ -299,10 +305,7 @@ jobs:
         with:
           tag_name: nightly
           name: Nightly
-          body: |
-            Automated rolling build from `main` at `${{ github.sha }}`.
-
-            Assets are replaced after every push to `main` and by the daily scheduled build.
+          body_path: release-body.md
           prerelease: true
           make_latest: false
           overwrite_files: true

@@ -69,7 +69,7 @@ test('SVGR uses the patched SVG optimizer and preserves React component generati
   assert.match(component, /1em/)
 })
 
-test('Babel coverage exclusion keeps its sync file selection API', t => {
+test('Babel coverage exclusion keeps its sync and async file selection APIs', async t => {
   const root = mkdtempSync(join(tmpdir(), 'mirrorproxy-coverage-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(join(root, 'src'))
@@ -81,6 +81,7 @@ test('Babel coverage exclusion keeps its sync file selection API', t => {
   assert.equal(exclude.shouldInstrument(join(root, 'src/selected.js')), true)
   assert.equal(exclude.shouldInstrument(join(root, 'src/excluded.test.js')), false)
   assert.deepEqual(exclude.globSync(), ['src/selected.js'])
+  assert.deepEqual(await exclude.glob(), ['src/selected.js'])
 })
 
 test('Mako cleanup keeps the rimraf promise API and only removes the requested directory', async t => {
@@ -105,4 +106,17 @@ test('Umi run executes TypeScript through the maintained tsx runner', t => {
   const pkg = JSON.parse(readFileSync(packagePath, 'utf8'))
   const bin = join(dirname(packagePath), pkg.bin.tsx ?? pkg.bin)
   assert.equal(execFileSync(process.execPath, [bin, script], { encoding: 'utf8' }).trim(), 'typed-runner-ok')
+})
+
+// Umi's checker still calls minimatch as a CommonJS function. Modern minimatch
+// exports an object, so keep its override scoped to the modern consumers.
+test('Umi type-checker preserves legacy issue file matching', () => {
+  const fromWebpack = fromPackage('@umijs/bundler-webpack')
+  const fromChecker = createRequire(fromWebpack.resolve('fork-ts-checker-webpack-plugin/package.json'))
+  const { createIssuePredicateFromIssueMatch } = fromChecker('./lib/issue/issue-match.js')
+  const matches = createIssuePredicateFromIssueMatch('/workspace', { file: 'src/**/*.ts', severity: 'error' })
+  const issue = { file: '/workspace/src/nested/example.ts', severity: 'error', code: 'TS2322' }
+  assert.equal(matches(issue), true)
+  assert.equal(matches({ ...issue, file: '/workspace/vendor/example.ts' }), false)
+  assert.equal(matches({ ...issue, severity: 'warning' }), false)
 })
