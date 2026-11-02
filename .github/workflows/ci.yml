@@ -170,6 +170,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      - name: Prepare Windows OpenSSL build tools
+        run: ./scripts/setup-windows-build.ps1
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}

@@ -154,6 +154,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      - name: Prepare Windows OpenSSL build tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup-windows-build.ps1
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -177,13 +181,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes gcc-aarch64-linux-gnu
+      - name: Fetch verified GeoIP databases
+        shell: bash
+        run: bash scripts/fetch-geoip.sh
       - name: Build server
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          bash scripts/fetch-geoip.sh
           GIT_COMMIT="${GITHUB_SHA}" \
           BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           cargo build --locked --release -p mirrorproxy-server --target ${{ matrix.target }}
+      - name: Build Windows server
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:GIT_COMMIT = $env:GITHUB_SHA
+          $env:BUILD_TIME = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+          cargo build --locked --release -p mirrorproxy-server --target ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { throw 'Windows server build failed' }
       - name: Package server
         if: runner.os != 'Windows'
         shell: bash
