@@ -19,41 +19,80 @@ jobs:
       - name: PowerShell 7 installer contract
         shell: pwsh
         run: ./scripts/test-install-windows-powershell.ps1
-  checks:
+  frontend:
+    name: Frontend tests, build and browser checks
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
       - uses: actions/setup-node@v6
+        id: node
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Build web console
+      - name: Install locked dependencies and run frontend tests
         working-directory: web
         run: |
           npm ci
           npm test
           npm run test:toolchain
-          npm run build
+      - uses: ./.github/actions/build-web
+        with:
+          node-version: ${{ steps.node.outputs.node-version }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ci-web-console
+          path: |
+            web/dist
+            target/frontend-artifact.json
+          retention-days: 1
+          if-no-files-found: error
       - name: Verify release download tables
         run: |
           python3 scripts/test-release-body.py
           python3 scripts/test-package-manifests.py
           python3 scripts/test-docker-manifest.py
+          python3 scripts/test-frontend-build-manifest.py
       - name: Verify local build cache invalidation
         run: node --test scripts/build-cache.test.mjs
       - name: PowerShell installer offline contract
         shell: pwsh
         run: ./scripts/test-install-powershell.ps1
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('web/package-lock.json') }}
       - name: Install Chromium for browser tests
         working-directory: web
         run: npx playwright install --with-deps chromium
       - name: Run browser end-to-end tests
         working-directory: web
         run: npm run test:e2e
+
+  checks:
+    needs: frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, Node 24
+        with:
+          prefix-key: mirrorproxy-rust-v1
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-checks
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install browser smoke dependencies
+        working-directory: web
+        run: npm ci
+      - uses: ./.github/actions/download-web
+        with:
+          name: ci-web-console
       - name: Rust format
         run: cargo fmt --check
       - name: Rust clippy
@@ -71,6 +110,7 @@ jobs:
           node web/scripts/smoke-passkey-browser.mjs target/debug/mirrorproxy-server
 
   supply-chain:
+    needs: frontend
     name: Supply chain and coverage
     runs-on: ubuntu-24.04
     steps:
@@ -78,13 +118,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, Node 24
+        with:
+          prefix-key: mirrorproxy-rust-v1
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-coverage
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
       - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked --version 0.22.2
+        run: |
+          if ! command -v cargo-audit >/dev/null || [[ "$(cargo audit --version | awk '{print $NF}')" != '0.22.2' ]]; then
+            cargo install cargo-audit --locked --version 0.22.2
+          fi
       - name: Audit Rust dependencies
         # Only the reviewed OIDC public-key verification paths are excepted:
         # RSA private-key timing (2023-0071) and crypto-bigint secret-integer
@@ -96,7 +144,9 @@ jobs:
         run: |
           npm ci
           node scripts/audit-dependencies.mjs
-          npm run build
+      - uses: ./.github/actions/download-web
+        with:
+          name: ci-web-console
       - name: Generate Rust coverage
         run: |
           cargo install cargo-llvm-cov --locked
@@ -120,6 +170,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, Node 24
+        with:
+          prefix-key: mirrorproxy-rust-v1
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-client-tests
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
       - name: Validate Unix installer syntax
         if: runner.os != 'Windows'
         shell: bash
@@ -160,6 +215,7 @@ jobs:
           python3 scripts/test-client-packages.py target/debug/mirrorproxy
 
   windows-server:
+    needs: frontend
     name: Windows server (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -172,34 +228,42 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/strawberry-perl-5.42.3.1-portable.zip
+          key: windows-perl-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-windows-build.ps1') }}
       - name: Prepare Windows OpenSSL build tools
         run: ./scripts/setup-windows-build.ps1
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - uses: actions/setup-node@v6
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, Node 24
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          prefix-key: mirrorproxy-rust-v1
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-server-tests
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - name: Build embedded console
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
+      - uses: ./.github/actions/download-web
+        with:
+          name: ci-web-console
       - name: Build Windows server
         run: cargo build --locked -p mirrorproxy-server --target ${{ matrix.target }}
       - name: Verify Windows server protocol
         run: python scripts/smoke-source-details.py target/${{ matrix.target }}/debug/mirrorproxy-server.exe
 
   client-smoke:
+    needs: frontend
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, Node 24
+        with:
+          prefix-key: mirrorproxy-rust-v1
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-client-smoke
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -229,11 +293,9 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - name: Install repository clients
         run: sudo apt-get update && sudo apt-get install -y cabal-install cpanminus luarocks maven r-base
-      - name: Build web console
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
+      - uses: ./.github/actions/download-web
+        with:
+          name: ci-web-console
       - name: Run public client protocol smoke
         env:
           MIRRORPROXY_SMOKE_DOCKER: "1"

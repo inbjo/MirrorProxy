@@ -38,6 +38,14 @@ jobs:
         with:
           components: rust-src
 
+      - name: Cache Rust analysis dependencies
+        if: matrix.language == 'rust'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, Node 24
+        with:
+          prefix-key: mirrorproxy-rust-v1
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-codeql
+          cache-targets: false
+
       - name: Configure Rust extractor paths
         if: matrix.language == 'rust'
         shell: bash

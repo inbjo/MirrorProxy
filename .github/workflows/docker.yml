@@ -14,9 +14,13 @@ on:
       - web/src/**
       - web/package*.json
       - web/.umirc.ts
+      - web/config/**
       - web/tsconfig.json
       - web/build/**
       - scripts/docker-entrypoint.sh
+      - scripts/install.sh
+      - scripts/install.ps1
+      - config.example.toml
       - scripts/fetch-geoip.sh
       - scripts/smoke-docker.sh
       - scripts/smoke-source-details.py
@@ -32,9 +36,13 @@ on:
       - web/src/**
       - web/package*.json
       - web/.umirc.ts
+      - web/config/**
       - web/tsconfig.json
       - web/build/**
       - scripts/docker-entrypoint.sh
+      - scripts/install.sh
+      - scripts/install.ps1
+      - config.example.toml
       - scripts/fetch-geoip.sh
       - scripts/smoke-docker.sh
       - scripts/smoke-source-details.py
@@ -129,9 +137,11 @@ jobs:
             ${{ runner.temp }}/mirrorproxy-cargo-registry
             ${{ runner.temp }}/mirrorproxy-cargo-git
             ${{ runner.temp }}/mirrorproxy-cargo-target
-          key: docker-cargo-v1-${{ matrix.arch }}-${{ hashFiles('Dockerfile', 'Cargo.lock', 'crates/**/Cargo.toml') }}-${{ github.sha }}
+            ${{ runner.temp }}/mirrorproxy-npm-cache
+          key: docker-cargo-v2-${{ matrix.arch }}-${{ hashFiles('Dockerfile', 'Cargo.lock', 'crates/**/Cargo.toml', 'web/package-lock.json') }}-${{ github.sha }}
           restore-keys: |
-            docker-cargo-v1-${{ matrix.arch }}-${{ hashFiles('Dockerfile', 'Cargo.lock', 'crates/**/Cargo.toml') }}-
+            docker-cargo-v2-${{ matrix.arch }}-${{ hashFiles('Dockerfile', 'Cargo.lock', 'crates/**/Cargo.toml', 'web/package-lock.json') }}-
+            docker-cargo-v2-${{ matrix.arch }}-
             docker-cargo-v1-${{ matrix.arch }}-
       - name: Restore and persist Cargo cache mounts
         uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0, Node 24
@@ -143,7 +153,8 @@ jobs:
             {
               "${{ runner.temp }}/mirrorproxy-cargo-registry": {"target": "/usr/local/cargo/registry", "id": "mirrorproxy-cargo-registry-${{ matrix.platform }}"},
               "${{ runner.temp }}/mirrorproxy-cargo-git": {"target": "/usr/local/cargo/git", "id": "mirrorproxy-cargo-git-${{ matrix.platform }}"},
-              "${{ runner.temp }}/mirrorproxy-cargo-target": {"target": "/app/target", "id": "mirrorproxy-target-${{ matrix.platform }}"}
+              "${{ runner.temp }}/mirrorproxy-cargo-target": {"target": "/app/target", "id": "mirrorproxy-target-${{ matrix.platform }}"},
+              "${{ runner.temp }}/mirrorproxy-npm-cache": "/root/.npm"
             }
       - uses: docker/login-action@v4
         if: needs.prepare.outputs.publish == 'true'

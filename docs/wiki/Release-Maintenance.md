@@ -54,6 +54,31 @@ To validate a cache change, run two native builds, inspect restored/extracted
 cache steps and Cargo rebuild timings, then run the image smoke on both runners.
 Do not infer speedups from a successful YAML check or an unchanged cached layer.
 
+### Other workflow caches
+
+Release clients/servers and all Rust CI jobs cache dependency downloads,
+compiled dependencies and installed Cargo tools with a pinned Node-24-compatible
+Rust-cache action. Keys include compiler/toolchain, manifests/lockfile,
+compiler environment, OS, runner architecture, target and build purpose.
+Coverage and CodeQL analysis are isolated from normal compilation; CodeQL
+caches dependencies only. Cargo commands and all tests/audits still execute.
+
+CI and Release each build the frontend once. A content-keyed cache binds the
+output to frontend sources/configuration, lockfile, exact Node version,
+platform and build environment. File hashes and the complete output inventory
+are checked before reuse. The current run's frontend artifact additionally
+records its Git commit; every Rust consumer verifies the commit and hashes
+before embedding it. Unit, toolchain and browser tests still run on cache hits.
+Release shares one checksum-verified GeoIP input across server targets. Only
+client/server distribution artifacts are selected for publication; internal
+frontend/GeoIP artifacts are excluded from public release assets.
+
+Playwright browser downloads, npm package downloads and the fixed-checksum
+Windows Perl archive are cached. Browser system dependencies and Perl archive
+hashes are checked every run. Real-client smoke homes/caches remain isolated so
+cached package payloads cannot conceal proxy regressions. A cold run still
+needs to populate these caches; no build-time guarantee is implied.
+
 ## Release download tables
 
 The Release workflow runs `scripts/generate-release-body.py` against the built

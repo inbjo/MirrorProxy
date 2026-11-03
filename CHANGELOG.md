@@ -5,6 +5,10 @@ follow semantic versioning.
 
 ## [Unreleased]
 
+- Cache native Rust dependencies across CI/Release/analysis jobs, share a
+  content- and commit-verified frontend build across server targets, and cache
+  verified GeoIP/Perl and browser downloads while retaining complete validation.
+
 - Pin Linux workflow runners to Ubuntu 24.04 (including native ARM64) to avoid
   implicit OS migration through the `ubuntu-latest` label.
 

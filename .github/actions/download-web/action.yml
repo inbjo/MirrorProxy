@@ -1,0 +1,15 @@
+name: Download verified frontend artifact
+description: Reuse this workflow run's frontend build and verify its commit and file hashes
+inputs:
+  name:
+    description: Current-run frontend artifact name
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.name }}
+    - name: Verify frontend artifact identity and complete contents
+      shell: bash
+      run: python3 scripts/frontend-build-manifest.py verify --commit "$GITHUB_SHA"
