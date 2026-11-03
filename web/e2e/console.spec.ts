@@ -1,5 +1,21 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
+async function waitForDialogReady(dialog: Locator) {
+  await expect(dialog).toBeVisible()
+  await expect.poll(() => dialog.evaluate(element => new Promise<number>(resolve => {
+    // rc-motion applies its active class on a subsequent animation frame.
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve(element.getAnimations({ subtree: true })
+      .filter(animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity).length)))
+  }))).toBe(0)
+}
+
+async function confirmDialog(page: Page, label: string) {
+  const dialog = page.getByRole('dialog')
+  await waitForDialogReady(dialog)
+  await dialog.getByRole('button', { name: label, exact: true }).click()
+  await expect(dialog).toBeHidden()
+}
+
 async function selectChoice(page: Page, control: Locator, label: string) {
   await control.click()
   const list = await control.getAttribute('aria-controls')
@@ -524,7 +540,7 @@ test('operates the v1.3 cache, alerts, and adaptive upstream controls', async ({
   await expect(page.getByLabel('Strategy').locator('xpath=ancestor::span[contains(@class, "choice-field")]')).toBeVisible()
   await expect(page.getByText('2 entries · 2.0 KB / 256.0 MB')).toBeVisible()
   await page.getByRole('button', { name: 'Purge cache' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Purge cache' }).click()
+  await confirmDialog(page, 'Purge cache')
   await expect.poll(() => cachePurged).toBe(true)
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Purge cache' })).not.toHaveCSS('border-style', 'none')
@@ -582,7 +598,7 @@ test('changes the administrator password and revokes the active session', async 
   await passwordForm.getByLabel('Current password').fill('correct-password')
   await passwordForm.getByLabel('New password (12 characters minimum)').fill('replacement-password')
   await passwordForm.getByRole('button', { name: 'Change password', exact: true }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Change password' }).click()
+  await confirmDialog(page, 'Change password')
   await expect.poll(() => passwordRequest).toEqual({ current_password: 'correct-password', new_password: 'replacement-password' })
   await expect.poll(() => loggedOut).toBe(true)
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
@@ -695,6 +711,7 @@ test('signs in by email and rotates the dedicated routing address', async ({ pag
   let linked = true
   let verified: Record<string, unknown> | undefined
   let routingId = 'first-routing-id'
+  let rotationRequests = 0
   await page.route('**/api/account/profile', route => route.fulfill(signedIn ? {
     json: {
       user: { id: 7, username: 'person', email: 'person+tag@example.com', display_name: 'Person', routing_id: routingId, routing_rotated_at: 1784592000 },
@@ -718,6 +735,8 @@ test('signs in by email and rotates the dedicated routing address', async ({ pag
     await route.fulfill({ json: { user_id: 7 } })
   })
   await page.route('**/api/account/routing-id/rotate', async route => {
+    expect(route.request().method()).toBe('POST')
+    rotationRequests++
     routingId = 'rotated-routing-id'
     await route.fulfill({ json: { routing_id: routingId } })
   })
@@ -794,10 +813,12 @@ test('signs in by email and rotates the dedicated routing address', async ({ pag
   const disconnect = page.getByRole('button', { name: 'Disconnect' })
   await expect(disconnect).toHaveClass(/revoke-button/)
   await disconnect.click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Disconnect' }).click()
+  await confirmDialog(page, 'Disconnect')
   await expect(page.getByText('GitHub was disconnected.')).toBeVisible()
+  await expect(page.locator('.connected-identities .identity-row')).toHaveCount(0)
   await page.getByRole('button', { name: 'Generate new address' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Rotate address' }).click()
+  await confirmDialog(page, 'Rotate address')
+  await expect.poll(() => rotationRequests).toBe(1)
   await expect(page.locator('input[readonly]')).toHaveValue('https://rotated-routing-id.mirror.example')
 })
 
@@ -1021,7 +1042,7 @@ test('revokes administrator sessions and searches and soft-deletes users', async
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await page.getByRole('link', { name: 'Administrators & security' }).click()
   await page.locator('.admin-session-table .ant-table-row', { hasText: 'Passkey' }).getByRole('button', { name: 'Revoke' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Revoke session' }).click()
+  await confirmDialog(page, 'Revoke session')
   await expect.poll(() => revokedSession).toBe('0123456789abcdef01234567')
   await page.getByRole('link', { name: 'Users & groups' }).click()
   await page.getByLabel('Search users').fill('search-me')
@@ -1059,7 +1080,7 @@ test('revokes administrator sessions and searches and soft-deletes users', async
     await expect(deleteButton).toHaveCSS('outline-style', 'solid')
   }
   await deleteButton.click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Delete user' }).click()
+  await confirmDialog(page, 'Delete user')
   await expect.poll(() => deletedUser).toBe(true)
 })
 
@@ -1286,7 +1307,7 @@ test('manages custom download domains in both languages on narrow screens', asyn
   }
   await page.getByLabel('Domain', { exact: true }).fill('cdn.example.org')
   await page.getByRole('button', { name: 'Block', exact: true }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Confirm', exact: true }).click()
+  await confirmDialog(page, 'Confirm')
   await expect.poll(() => blocked).toEqual({ domain: 'cdn.example.org', subdomains: true, reason: '', blocked: true })
   await page.getByTitle('Language').click()
   await expect(page.getByRole('heading', { name: '自定义下载策略' })).toBeVisible()
@@ -1442,7 +1463,7 @@ test('keeps quota controls and short or long page footers accessible through sig
   await page.route('**/admin/api/auth/logout', r => r.fulfill({ status: 204 }))
   await page.getByRole('button', { name: 'Account menu' }).click()
   await page.getByRole('menuitem', { name: 'Sign out' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Sign out', exact: true }).click()
+  await confirmDialog(page, 'Sign out')
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
   await expect.poll(() => page.locator('.site-footer').evaluate(element => element.getBoundingClientRect().bottom)).toBe(1600)
   await page.goto('/')
@@ -1687,8 +1708,7 @@ test('polishes source cards, highlighted commands and single-column installation
   await expect(code).toHaveText('npm config set registry https://mirror.example/npm/')
   // The modal's entrance motion can outlive its content becoming visible.
   // Wait for it to settle before clicking, then observe handler completion.
-  await expect.poll(() => modal.evaluate(element => element.getAnimations({ subtree: true })
-    .filter(animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity).length)).toBe(0)
+  await waitForDialogReady(modal)
   await modal.locator('.config-option').last().getByRole('button', { name: 'Copy command' }).click()
   await expect(modal.locator('.config-option').last().getByRole('button', { name: 'Copied' })).toHaveClass(/copied/)
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('npm config set registry https://mirror.example/npm/')
@@ -2155,14 +2175,14 @@ test('locks only the active invitation and reports HTTP and network failures', a
   await expect(page.getByRole('alert')).toContainText('Unable to resend invitation.')
   await expect(row.getByRole('button', { name: 'Resend', exact: true })).toBeEnabled()
   await row.getByRole('button', { name: 'Revoke', exact: true }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Revoke invitation' }).click()
+  await confirmDialog(page, 'Revoke invitation')
   await expect(page.getByRole('alert')).toContainText('Could not reach the local MirrorProxy service.')
   await expect(row.getByRole('button', { name: 'Revoke', exact: true })).toBeEnabled()
   expect(sends).toBe(1)
   expect(deletes).toBe(1)
   expect(reads).toBe(1)
   await row.getByRole('button', { name: 'Revoke', exact: true }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Revoke invitation' }).click()
+  await confirmDialog(page, 'Revoke invitation')
   await expect(row.getByText('Revoked', { exact: true })).toBeVisible()
   await expect(row.getByRole('button')).toHaveCount(0)
   expect(deletes).toBe(2)
