@@ -71,8 +71,13 @@ jobs:
 
   checks:
     needs: frontend
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
+      - name: Require all frontend checks to pass
+        env:
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: test "$FRONTEND_RESULT" = success
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
