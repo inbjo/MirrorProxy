@@ -1474,6 +1474,27 @@ impl Database {
             .map_err(Into::into)
     }
 
+    /// Resolve both authenticator identifiers; neither unverified identifier alone is an identity.
+    pub async fn discoverable_admin_passkey(
+        &self,
+        user_handle: Uuid,
+        credential_id: &[u8],
+    ) -> anyhow::Result<Option<(String, Passkey)>> {
+        let row = sqlx::query(
+            "SELECT u.username, p.passkey_json FROM admin_passkeys p JOIN admin_users u ON u.username = p.username WHERE u.user_handle = ? AND p.credential_id = ? AND u.disabled = 0",
+        )
+        .bind(user_handle.to_string())
+        .bind(serde_json::to_string(&webauthn_rs::prelude::CredentialID::from(credential_id.to_vec()))?)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            let username: String = row.try_get("username")?;
+            let json: String = row.try_get("passkey_json")?;
+            Ok((username, serde_json::from_str(&json)?))
+        })
+        .transpose()
+    }
+
     pub async fn add_admin_passkey(
         &self,
         username: &str,

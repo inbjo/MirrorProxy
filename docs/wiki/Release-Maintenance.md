@@ -33,6 +33,27 @@ On a stable `v*` tag, the release workflow builds the client packages and
 manifests, signs and deploys the APT repository, and updates the Homebrew tap.
 WinGet submission runs only after it is explicitly enabled.
 
+## Native Docker builds and caches
+
+Docker builds run `linux/amd64` on `ubuntu-latest` and `linux/arm64` on
+`ubuntu-24.04-arm`, without QEMU. Each native image passes the entrypoint version,
+revision and local-upstream protocol smoke before its digest is made available
+to the merge job. The merge job verifies both architecture entries and their
+linked attestations, then signs the final index with GitHub OIDC. SBOM and
+provenance remain enabled for published images.
+
+Cargo registry, Git and target cache mounts are restored and extracted through
+the pinned cache-dance action and `actions/cache`. Keys separate architectures
+and include Dockerfile, Cargo lock/manifests and commit; fallback keys reuse
+compatible prior builds. BuildKit layer caches also have per-architecture scopes.
+PR and relevant `main` pushes build and test locally without publishing; stable
+tags and explicit dispatches publish by digest and merge tags only after both
+platforms pass. Digest-only dispatch still signs without rebuilding.
+
+To validate a cache change, run two native builds, inspect restored/extracted
+cache steps and Cargo rebuild timings, then run the image smoke on both runners.
+Do not infer speedups from a successful YAML check or an unchanged cached layer.
+
 ## Release download tables
 
 The Release workflow runs `scripts/generate-release-body.py` against the built

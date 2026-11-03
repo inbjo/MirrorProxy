@@ -42,6 +42,7 @@ jobs:
         run: |
           python3 scripts/test-release-body.py
           python3 scripts/test-package-manifests.py
+          python3 scripts/test-docker-manifest.py
       - name: Verify local build cache invalidation
         run: node --test scripts/build-cache.test.mjs
       - name: PowerShell installer offline contract
@@ -67,6 +68,7 @@ jobs:
           ./scripts/smoke-admin-api.sh target/debug/mirrorproxy-server
           python3 scripts/smoke-source-details.py target/debug/mirrorproxy-server
           node web/scripts/smoke-admin-browser.mjs target/debug/mirrorproxy-server
+          node web/scripts/smoke-passkey-browser.mjs target/debug/mirrorproxy-server
 
   supply-chain:
     name: Supply chain and coverage

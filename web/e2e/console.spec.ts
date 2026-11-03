@@ -628,7 +628,7 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
       challenge: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       timeout: 60000,
-      authenticatorSelection: { userVerification: 'required' },
+      authenticatorSelection: { userVerification: 'required', residentKey: 'preferred' },
       attestation: 'none',
     } },
     } })
@@ -639,16 +639,19 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
     await route.fulfill({ status: 201 })
   })
   await page.route('**/admin/api/auth/logout', route => route.fulfill({ status: 204 }))
-  await page.route('**/admin/api/auth/passkey/login/start', route => route.fulfill({ json: {
+  await page.route('**/admin/api/auth/passkey/login/start', route => {
+    expect(route.request().postDataJSON()).toEqual({ username: '' })
+    return route.fulfill({ json: {
     challenge_id: 'server-authentication-state-id',
     options: { publicKey: {
       challenge: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE',
       timeout: 60000,
       rpId: 'localhost',
-      allowCredentials: [{ type: 'public-key', id: registeredCredential?.rawId }],
+      allowCredentials: [],
       userVerification: 'required',
     } },
-  } }))
+  } })
+  })
   await page.route('**/admin/api/auth/passkey/login/finish', async route => {
     const payload = route.request().postDataJSON() as { credential: Record<string, unknown> }
     authenticatedCredential = payload.credential
@@ -669,11 +672,20 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
   await page.reload()
   const passkeySignIn = page.getByRole('button', { name: 'Sign in with a passkey' })
   await expect(page.locator('.admin-username-field input')).toHaveValue('')
-  await expect(passkeySignIn).toBeDisabled()
-  await page.getByLabel('Administrator username').fill('admin')
   await expect(passkeySignIn).toBeEnabled()
+  await expect(page.getByText('Use a passkey to choose your account, or enter a username for an older security key.')).toBeVisible()
+  await page.getByTitle('Language').click()
+  await expect(page.getByText('可直接使用 Passkey 选择账号；旧安全密钥可填写用户名后登录。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '使用 Passkey 登录' })).toBeEnabled()
+  await page.getByTitle('语言').click()
+  await page.setViewportSize({ width: 375, height: 900 })
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(375)
+  await page.screenshot({ path: test.info().outputPath('passkey-login-mobile.png') })
+  await passkeySignIn.focus()
+  await expect(passkeySignIn).toBeFocused()
   await passkeySignIn.click()
   await expect.poll(() => authenticatedCredential?.type).toBe('public-key')
+  expect((authenticatedCredential?.response as Record<string, unknown>).userHandle).toBe('AAAAAAAAAAAAAAAAAAAAAA')
   await expect(page.getByRole('button', { name: 'Account menu' })).toBeVisible()
 })
 

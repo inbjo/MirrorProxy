@@ -23,6 +23,13 @@ Open **`https://your-host/admin`**. The first account is `admin`; use the config
 - Five consecutive failures lock an account for 15 minutes; restarts do not clear it. Per-account and real-source-IP throttling and auditing also apply.
 - Forgot a password? Use [local recovery](Troubleshooting).
 - Passkeys need a supported secure browser context. Before enforcing them, verify RP hostname/origin, the break-glass account, and sufficient credentials for required accounts.
+- Leave the username blank and select **Sign in with a passkey** to choose an account
+  with a discoverable credential. New registrations prefer discoverable credentials.
+  Older non-discoverable security keys remain supported: enter the username first.
+  Existing credentials are retained; re-register a key if you want discoverable
+  login and its authenticator did not create a discoverable credential previously.
+  Anonymous challenges expire after five minutes, are single-use and remain in
+  bounded server memory; restarting the server requires starting login again.
 
 ## Users, quotas, and alerts
 

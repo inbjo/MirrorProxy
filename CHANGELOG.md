@@ -5,6 +5,13 @@ follow semantic versioning.
 
 ## [Unreleased]
 
+- Build Docker amd64/ARM64 images on separate native runners, persist Cargo
+  cache mounts per architecture, verify each image's real proxy behavior, and
+  merge verified digests with SBOM/provenance and final-index signing intact.
+- Allow administrator Passkey sign-in without a username using discoverable
+  credentials; retain named authentication for existing security keys and
+  request discoverable credentials preferentially on new registrations.
+
 ## [1.7.2] - 2026-11-02
 
 ### Release packages
