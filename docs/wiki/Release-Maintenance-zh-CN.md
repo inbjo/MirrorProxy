@@ -40,5 +40,11 @@ Release workflow 使用 `scripts/generate-release-body.py` 根据构建产物生
 用于 `gh release edit --notes-file`。直接使用详细说明文件覆盖正文会移除下载表。
 修改生成脚本不会自动变更已发布的 Release。
 
+WinGet 清单在安装器根级保留共用的便携程序入口，并保留发布日期、Release 说明和 Wiki
+元数据。每个架构声明对应的 VC++ 运行库依赖。修复已发布元数据时，使用
+`MIRRORPROXY_RELEASE_DATE` 指定原始 Release 的 UTC 日期。
+执行 `gh workflow run winget-validation.yml -f version=X.Y.Z`，可在临时 Windows
+x64/ARM64 runner 验证已发布版本的安装、命令入口发现、版本与源列表，以及卸载。
+
 
 [English](Release-Maintenance)
