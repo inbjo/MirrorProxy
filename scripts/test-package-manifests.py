@@ -35,6 +35,7 @@ class ManifestTests(unittest.TestCase):
             common = winget.split('\nInstallers:\n')[0]
             self.assertIn('\nNestedInstallerFiles:\n- RelativeFilePath: mirrorproxy.exe\n  PortableCommandAlias: mirrorproxy\n', common)
             self.assertIn('ReleaseDate: 2026-11-02', common)
+            self.assertIn('ManifestVersion: 1.10.0', winget)
             for scoop_arch, winget_arch, target in [('64bit', 'x64', targets[3]), ('arm64', 'arm64', targets[4])]:
                 name = 'mirrorproxy-client-' + target
                 self.assertTrue(scoop['architecture'][scoop_arch]['url'].endswith('/' + name))

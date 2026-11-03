@@ -80,16 +80,16 @@ EOF
 winget_dir="$output/winget/manifests/i/Inbjo/MirrorProxy/$version"
 mkdir -p "$winget_dir"
 cat >"$winget_dir/Inbjo.MirrorProxy.yaml" <<EOF
-# yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.1.10.0.schema.json
 PackageIdentifier: Inbjo.MirrorProxy
 PackageVersion: ${version}
 DefaultLocale: en-US
 ManifestType: version
-ManifestVersion: 1.12.0
+ManifestVersion: 1.10.0
 EOF
 
 cat >"$winget_dir/Inbjo.MirrorProxy.installer.yaml" <<EOF
-# yaml-language-server: \$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
 PackageIdentifier: Inbjo.MirrorProxy
 PackageVersion: ${version}
 InstallerType: zip
@@ -114,11 +114,11 @@ Installers:
   InstallerUrl: ${base_url}/${windows_arm64}
   InstallerSha256: $(checksum "$windows_arm64" | tr '[:lower:]' '[:upper:]')
 ManifestType: installer
-ManifestVersion: 1.12.0
+ManifestVersion: 1.10.0
 EOF
 
 cat >"$winget_dir/Inbjo.MirrorProxy.locale.en-US.yaml" <<EOF
-# yaml-language-server: \$schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
 PackageIdentifier: Inbjo.MirrorProxy
 PackageVersion: ${version}
 PackageLocale: en-US
@@ -142,5 +142,5 @@ Tags:
 - package-manager
 - source-manager
 ManifestType: defaultLocale
-ManifestVersion: 1.12.0
+ManifestVersion: 1.10.0
 EOF
