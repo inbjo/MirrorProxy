@@ -53,6 +53,14 @@ jobs:
       - name: Run browser end-to-end tests
         working-directory: web
         run: npm run test:e2e
+      - name: Preserve failed browser test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Rust format
         run: cargo fmt --check
       - name: Rust clippy
