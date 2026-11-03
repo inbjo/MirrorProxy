@@ -114,11 +114,12 @@ rp_origin = "${origin}"
     }, challenge.body.options)
     return { challenge_id: challenge.body.challenge_id, credential }
   }
-  for (const mutation of ['signature', 'userHandle', 'origin', 'credential', 'verification']) {
+  for (const mutation of ['signature', 'userHandle', 'missing-userHandle', 'origin', 'credential', 'verification']) {
     const payload = await assertion()
     const response = payload.credential.response
     if (mutation === 'signature') response.signature = Buffer.alloc(64, 1).toString('base64url')
     if (mutation === 'userHandle') response.userHandle = Buffer.alloc(16, 1).toString('base64url')
+    if (mutation === 'missing-userHandle') response.userHandle = null
     if (mutation === 'origin') {
       const client = JSON.parse(Buffer.from(response.clientDataJSON, 'base64url'))
       client.origin = 'https://evil.example'
@@ -152,7 +153,15 @@ rp_origin = "${origin}"
   // Legacy named authentication remains valid against the same server and key.
   assert.equal((await api('/admin/api/auth/logout', {})).status, 204)
   await page.reload()
+  // A legacy non-resident security key provides no user handle. Keep its
+  // private key/id and current counter, but require the named allow-list path.
+  const legacy = (await cdp.send('WebAuthn.getCredentials', { authenticatorId })).credentials[0]
+  await cdp.send('WebAuthn.removeCredential', { authenticatorId, credentialId: legacy.credentialId })
+  delete legacy.userHandle
+  legacy.isResidentCredential = false
+  await cdp.send('WebAuthn.addCredential', { authenticatorId, credential: legacy })
   const named = await assertion('admin')
+  assert.equal(named.credential.response.userHandle, null)
   assert.equal((await api(finish, named)).status, 200)
   console.log('Real Rust/Chromium passkey registration, username-free UI login, legacy named login, replay, signature/origin/UV/credential/user-handle and disabled-account rejection passed')
 } catch (error) {
