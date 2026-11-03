@@ -29,5 +29,5 @@ exec docker run --rm --network host \
   "$DOCKER_SMOKE_IMAGE" "$@"
 WRAPPER
 chmod +x "$work/server"
-TMPDIR="$work" python3 "$root/scripts/smoke-source-details.py" "$work/server"
+MIRRORPROXY_SMOKE_EXPECTED_COMMIT="$expected_commit" TMPDIR="$work" python3 "$root/scripts/smoke-source-details.py" "$work/server"
 printf 'Native Docker entrypoint, version, revision, embedded console and proxy protocol passed: %s\n' "$image"
