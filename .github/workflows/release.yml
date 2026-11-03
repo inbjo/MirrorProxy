@@ -222,6 +222,10 @@ jobs:
           prefix-key: mirrorproxy-rust-v1
           shared-key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-release-server
           env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
+      - uses: actions/setup-python@v6
+        if: runner.os == 'Windows'
+        with:
+          python-version: '3.13'
       - uses: ./.github/actions/download-web
         with:
           name: release-web-console
@@ -266,10 +270,6 @@ jobs:
           chmod +x "$staging/mirrorproxy-server"
           tar -czf "${{ matrix.archive }}" -C "$staging" mirrorproxy-server config.example.toml geoip
           shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
-      - uses: actions/setup-python@v6
-        if: runner.os == 'Windows'
-        with:
-          python-version: '3.13'
       - name: Package and verify Windows server
         if: runner.os == 'Windows'
         shell: pwsh

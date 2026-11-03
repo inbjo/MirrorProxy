@@ -12,4 +12,7 @@ runs:
         name: ${{ inputs.name }}
     - name: Verify frontend artifact identity and complete contents
       shell: bash
-      run: python3 scripts/frontend-build-manifest.py verify --commit "$GITHUB_SHA"
+      run: |
+        python_bin=python3
+        if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+        "$python_bin" scripts/frontend-build-manifest.py verify --commit "$GITHUB_SHA"
