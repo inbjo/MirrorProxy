@@ -1662,6 +1662,7 @@ test('polishes source cards, highlighted commands and single-column installation
   await expect(windows.locator('code')).not.toContainText('Set-ExecutionPolicy')
   await windows.getByRole('button', { name: 'Copy command' }).click()
   await expect(windows.getByRole('button', { name: 'Copied' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("irm 'https://mirror.example/install.ps1'")
   const clipboard = await page.evaluate(() => navigator.clipboard.readText())
   expect(clipboard).toContain("irm 'https://mirror.example/install.ps1'")
   expect(clipboard).not.toContain('Set-ExecutionPolicy')
@@ -1670,9 +1671,13 @@ test('polishes source cards, highlighted commands and single-column installation
   const modal = page.getByRole('dialog')
   const code = modal.locator('.config-option').last().locator('code')
   await expect(code).toHaveText('npm config set registry https://mirror.example/npm/')
+  // The modal's entrance motion can outlive its content becoming visible.
+  // Wait for it to settle before clicking, then observe handler completion.
+  await expect.poll(() => modal.evaluate(element => element.getAnimations({ subtree: true })
+    .filter(animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity).length)).toBe(0)
   await modal.locator('.config-option').last().getByRole('button', { name: 'Copy command' }).click()
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('npm config set registry https://mirror.example/npm/')
   await expect(modal.locator('.config-option').last().getByRole('button', { name: 'Copied' })).toHaveClass(/copied/)
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('npm config set registry https://mirror.example/npm/')
   await expect(modal.locator('.command-token-keyword').first()).toHaveText('mirrorproxy')
   for (const theme of ['light', 'dark']) {
     await setTheme(page, theme)
