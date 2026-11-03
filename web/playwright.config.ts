@@ -6,7 +6,8 @@ export default defineConfig({
   workers: 4,
   use: {
     baseURL: 'http://localhost:4173',
-    trace: 'on-first-retry',
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
   },
   projects: [{
     name: 'chromium',
