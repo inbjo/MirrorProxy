@@ -35,7 +35,7 @@ WinGet submission runs only after it is explicitly enabled.
 
 ## Native Docker builds and caches
 
-Docker builds run `linux/amd64` on `ubuntu-latest` and `linux/arm64` on
+Docker builds run `linux/amd64` on `ubuntu-24.04` and `linux/arm64` on
 `ubuntu-24.04-arm`, without QEMU. Each native image passes the entrypoint version,
 revision and local-upstream protocol smoke before its digest is made available
 to the merge job. The merge job verifies both architecture entries and their

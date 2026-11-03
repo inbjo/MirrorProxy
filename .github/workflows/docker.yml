@@ -55,7 +55,7 @@ permissions:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       image: ${{ steps.config.outputs.image }}
       publish: ${{ steps.config.outputs.publish }}
@@ -105,7 +105,7 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
@@ -189,7 +189,7 @@ jobs:
   publish:
     needs: [prepare, build]
     if: ${{ always() && !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.publish == 'true' && (inputs.digest != '' || needs.build.result == 'success') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write

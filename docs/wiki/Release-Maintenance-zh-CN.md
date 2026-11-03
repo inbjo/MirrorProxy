@@ -30,7 +30,7 @@ Homebrew Tap；WinGet 自动提交只在显式启用后运行。
 
 ## 原生 Docker 构建与缓存
 
-Docker 的 `linux/amd64` 在 `ubuntu-latest`、`linux/arm64` 在
+Docker 的 `linux/amd64` 在 `ubuntu-24.04`、`linux/arm64` 在
 `ubuntu-24.04-arm` 原生并行构建，不使用 QEMU。各架构镜像先通过入口版本、
 提交标识和本地上游协议 smoke，再将摘要交给合并任务。合并后核对双架构和对应的
 证明清单，并使用 GitHub OIDC 签名；发布镜像保留 SBOM 与构建来源证明。

@@ -24,11 +24,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             archive: mirrorproxy-client-x86_64-unknown-linux-musl.tar.gz
             deb_arch: amd64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: aarch64-unknown-linux-gnu
             archive: mirrorproxy-client-aarch64-unknown-linux-gnu.tar.gz
             deb_arch: arm64
@@ -137,11 +137,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             archive: mirrorproxy-server-x86_64-unknown-linux-musl.tar.gz
             package_arch: x86_64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: aarch64-unknown-linux-gnu
             archive: mirrorproxy-server-aarch64-unknown-linux-gnu.tar.gz
             package_arch: aarch64
@@ -262,7 +262,7 @@ jobs:
     permissions:
       contents: write
       pages: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v8

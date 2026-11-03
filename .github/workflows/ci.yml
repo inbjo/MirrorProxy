@@ -20,7 +20,7 @@ jobs:
         shell: pwsh
         run: ./scripts/test-install-windows-powershell.ps1
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -72,7 +72,7 @@ jobs:
 
   supply-chain:
     name: Supply chain and coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -112,7 +112,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-24.04
           - macos-latest
           - windows-latest
           - windows-11-arm
@@ -196,7 +196,7 @@ jobs:
         run: python scripts/smoke-source-details.py target/${{ matrix.target }}/debug/mirrorproxy-server.exe
 
   client-smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

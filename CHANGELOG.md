@@ -5,6 +5,9 @@ follow semantic versioning.
 
 ## [Unreleased]
 
+- Pin Linux workflow runners to Ubuntu 24.04 (including native ARM64) to avoid
+  implicit OS migration through the `ubuntu-latest` label.
+
 - Build Docker amd64/ARM64 images on separate native runners, persist Cargo
   cache mounts per architecture, verify each image's real proxy behavior, and
   merge verified digests with SBOM/provenance and final-index signing intact.
