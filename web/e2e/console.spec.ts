@@ -1343,13 +1343,17 @@ test('renders regional traffic charts in both themes without browser errors', as
   }
 })
 
-test('refines administration actions, health, IP forms and footer layout', async ({ page }) => {
+async function mockAdminLayoutApis(page: Page) {
   await page.route('**/admin/api/auth/session', r => r.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', r => r.fulfill({ json: adminConfig }))
   await page.route('**/admin/api/stats', r => r.fulfill({ json: adminStats }))
   await page.route('**/admin/api/source-health', r => r.fulfill({ json: { running: false, total: 40, healthy: 40, degraded: 0, unhealthy: 0, disabled: 0, unknown: 0, last_checked_at: 1792972800, items: Array.from({ length: 40 }, (_, index) => ({ target_code: `source-${index}`, adapter: 'npm', status: 'healthy', checked_at: 1792972800, latency_ms: 80, error: null, endpoints: [] })) } }))
   await page.route('**/admin/api/geoip/status', r => r.fulfill({ json: { enabled: true, ...Object.fromEntries([4, 6].map(version => [`ipv${version}`, { ip_version: version, available: true, path: 'test.xdb', created_at: null, modified_at: 1792972800, size_bytes: 1024, sha256: null, error: null }])) } }))
   await page.route('**/admin/api/ip-access-rules', r => r.fulfill({ json: [] }))
+}
+
+test('keeps administrator actions and health tables usable across themes and widths', async ({ page }) => {
+  await mockAdminLayoutApis(page)
   await page.setViewportSize({ width: 1920, height: 1100 })
   await page.goto('/admin/health')
   await expect(page.locator('.source-health-counts .ant-pro-statistic-card')).toHaveCount(5)
@@ -1388,8 +1392,13 @@ test('refines administration actions, health, IP forms and footer layout', async
       await page.locator('.source-health-table-wrap').screenshot({ path: test.info().outputPath(`health-table-${theme}-${width}.png`), animations: 'disabled' })
     }
   }
+})
+
+test('aligns administrator IP forms and footers across themes and widths', async ({ page }) => {
+  await mockAdminLayoutApis(page)
   await page.setViewportSize({ width: 1920, height: 1100 })
   await page.goto('/admin/ip-access')
+  await setTheme(page, 'dark')
   await expect(page.locator('.geo-database-card .ant-badge-status-success')).toHaveCount(2)
   const cards = await page.locator('.ip-access-columns > .settings-stack > .settings-card:first-child, .ip-rule-list').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top))
   expect(cards).toHaveLength(2)
@@ -1407,8 +1416,13 @@ test('refines administration actions, health, IP forms and footer layout', async
       await page.screenshot({ path: test.info().outputPath(`ip-access-${theme}-${width}.png`), fullPage: true, animations: 'disabled' })
     }
   }
+})
+
+test('keeps quota controls and short or long page footers accessible through sign-out', async ({ page }) => {
+  await mockAdminLayoutApis(page)
   await page.setViewportSize({ width: 1440, height: 1600 })
   await page.goto('/admin/access')
+  await setTheme(page, 'dark')
   await expect(page.locator('.quota-toggle .ant-checkbox').first()).toHaveCSS('width', '20px')
   await expect(page.locator('.quota-toggle .ant-checkbox').first()).toHaveCSS('height', '20px')
   const quotaToggle = page.locator('.quota-toggle').first()

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
+import { createHash, createPrivateKey, sign } from 'node:crypto'
 import { createServer, request as httpRequest } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
@@ -94,6 +95,7 @@ rp_origin = "${origin}"
   assert.equal((await api('/admin/api/auth/passkeys/register/finish', { challenge_id: registration.body.challenge_id, name: 'Browser resident key', credential: registered })).status, 201)
   const credentials = (await cdp.send('WebAuthn.getCredentials', { authenticatorId })).credentials
   assert.equal(credentials.length, 1); assert.equal(credentials[0].isResidentCredential, true)
+  const signingKey = createPrivateKey({ key: Buffer.from(credentials[0].privateKey, 'base64'), format: 'der', type: 'pkcs8' })
   assert.equal((await api('/admin/api/auth/logout', {})).status, 204)
   await page.reload()
   async function assertion(username = '') {
@@ -129,6 +131,15 @@ rp_origin = "${origin}"
     if (mutation === 'verification') {
       const data = Buffer.from(response.authenticatorData, 'base64url'); data[32] &= ~4
       response.authenticatorData = data.toString('base64url')
+    }
+    if (mutation === 'origin' || mutation === 'verification') {
+      // Keep the signature valid so these cases specifically test origin/UV
+      // policy rather than incidentally failing the signature check.
+      const signedData = Buffer.concat([
+        Buffer.from(response.authenticatorData, 'base64url'),
+        createHash('sha256').update(Buffer.from(response.clientDataJSON, 'base64url')).digest(),
+      ])
+      response.signature = sign('sha256', signedData, signingKey).toString('base64url')
     }
     assert.equal((await api(finish, payload)).status, 401, mutation)
     assert.equal((await api(finish, payload)).status, 400, 'consumed rejected assertion cannot replay')
