@@ -6,6 +6,11 @@ artifacts="${2:?artifact directory required}"
 output="${3:?output directory required}"
 repository="${GITHUB_REPOSITORY:-inbjo/MirrorProxy}"
 base_url="https://github.com/${repository}/releases/download/v${version}"
+release_date="${MIRRORPROXY_RELEASE_DATE:-$(date -u +%F)}"
+if [[ ! "$release_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  echo "MIRRORPROXY_RELEASE_DATE must be YYYY-MM-DD" >&2
+  exit 2
+fi
 mkdir -p "$output"
 
 checksum() {
@@ -89,19 +94,23 @@ PackageIdentifier: Inbjo.MirrorProxy
 PackageVersion: ${version}
 InstallerType: zip
 NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: mirrorproxy.exe
+  PortableCommandAlias: mirrorproxy
 Commands:
 - mirrorproxy
+ReleaseDate: ${release_date}
 Installers:
 - Architecture: x64
-  NestedInstallerFiles:
-  - RelativeFilePath: mirrorproxy.exe
-    PortableCommandAlias: mirrorproxy
+  Dependencies:
+    PackageDependencies:
+    - PackageIdentifier: Microsoft.VCRedist.2015+.x64
   InstallerUrl: ${base_url}/${windows_x64}
   InstallerSha256: $(checksum "$windows_x64" | tr '[:lower:]' '[:upper:]')
 - Architecture: arm64
-  NestedInstallerFiles:
-  - RelativeFilePath: mirrorproxy.exe
-    PortableCommandAlias: mirrorproxy
+  Dependencies:
+    PackageDependencies:
+    - PackageIdentifier: Microsoft.VCRedist.2015+.arm64
   InstallerUrl: ${base_url}/${windows_arm64}
   InstallerSha256: $(checksum "$windows_arm64" | tr '[:lower:]' '[:upper:]')
 ManifestType: installer
@@ -123,6 +132,10 @@ LicenseUrl: https://github.com/${repository}/blob/main/LICENSE
 ShortDescription: Standalone source manager for MirrorProxy
 Description: Configure package managers and development tools to use MirrorProxy or supported public mirrors, with safe preview, write, and rollback operations.
 Moniker: mirrorproxy
+ReleaseNotesUrl: https://github.com/${repository}/releases/tag/v${version}
+Documentations:
+- DocumentLabel: Wiki
+  DocumentUrl: https://github.com/${repository}/wiki
 Tags:
 - cli
 - mirror

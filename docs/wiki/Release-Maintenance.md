@@ -48,5 +48,13 @@ combined body from the downloaded release assets, then use that output with
 removes the download tables. Updating this generator does not modify existing
 published releases.
 
+WinGet manifests keep the common portable executable entry at the installer
+root and retain release date, release-notes and Wiki metadata. Each architecture
+declares its matching VC++ Runtime dependency. When repairing published
+metadata, set `MIRRORPROXY_RELEASE_DATE` to the original Release's UTC date.
+Run `gh workflow run winget-validation.yml -f version=X.Y.Z` to validate the
+published package on Windows x64 and ARM64: install, command alias discovery,
+version/catalog commands and uninstall. This workflow uses ephemeral runners.
+
 
 [简体中文](Release-Maintenance-zh-CN)

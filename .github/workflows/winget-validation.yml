@@ -1,0 +1,67 @@
+name: WinGet validation
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/winget-validation.yml
+      - scripts/generate-package-manifests.sh
+      - scripts/smoke-winget.ps1
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published stable version without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  manifests:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.generate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Generate manifests from published checksums and date
+        id: generate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -z "$PACKAGE_VERSION" ]]; then
+            PACKAGE_VERSION="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName')"
+            PACKAGE_VERSION="${PACKAGE_VERSION#v}"
+          fi
+          [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          gh release download "v$PACKAGE_VERSION" --repo "$GITHUB_REPOSITORY" --pattern '*.sha256' --dir checksums
+          MIRRORPROXY_RELEASE_DATE="$(gh release view "v$PACKAGE_VERSION" --repo "$GITHUB_REPOSITORY" --json publishedAt --jq '.publishedAt[:10]')" \
+            bash scripts/generate-package-manifests.sh "$PACKAGE_VERSION" checksums package-manifests
+      - uses: actions/upload-artifact@v6
+        with:
+          name: winget-manifests
+          path: package-manifests/winget/manifests
+  install:
+    needs: manifests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            architecture: x64
+          - os: windows-11-arm
+            architecture: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: winget-manifests
+          path: manifests
+      - name: Install, discover, run and uninstall the published package
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.manifests.outputs.version }}
+          PACKAGE_ARCHITECTURE: ${{ matrix.architecture }}
+        run: ./scripts/smoke-winget.ps1 -ManifestDirectory "manifests/i/Inbjo/MirrorProxy/$env:PACKAGE_VERSION" -Architecture $env:PACKAGE_ARCHITECTURE -Version $env:PACKAGE_VERSION

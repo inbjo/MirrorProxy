@@ -96,6 +96,10 @@ sudo apt install mirrorproxy
 
 客户端从 v1.7.2 起提供 Windows ARM64、独立 EXE 和 Linux RPM。Windows EXE 是便携式命令行程序，不含图形安装向导；ZIP 保留给安装脚本、Scoop 和 WinGet。macOS 使用 TAR.GZ 或 Homebrew，不提供 DMG。
 
+Windows 二进制需要对应架构的 Microsoft Visual C++ 2015+ Redistributable
+（x64 或 ARM64）。WinGet 清单会声明并安装此依赖；直接下载 EXE/ZIP 时，
+请先确保已经安装对应运行库。
+
 Linux RPM 可用 `sudo dnf install ./mirrorproxy-<version>-1.x86_64.rpm` 安装，用 `sudo dnf remove mirrorproxy` 卸载；ARM64 选择对应架构文件。卸载软件包不会自动回滚已修改的软件源，请先使用客户端的回滚功能。
 
 ## 服务端资产

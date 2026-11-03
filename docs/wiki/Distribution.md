@@ -104,6 +104,10 @@ aggregate `SHA256SUMS`. Verify the checksum before installation.
 
 Windows ARM64, standalone EXEs and Linux client RPMs are available from v1.7.2. Windows EXEs are portable command-line programs, without a graphical installer. ZIP archives remain available for the installer script, Scoop and WinGet. macOS uses TAR.GZ or Homebrew; no DMG is published.
 
+Windows binaries require the matching Microsoft Visual C++ 2015+ Redistributable
+(x64 or ARM64). WinGet declares and installs this dependency. For direct EXE/ZIP
+downloads, ensure that runtime is installed before running the client.
+
 Install a Linux RPM with `sudo dnf install ./mirrorproxy-<version>-1.x86_64.rpm` and remove it with `sudo dnf remove mirrorproxy`; choose the matching file for ARM64. Removing the package does not undo source configuration changes; use the client's rollback first.
 
 ## Server assets
