@@ -8,27 +8,72 @@ on:
       - "v*"
   schedule:
     - cron: "17 2 * * *"
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/actions/build-web/**
+      - .github/actions/download-web/**
+      - scripts/frontend-build-manifest.py
+      - scripts/setup-windows-build.ps1
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  frontend:
+    name: Shared frontend and verified GeoIP
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        id: node
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install locked frontend dependencies
+        working-directory: web
+        run: npm ci
+      - uses: ./.github/actions/build-web
+        with:
+          node-version: ${{ steps.node.outputs.node-version }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-web-console
+          path: |
+            web/dist
+            target/frontend-artifact.json
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/cache@v5
+        with:
+          path: geoip/*.xdb
+          key: geoip-v1-${{ hashFiles('scripts/fetch-geoip.sh') }}
+      - name: Fetch and verify GeoIP inputs
+        run: bash scripts/fetch-geoip.sh
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-geoip
+          path: geoip/*.xdb
+          retention-days: 1
+          if-no-files-found: error
+
   client:
     name: Client (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             archive: mirrorproxy-client-x86_64-unknown-linux-musl.tar.gz
             deb_arch: amd64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: aarch64-unknown-linux-gnu
             archive: mirrorproxy-client-aarch64-unknown-linux-gnu.tar.gz
             deb_arch: arm64
@@ -50,6 +95,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, Node 24
+        with:
+          prefix-key: mirrorproxy-rust-v1
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-release-client
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
       - name: Install musl linker
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
@@ -132,16 +182,17 @@ jobs:
           if-no-files-found: ignore
 
   server:
+    needs: frontend
     name: Server (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             archive: mirrorproxy-server-x86_64-unknown-linux-musl.tar.gz
             package_arch: x86_64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: aarch64-unknown-linux-gnu
             archive: mirrorproxy-server-aarch64-unknown-linux-gnu.tar.gz
             package_arch: aarch64
@@ -154,6 +205,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        if: runner.os == 'Windows'
+        with:
+          path: ${{ runner.temp }}/strawberry-perl-5.42.3.1-portable.zip
+          key: windows-perl-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-windows-build.ps1') }}
       - name: Prepare Windows OpenSSL build tools
         if: runner.os == 'Windows'
         shell: pwsh
@@ -161,16 +217,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - uses: actions/setup-node@v6
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, Node 24
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Build web console
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
+          prefix-key: mirrorproxy-rust-v1
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-release-server
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
+      - uses: actions/setup-python@v6
+        if: runner.os == 'Windows'
+        with:
+          python-version: '3.13'
+      - uses: ./.github/actions/download-web
+        with:
+          name: release-web-console
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-geoip
+          path: geoip
       - name: Install musl linker
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
@@ -181,9 +243,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes gcc-aarch64-linux-gnu
-      - name: Fetch verified GeoIP databases
-        shell: bash
-        run: bash scripts/fetch-geoip.sh
       - name: Build server
         if: runner.os != 'Windows'
         shell: bash
@@ -211,10 +270,6 @@ jobs:
           chmod +x "$staging/mirrorproxy-server"
           tar -czf "${{ matrix.archive }}" -C "$staging" mirrorproxy-server config.example.toml geoip
           shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
-      - uses: actions/setup-python@v6
-        if: runner.os == 'Windows'
-        with:
-          python-version: '3.13'
       - name: Package and verify Windows server
         if: runner.os == 'Windows'
         shell: pwsh
@@ -259,14 +314,20 @@ jobs:
 
   publish:
     needs: [client, server]
+    if: github.event_name != 'pull_request'
     permissions:
       contents: write
       pages: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v8
         with:
+          pattern: client-*
+          path: release-artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: server-*
           path: release-artifacts
       - name: Validate stable distribution credentials
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}

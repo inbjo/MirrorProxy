@@ -5,6 +5,20 @@ follow semantic versioning.
 
 ## [Unreleased]
 
+- Cache native Rust dependencies across CI/Release/analysis jobs, share a
+  content- and commit-verified frontend build across server targets, and cache
+  verified GeoIP/Perl and browser downloads while retaining complete validation.
+
+- Pin Linux workflow runners to Ubuntu 24.04 (including native ARM64) to avoid
+  implicit OS migration through the `ubuntu-latest` label.
+
+- Build Docker amd64/ARM64 images on separate native runners, persist Cargo
+  cache mounts per architecture, verify each image's real proxy behavior, and
+  merge verified digests with SBOM/provenance and final-index signing intact.
+- Allow administrator Passkey sign-in without a username using discoverable
+  credentials; retain named authentication for existing security keys and
+  request discoverable credentials preferentially on new registrations.
+
 ## [1.7.2] - 2026-11-02
 
 ### Release packages

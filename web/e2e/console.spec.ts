@@ -1,5 +1,21 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
+async function waitForDialogReady(dialog: Locator) {
+  await expect(dialog).toBeVisible()
+  await expect.poll(() => dialog.evaluate(element => new Promise<number>(resolve => {
+    // rc-motion applies its active class on a subsequent animation frame.
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve(element.getAnimations({ subtree: true })
+      .filter(animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity).length)))
+  }))).toBe(0)
+}
+
+async function confirmDialog(page: Page, label: string) {
+  const dialog = page.getByRole('dialog')
+  await waitForDialogReady(dialog)
+  await dialog.getByRole('button', { name: label, exact: true }).click()
+  await expect(dialog).toBeHidden()
+}
+
 async function selectChoice(page: Page, control: Locator, label: string) {
   await control.click()
   const list = await control.getAttribute('aria-controls')
@@ -524,7 +540,7 @@ test('operates the v1.3 cache, alerts, and adaptive upstream controls', async ({
   await expect(page.getByLabel('Strategy').locator('xpath=ancestor::span[contains(@class, "choice-field")]')).toBeVisible()
   await expect(page.getByText('2 entries · 2.0 KB / 256.0 MB')).toBeVisible()
   await page.getByRole('button', { name: 'Purge cache' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Purge cache' }).click()
+  await confirmDialog(page, 'Purge cache')
   await expect.poll(() => cachePurged).toBe(true)
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Purge cache' })).not.toHaveCSS('border-style', 'none')
@@ -582,7 +598,7 @@ test('changes the administrator password and revokes the active session', async 
   await passwordForm.getByLabel('Current password').fill('correct-password')
   await passwordForm.getByLabel('New password (12 characters minimum)').fill('replacement-password')
   await passwordForm.getByRole('button', { name: 'Change password', exact: true }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Change password' }).click()
+  await confirmDialog(page, 'Change password')
   await expect.poll(() => passwordRequest).toEqual({ current_password: 'correct-password', new_password: 'replacement-password' })
   await expect.poll(() => loggedOut).toBe(true)
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
@@ -628,7 +644,7 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
       challenge: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       timeout: 60000,
-      authenticatorSelection: { userVerification: 'required' },
+      authenticatorSelection: { userVerification: 'required', residentKey: 'preferred' },
       attestation: 'none',
     } },
     } })
@@ -639,16 +655,19 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
     await route.fulfill({ status: 201 })
   })
   await page.route('**/admin/api/auth/logout', route => route.fulfill({ status: 204 }))
-  await page.route('**/admin/api/auth/passkey/login/start', route => route.fulfill({ json: {
+  await page.route('**/admin/api/auth/passkey/login/start', route => {
+    expect(route.request().postDataJSON()).toEqual({ username: '' })
+    return route.fulfill({ json: {
     challenge_id: 'server-authentication-state-id',
     options: { publicKey: {
       challenge: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE',
       timeout: 60000,
       rpId: 'localhost',
-      allowCredentials: [{ type: 'public-key', id: registeredCredential?.rawId }],
+      allowCredentials: [],
       userVerification: 'required',
     } },
-  } }))
+  } })
+  })
   await page.route('**/admin/api/auth/passkey/login/finish', async route => {
     const payload = route.request().postDataJSON() as { credential: Record<string, unknown> }
     authenticatedCredential = payload.credential
@@ -669,11 +688,20 @@ test('registers and signs in with a passkey through the browser WebAuthn API', a
   await page.reload()
   const passkeySignIn = page.getByRole('button', { name: 'Sign in with a passkey' })
   await expect(page.locator('.admin-username-field input')).toHaveValue('')
-  await expect(passkeySignIn).toBeDisabled()
-  await page.getByLabel('Administrator username').fill('admin')
   await expect(passkeySignIn).toBeEnabled()
+  await expect(page.getByText('Use a passkey to choose your account, or enter a username for an older security key.')).toBeVisible()
+  await page.getByTitle('Language').click()
+  await expect(page.getByText('可直接使用 Passkey 选择账号；旧安全密钥可填写用户名后登录。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '使用 Passkey 登录' })).toBeEnabled()
+  await page.getByTitle('语言').click()
+  await page.setViewportSize({ width: 375, height: 900 })
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(375)
+  await page.screenshot({ path: test.info().outputPath('passkey-login-mobile.png') })
+  await passkeySignIn.focus()
+  await expect(passkeySignIn).toBeFocused()
   await passkeySignIn.click()
   await expect.poll(() => authenticatedCredential?.type).toBe('public-key')
+  expect((authenticatedCredential?.response as Record<string, unknown>).userHandle).toBe('AAAAAAAAAAAAAAAAAAAAAA')
   await expect(page.getByRole('button', { name: 'Account menu' })).toBeVisible()
 })
 
@@ -683,6 +711,7 @@ test('signs in by email and rotates the dedicated routing address', async ({ pag
   let linked = true
   let verified: Record<string, unknown> | undefined
   let routingId = 'first-routing-id'
+  let rotationRequests = 0
   await page.route('**/api/account/profile', route => route.fulfill(signedIn ? {
     json: {
       user: { id: 7, username: 'person', email: 'person+tag@example.com', display_name: 'Person', routing_id: routingId, routing_rotated_at: 1784592000 },
@@ -706,6 +735,8 @@ test('signs in by email and rotates the dedicated routing address', async ({ pag
     await route.fulfill({ json: { user_id: 7 } })
   })
   await page.route('**/api/account/routing-id/rotate', async route => {
+    expect(route.request().method()).toBe('POST')
+    rotationRequests++
     routingId = 'rotated-routing-id'
     await route.fulfill({ json: { routing_id: routingId } })
   })
@@ -782,10 +813,12 @@ test('signs in by email and rotates the dedicated routing address', async ({ pag
   const disconnect = page.getByRole('button', { name: 'Disconnect' })
   await expect(disconnect).toHaveClass(/revoke-button/)
   await disconnect.click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Disconnect' }).click()
+  await confirmDialog(page, 'Disconnect')
   await expect(page.getByText('GitHub was disconnected.')).toBeVisible()
+  await expect(page.locator('.connected-identities .identity-row')).toHaveCount(0)
   await page.getByRole('button', { name: 'Generate new address' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Rotate address' }).click()
+  await confirmDialog(page, 'Rotate address')
+  await expect.poll(() => rotationRequests).toBe(1)
   await expect(page.locator('input[readonly]')).toHaveValue('https://rotated-routing-id.mirror.example')
 })
 
@@ -1009,7 +1042,7 @@ test('revokes administrator sessions and searches and soft-deletes users', async
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await page.getByRole('link', { name: 'Administrators & security' }).click()
   await page.locator('.admin-session-table .ant-table-row', { hasText: 'Passkey' }).getByRole('button', { name: 'Revoke' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Revoke session' }).click()
+  await confirmDialog(page, 'Revoke session')
   await expect.poll(() => revokedSession).toBe('0123456789abcdef01234567')
   await page.getByRole('link', { name: 'Users & groups' }).click()
   await page.getByLabel('Search users').fill('search-me')
@@ -1047,7 +1080,7 @@ test('revokes administrator sessions and searches and soft-deletes users', async
     await expect(deleteButton).toHaveCSS('outline-style', 'solid')
   }
   await deleteButton.click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Delete user' }).click()
+  await confirmDialog(page, 'Delete user')
   await expect.poll(() => deletedUser).toBe(true)
 })
 
@@ -1274,7 +1307,7 @@ test('manages custom download domains in both languages on narrow screens', asyn
   }
   await page.getByLabel('Domain', { exact: true }).fill('cdn.example.org')
   await page.getByRole('button', { name: 'Block', exact: true }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Confirm', exact: true }).click()
+  await confirmDialog(page, 'Confirm')
   await expect.poll(() => blocked).toEqual({ domain: 'cdn.example.org', subdomains: true, reason: '', blocked: true })
   await page.getByTitle('Language').click()
   await expect(page.getByRole('heading', { name: '自定义下载策略' })).toBeVisible()
@@ -1331,13 +1364,17 @@ test('renders regional traffic charts in both themes without browser errors', as
   }
 })
 
-test('refines administration actions, health, IP forms and footer layout', async ({ page }) => {
+async function mockAdminLayoutApis(page: Page) {
   await page.route('**/admin/api/auth/session', r => r.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
   await page.route('**/admin/api/config', r => r.fulfill({ json: adminConfig }))
   await page.route('**/admin/api/stats', r => r.fulfill({ json: adminStats }))
   await page.route('**/admin/api/source-health', r => r.fulfill({ json: { running: false, total: 40, healthy: 40, degraded: 0, unhealthy: 0, disabled: 0, unknown: 0, last_checked_at: 1792972800, items: Array.from({ length: 40 }, (_, index) => ({ target_code: `source-${index}`, adapter: 'npm', status: 'healthy', checked_at: 1792972800, latency_ms: 80, error: null, endpoints: [] })) } }))
   await page.route('**/admin/api/geoip/status', r => r.fulfill({ json: { enabled: true, ...Object.fromEntries([4, 6].map(version => [`ipv${version}`, { ip_version: version, available: true, path: 'test.xdb', created_at: null, modified_at: 1792972800, size_bytes: 1024, sha256: null, error: null }])) } }))
   await page.route('**/admin/api/ip-access-rules', r => r.fulfill({ json: [] }))
+}
+
+test('keeps administrator actions and health tables usable across themes and widths', async ({ page }) => {
+  await mockAdminLayoutApis(page)
   await page.setViewportSize({ width: 1920, height: 1100 })
   await page.goto('/admin/health')
   await expect(page.locator('.source-health-counts .ant-pro-statistic-card')).toHaveCount(5)
@@ -1376,8 +1413,13 @@ test('refines administration actions, health, IP forms and footer layout', async
       await page.locator('.source-health-table-wrap').screenshot({ path: test.info().outputPath(`health-table-${theme}-${width}.png`), animations: 'disabled' })
     }
   }
+})
+
+test('aligns administrator IP forms and footers across themes and widths', async ({ page }) => {
+  await mockAdminLayoutApis(page)
   await page.setViewportSize({ width: 1920, height: 1100 })
   await page.goto('/admin/ip-access')
+  await setTheme(page, 'dark')
   await expect(page.locator('.geo-database-card .ant-badge-status-success')).toHaveCount(2)
   const cards = await page.locator('.ip-access-columns > .settings-stack > .settings-card:first-child, .ip-rule-list').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top))
   expect(cards).toHaveLength(2)
@@ -1395,8 +1437,13 @@ test('refines administration actions, health, IP forms and footer layout', async
       await page.screenshot({ path: test.info().outputPath(`ip-access-${theme}-${width}.png`), fullPage: true, animations: 'disabled' })
     }
   }
+})
+
+test('keeps quota controls and short or long page footers accessible through sign-out', async ({ page }) => {
+  await mockAdminLayoutApis(page)
   await page.setViewportSize({ width: 1440, height: 1600 })
   await page.goto('/admin/access')
+  await setTheme(page, 'dark')
   await expect(page.locator('.quota-toggle .ant-checkbox').first()).toHaveCSS('width', '20px')
   await expect(page.locator('.quota-toggle .ant-checkbox').first()).toHaveCSS('height', '20px')
   const quotaToggle = page.locator('.quota-toggle').first()
@@ -1416,7 +1463,7 @@ test('refines administration actions, health, IP forms and footer layout', async
   await page.route('**/admin/api/auth/logout', r => r.fulfill({ status: 204 }))
   await page.getByRole('button', { name: 'Account menu' }).click()
   await page.getByRole('menuitem', { name: 'Sign out' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Sign out', exact: true }).click()
+  await confirmDialog(page, 'Sign out')
   await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible()
   await expect.poll(() => page.locator('.site-footer').evaluate(element => element.getBoundingClientRect().bottom)).toBe(1600)
   await page.goto('/')
@@ -1661,8 +1708,7 @@ test('polishes source cards, highlighted commands and single-column installation
   await expect(code).toHaveText('npm config set registry https://mirror.example/npm/')
   // The modal's entrance motion can outlive its content becoming visible.
   // Wait for it to settle before clicking, then observe handler completion.
-  await expect.poll(() => modal.evaluate(element => element.getAnimations({ subtree: true })
-    .filter(animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity).length)).toBe(0)
+  await waitForDialogReady(modal)
   await modal.locator('.config-option').last().getByRole('button', { name: 'Copy command' }).click()
   await expect(modal.locator('.config-option').last().getByRole('button', { name: 'Copied' })).toHaveClass(/copied/)
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('npm config set registry https://mirror.example/npm/')
@@ -2129,14 +2175,14 @@ test('locks only the active invitation and reports HTTP and network failures', a
   await expect(page.getByRole('alert')).toContainText('Unable to resend invitation.')
   await expect(row.getByRole('button', { name: 'Resend', exact: true })).toBeEnabled()
   await row.getByRole('button', { name: 'Revoke', exact: true }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Revoke invitation' }).click()
+  await confirmDialog(page, 'Revoke invitation')
   await expect(page.getByRole('alert')).toContainText('Could not reach the local MirrorProxy service.')
   await expect(row.getByRole('button', { name: 'Revoke', exact: true })).toBeEnabled()
   expect(sends).toBe(1)
   expect(deletes).toBe(1)
   expect(reads).toBe(1)
   await row.getByRole('button', { name: 'Revoke', exact: true }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Revoke invitation' }).click()
+  await confirmDialog(page, 'Revoke invitation')
   await expect(row.getByText('Revoked', { exact: true })).toBeVisible()
   await expect(row.getByRole('button')).toHaveCount(0)
   expect(deletes).toBe(2)

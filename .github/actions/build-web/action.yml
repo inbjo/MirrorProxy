@@ -1,0 +1,36 @@
+name: Cached frontend build
+description: Build or verify a content-keyed frontend cache and bind it to this commit
+inputs:
+  node-version:
+    description: Exact version reported by setup-node
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Resolve frontend cache key
+      id: inputs
+      shell: bash
+      env:
+        NODE_VERSION: ${{ inputs.node-version }}
+        SOURCE_HASH: ${{ hashFiles('web/src/**', 'web/public/**', 'web/build/**', 'web/config/**', 'web/plugins/**', 'web/package*.json', 'web/tsconfig*.json', 'web/.umirc*', 'web/.npmrc', 'web/scripts/**', 'scripts/frontend-build-manifest.py', '.github/actions/build-web/action.yml', '!web/src/.umi/**', '!web/src/.umi-production/**', '!web/build/**/node_modules/**') }}
+      run: |
+        environment_hash="$(python3 -c 'import hashlib,json,os; print(hashlib.sha256(json.dumps(sorted((k,v) for k,v in os.environ.items() if k.startswith(("NODE_", "BABEL_", "UMI_", "MAX_", "BROWSERSLIST", "MIRRORPROXY_DEV_API")))).encode()).hexdigest())')"
+        echo "key=frontend-v1-$RUNNER_OS-$RUNNER_ARCH-$NODE_VERSION-$SOURCE_HASH-$environment_hash" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v5
+      id: cache
+      with:
+        path: |
+          web/dist
+          target/frontend-artifact.json
+        key: ${{ steps.inputs.outputs.key }}
+    - name: Verify cached output or build frontend
+      shell: bash
+      env:
+        INPUT_KEY: ${{ steps.inputs.outputs.key }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+      run: |
+        if [[ "$CACHE_HIT" != true ]] || ! python3 scripts/frontend-build-manifest.py verify --input-key "$INPUT_KEY"; then
+          (cd web && npm run build)
+        fi
+        (cd web && node scripts/check-browser-build.mjs)
+        python3 scripts/frontend-build-manifest.py record --input-key "$INPUT_KEY" --commit "$GITHUB_SHA"

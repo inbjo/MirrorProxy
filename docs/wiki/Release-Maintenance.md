@@ -33,6 +33,55 @@ On a stable `v*` tag, the release workflow builds the client packages and
 manifests, signs and deploys the APT repository, and updates the Homebrew tap.
 WinGet submission runs only after it is explicitly enabled.
 
+## Native Docker builds and caches
+
+Docker builds run `linux/amd64` on `ubuntu-24.04` and `linux/arm64` on
+`ubuntu-24.04-arm`, without QEMU. Each native image passes the entrypoint version,
+revision and local-upstream protocol smoke before its digest is made available
+to the merge job. The merge job verifies both architecture entries and their
+linked attestations, then signs the final index with GitHub OIDC. SBOM and
+provenance remain enabled for published images.
+
+Cargo registry, Git and target cache mounts are restored and extracted through
+the pinned cache-dance action and `actions/cache`. Keys separate architectures
+and include Dockerfile, Cargo lock/manifests and the npm lockfile; fallback keys
+reuse compatible prior builds. The dependency cache does not create a duplicate
+for every source commit; Cargo still checks source/compiler fingerprints, and
+image revision/build metadata still belongs to the current commit. BuildKit
+layer caches also have per-architecture scopes.
+PR and relevant `main` pushes build and test locally without publishing; stable
+tags and explicit dispatches publish by digest and merge tags only after both
+platforms pass. Digest-only dispatch still signs without rebuilding.
+
+To validate a cache change, run two native builds, inspect restored/extracted
+cache steps and Cargo rebuild timings, then run the image smoke on both runners.
+Do not infer speedups from a successful YAML check or an unchanged cached layer.
+
+### Other workflow caches
+
+Release clients/servers and all Rust CI jobs cache dependency downloads,
+compiled dependencies and installed Cargo tools with a pinned Node-24-compatible
+Rust-cache action. Keys include compiler/toolchain, manifests/lockfile,
+compiler environment, OS, runner architecture, target and build purpose.
+Coverage and CodeQL analysis are isolated from normal compilation; CodeQL
+caches dependencies only. Cargo commands and all tests/audits still execute.
+
+CI and Release each build the frontend once. A content-keyed cache binds the
+output to frontend sources/configuration, lockfile, exact Node version,
+platform and build environment. File hashes and the complete output inventory
+are checked before reuse. The current run's frontend artifact additionally
+records its Git commit; every Rust consumer verifies the commit and hashes
+before embedding it. Unit, toolchain and browser tests still run on cache hits.
+Release shares one checksum-verified GeoIP input across server targets. Only
+client/server distribution artifacts are selected for publication; internal
+frontend/GeoIP artifacts are excluded from public release assets.
+
+Playwright browser downloads, npm package downloads and the fixed-checksum
+Windows Perl archive are cached. Browser system dependencies and Perl archive
+hashes are checked every run. Real-client smoke homes/caches remain isolated so
+cached package payloads cannot conceal proxy regressions. A cold run still
+needs to populate these caches; no build-time guarantee is implied.
+
 ## Release download tables
 
 The Release workflow runs `scripts/generate-release-body.py` against the built

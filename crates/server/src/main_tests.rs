@@ -696,6 +696,7 @@ async fn admin_test_state() -> (AppState, database::InitialAdminCredentials) {
         client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+        discoverable_challenges: Default::default(),
         webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
@@ -962,6 +963,7 @@ async fn routing_test_state(mode: &str) -> (AppState, database::UserAccount) {
         client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+        discoverable_challenges: Default::default(),
         webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
@@ -1994,6 +1996,7 @@ async fn admin_config_update_persists_and_applies_runtime_values() {
         client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+        discoverable_challenges: Default::default(),
         webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
@@ -2094,6 +2097,7 @@ async fn super_admin_updates_acme_settings_without_exposing_or_erasing_secrets()
         client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+        discoverable_challenges: Default::default(),
         webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
@@ -2186,6 +2190,7 @@ async fn admin_stats_returns_monthly_usage_and_targets() {
         client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+        discoverable_challenges: Default::default(),
         webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
@@ -2233,6 +2238,7 @@ async fn admin_audit_log_requires_authentication_and_returns_entries() {
         client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+        discoverable_challenges: Default::default(),
         webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
@@ -2297,6 +2303,7 @@ async fn admin_password_change_revokes_current_session() {
         client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+        discoverable_challenges: Default::default(),
         webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
@@ -3034,6 +3041,10 @@ async fn passkey_registration_challenge_is_server_stored_session_bound_and_one_t
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value["options"]["publicKey"]["rp"]["id"], "mirror.example");
+    assert_eq!(
+        value["options"]["publicKey"]["authenticatorSelection"]["residentKey"],
+        "preferred"
+    );
     let challenge_id = value["challenge_id"].as_str().unwrap();
     let stored = state
         .database
@@ -3048,6 +3059,58 @@ async fn passkey_registration_challenge_is_server_stored_session_bound_and_one_t
         .take_webauthn_challenge(challenge_id, "registration", Some(&session.token))
         .await
         .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn discoverable_passkey_start_is_anonymous_one_time_expiring_and_bounded() {
+    let (mut state, _) = admin_test_state().await;
+    let mut config = Config::default();
+    config.webauthn.enabled = true;
+    config.webauthn.rp_id = "mirror.example".into();
+    config.webauthn.rp_origin = "https://mirror.example".into();
+    state.webauthn = Arc::new(RwLock::new(build_webauthn(&config).unwrap()));
+    let request = serde_json::from_str::<StartAdminPasskeyLoginRequest>("{}").unwrap();
+    let response = start_admin_passkey_login(State(state.clone()), Json(request)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let options = &value["options"]["publicKey"];
+    assert_eq!(options["userVerification"], "required");
+    assert!(
+        options["allowCredentials"].is_null()
+            || options["allowCredentials"].as_array().unwrap().is_empty()
+    );
+    assert!(value["options"]["mediation"].is_null());
+    assert!(!String::from_utf8(body.to_vec())
+        .unwrap()
+        .contains("username"));
+    let id = value["challenge_id"].as_str().unwrap();
+    let authentication = state.discoverable_challenges.take(id).unwrap();
+    assert!(
+        state.discoverable_challenges.take(id).is_none(),
+        "replay must fail"
+    );
+    {
+        let mut pending = state.discoverable_challenges.pending.lock().unwrap();
+        pending.insert(
+            "expired".into(),
+            (
+                Instant::now() - Duration::from_secs(1),
+                authentication.clone(),
+            ),
+        );
+    }
+    assert!(state.discoverable_challenges.take("expired").is_none());
+    for _ in 0..1024 {
+        assert!(state
+            .discoverable_challenges
+            .insert(authentication.clone())
+            .is_some());
+    }
+    assert!(state
+        .discoverable_challenges
+        .insert(authentication)
         .is_none());
 }
 

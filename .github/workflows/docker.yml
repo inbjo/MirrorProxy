@@ -2,8 +2,51 @@ name: Docker
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - .github/workflows/docker.yml
+      - Dockerfile
+      - .dockerignore
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**
+      - web/src/**
+      - web/package*.json
+      - web/.umirc.ts
+      - web/config/**
+      - web/tsconfig.json
+      - web/build/**
+      - scripts/docker-entrypoint.sh
+      - scripts/install.sh
+      - scripts/install.ps1
+      - config.example.toml
+      - scripts/fetch-geoip.sh
+      - scripts/smoke-docker.sh
+      - scripts/smoke-source-details.py
+      - scripts/verify-docker-manifest.py
+  pull_request:
+    paths:
+      - .github/workflows/docker.yml
+      - Dockerfile
+      - .dockerignore
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**
+      - web/src/**
+      - web/package*.json
+      - web/.umirc.ts
+      - web/config/**
+      - web/tsconfig.json
+      - web/build/**
+      - scripts/docker-entrypoint.sh
+      - scripts/install.sh
+      - scripts/install.ps1
+      - config.example.toml
+      - scripts/fetch-geoip.sh
+      - scripts/smoke-docker.sh
+      - scripts/smoke-source-details.py
+      - scripts/verify-docker-manifest.py
   workflow_dispatch:
     inputs:
       version:
@@ -17,66 +60,195 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.config.outputs.image }}
+      publish: ${{ steps.config.outputs.publish }}
+      build_time: ${{ steps.config.outputs.build_time }}
+      version: ${{ steps.config.outputs.version }}
+      metadata: ${{ steps.meta.outputs.json }}
+      labels: ${{ steps.meta.outputs.labels }}
     steps:
       - uses: actions/checkout@v5
-      - uses: docker/setup-qemu-action@v4
-        if: ${{ inputs.digest == '' }}
-      - uses: docker/setup-buildx-action@v4
-        if: ${{ inputs.digest == '' }}
-      - uses: sigstore/cosign-installer@v4.1.2
-      - uses: docker/login-action@v4
+      - name: Resolve shared image metadata
+        id: config
+        env:
+          IMAGE_OWNER: ${{ vars.DOCKERHUB_USERNAME || github.repository_owner }}
+          IMAGE_VERSION: ${{ inputs.version || github.ref_name }}
+          SIGN_DIGEST: ${{ inputs.digest }}
+        run: |
+          if [[ -n "$SIGN_DIGEST" && ! "$SIGN_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo 'Invalid image digest' >&2
+            exit 1
+          fi
+          {
+            echo "image=$IMAGE_OWNER/mirrorproxy"
+            echo "version=$IMAGE_VERSION"
+            echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch || "$GITHUB_REF" == refs/tags/v* ]]; then
+              echo 'publish=true'
+            else
+              echo 'publish=false'
+            fi
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/metadata-action@v6
+        id: meta
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - id: meta
-        if: ${{ inputs.digest == '' }}
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ vars.DOCKERHUB_USERNAME }}/mirrorproxy
+          images: ${{ steps.config.outputs.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
             type=raw,value=latest
-      - id: build-time
-        if: ${{ inputs.digest == '' }}
-        shell: bash
-        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-      - id: build-and-push
-        if: ${{ inputs.digest == '' }}
-        uses: docker/build-push-action@v7
+
+  build:
+    needs: prepare
+    if: ${{ inputs.digest == '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify native runner architecture
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          case "$BUILD_ARCH:$(uname -m)" in
+            amd64:x86_64|arm64:aarch64) ;;
+            *) echo 'Runner does not match the image architecture' >&2; exit 1 ;;
+          esac
+      - uses: docker/setup-buildx-action@v4
+        id: buildx
+      - uses: actions/cache@v5
+        id: cargo-cache
+        with:
+          path: |
+            ${{ runner.temp }}/mirrorproxy-cargo-registry
+            ${{ runner.temp }}/mirrorproxy-cargo-git
+            ${{ runner.temp }}/mirrorproxy-cargo-target
+            ${{ runner.temp }}/mirrorproxy-npm-cache
+          key: docker-cargo-v3-${{ matrix.arch }}-${{ hashFiles('Dockerfile', 'Cargo.toml', 'Cargo.lock', 'crates/**/Cargo.toml', 'web/package-lock.json') }}
+          restore-keys: |
+            docker-cargo-v3-${{ matrix.arch }}-
+            docker-cargo-v2-${{ matrix.arch }}-${{ hashFiles('Dockerfile', 'Cargo.lock', 'crates/**/Cargo.toml', 'web/package-lock.json') }}-
+            docker-cargo-v2-${{ matrix.arch }}-
+            docker-cargo-v1-${{ matrix.arch }}-
+      - name: Restore and persist Cargo cache mounts
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0, Node 24
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          scratch-dir: ${{ runner.temp }}/mirrorproxy-cache-dance
+          skip-extraction: ${{ steps.cargo-cache.outputs.cache-hit }}
+          cache-map: |
+            {
+              "${{ runner.temp }}/mirrorproxy-cargo-registry": {"target": "/usr/local/cargo/registry", "id": "mirrorproxy-cargo-registry-${{ matrix.platform }}"},
+              "${{ runner.temp }}/mirrorproxy-cargo-git": {"target": "/usr/local/cargo/git", "id": "mirrorproxy-cargo-git-${{ matrix.platform }}"},
+              "${{ runner.temp }}/mirrorproxy-cargo-target": {"target": "/app/target", "id": "mirrorproxy-target-${{ matrix.platform }}"},
+              "${{ runner.temp }}/mirrorproxy-npm-cache": "/root/.npm"
+            }
+      - uses: docker/login-action@v4
+        if: needs.prepare.outputs.publish == 'true'
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        id: build
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: mode=max
-          sbom: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ matrix.platform }}
+          outputs: ${{ needs.prepare.outputs.publish == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', needs.prepare.outputs.image) || 'type=docker' }}
+          tags: ${{ needs.prepare.outputs.publish == 'true' && needs.prepare.outputs.image || format('mirrorproxy:ci-{0}', matrix.arch) }}
+          provenance: ${{ needs.prepare.outputs.publish == 'true' && 'mode=max' || 'false' }}
+          sbom: ${{ needs.prepare.outputs.publish == 'true' }}
+          labels: ${{ needs.prepare.outputs.labels }}
           build-args: |
-            VERSION=${{ inputs.version || github.ref_name }}
+            VERSION=${{ needs.prepare.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_TIME=${{ steps.build-time.outputs.value }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            BUILD_TIME=${{ needs.prepare.outputs.build_time }}
+          cache-from: type=gha,scope=mirrorproxy-${{ matrix.arch }}
+          cache-to: type=gha,scope=mirrorproxy-${{ matrix.arch }},mode=max
+      - name: Verify native image and real proxy protocol
+        env:
+          BUILT_IMAGE: ${{ needs.prepare.outputs.publish == 'true' && format('{0}@{1}', needs.prepare.outputs.image, steps.build.outputs.digest) || format('mirrorproxy:ci-{0}', matrix.arch) }}
+        run: bash scripts/smoke-docker.sh "$BUILT_IMAGE" "$GITHUB_SHA"
+      - name: Export verified platform digest
+        if: needs.prepare.outputs.publish == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v6
+        if: needs.prepare.outputs.publish == 'true'
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: digests/*
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, build]
+    if: ${{ always() && !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.publish == 'true' && (inputs.digest != '' || needs.build.result == 'success') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+      - uses: sigstore/cosign-installer@v4.1.2
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: actions/download-artifact@v8
+        if: inputs.digest == ''
+        with:
+          pattern: docker-digest-*
+          path: digests
+          merge-multiple: true
+      - name: Merge and verify the multi-platform image
+        if: inputs.digest == ''
+        id: manifest
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          METADATA: ${{ needs.prepare.outputs.metadata }}
+        run: |
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$METADATA")
+          tag_args=()
+          for tag in "${tags[@]}"; do tag_args+=(--tag "$tag"); done
+          images=()
+          for file in digests/*; do
+            digest="${file##*/}"
+            [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
+            images+=("$IMAGE@sha256:$digest")
+          done
+          [[ "${#images[@]}" == 2 && "${#tags[@]}" -gt 0 ]]
+          docker buildx imagetools create "${tag_args[@]}" "${images[@]}"
+          digest="$(docker buildx imagetools inspect "${tags[0]}" --format '{{json .Manifest}}' | jq -r .digest)"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker buildx imagetools inspect "$IMAGE@$digest" --raw > manifest.json
+          python3 scripts/verify-docker-manifest.py manifest.json
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Sign image digest with GitHub OIDC
         env:
-          DIGEST: ${{ inputs.digest || steps.build-and-push.outputs.digest }}
-          IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/mirrorproxy
-        shell: bash
+          DIGEST: ${{ inputs.digest || steps.manifest.outputs.digest }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
         run: |
-          set -euo pipefail
           for attempt in 1 2 3; do
-            if cosign sign --yes "${IMAGE}@${DIGEST}"; then
-              exit 0
-            fi
-            if (( attempt == 3 )); then
-              exit 1
-            fi
+            if cosign sign --yes "$IMAGE@$DIGEST"; then exit 0; fi
+            if (( attempt == 3 )); then exit 1; fi
             sleep "$((attempt * 20))"
           done

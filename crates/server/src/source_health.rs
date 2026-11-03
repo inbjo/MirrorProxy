@@ -813,6 +813,7 @@ mod tests {
             client: std::sync::Arc::new(std::sync::RwLock::new(reqwest::Client::new())),
             rate_limiter: std::sync::Arc::new(crate::RateLimiter::new()),
             admin_login_limiter: std::sync::Arc::new(crate::AdminLoginRateLimiter::new()),
+            discoverable_challenges: Default::default(),
             webauthn: std::sync::Arc::new(std::sync::RwLock::new(None)),
             observability: std::sync::Arc::new(crate::observability::Observability::new().unwrap()),
             geoip: std::sync::Arc::new(crate::geoip::GeoIpService::new(
@@ -893,6 +894,7 @@ mod tests {
             client: std::sync::Arc::new(std::sync::RwLock::new(reqwest::Client::new())),
             rate_limiter: std::sync::Arc::new(crate::RateLimiter::new()),
             admin_login_limiter: std::sync::Arc::new(crate::AdminLoginRateLimiter::new()),
+            discoverable_challenges: Default::default(),
             webauthn: std::sync::Arc::new(std::sync::RwLock::new(None)),
             observability: std::sync::Arc::new(crate::observability::Observability::new().unwrap()),
             geoip: std::sync::Arc::new(crate::geoip::GeoIpService::new(

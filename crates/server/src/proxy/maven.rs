@@ -120,6 +120,7 @@ mod tests {
             client: Arc::new(RwLock::new(reqwest::Client::new())),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(crate::AdminLoginRateLimiter::new()),
+            discoverable_challenges: Default::default(),
             webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
             geoip: Arc::new(crate::geoip::GeoIpService::new(

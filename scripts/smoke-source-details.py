@@ -91,8 +91,11 @@ cooldown_secs = 60
                             time.sleep(0.1)
                     else:
                         raise AssertionError("server did not become healthy")
-                    version = request("/version")["version"]
-                    assert version in subprocess.check_output([binary, "--version"], text=True)
+                    build = request("/version")
+                    assert build["version"] in subprocess.check_output([binary, "--version"], text=True)
+                    expected_commit = os.environ.get("MIRRORPROXY_SMOKE_EXPECTED_COMMIT")
+                    if expected_commit:
+                        assert build["commit"] == expected_commit, "running binary commit differs from the expected build"
                     assert b'id="root"' in request("/admin"), "embedded console missing"
                     targets = {item["code"]: item["capabilities"] for item in request("/api/sources")["targets"]}
                     assert targets["go"]["cache"] == "conditional" and not targets["go"]["cache_enabled"]

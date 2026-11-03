@@ -68,8 +68,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use traffic::{track_proxy_response, ProxyTraffic, ReservationError};
 use webauthn_rs::prelude::{
-    PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential,
-    Webauthn, WebauthnBuilder,
+    DiscoverableAuthentication, DiscoverableKey, PasskeyAuthentication, PasskeyRegistration,
+    PublicKeyCredential, RegisterPublicKeyCredential, Webauthn, WebauthnBuilder,
 };
 
 const QUOTA_RESERVATION_BYTES: u64 = 8 * 1024 * 1024;
@@ -200,6 +200,7 @@ pub struct AppState {
     rate_limiter: Arc<RateLimiter>,
     admin_login_limiter: Arc<AdminLoginRateLimiter>,
     webauthn: Arc<RwLock<Option<Arc<Webauthn>>>>,
+    discoverable_challenges: Arc<DiscoverableChallenges>,
     observability: Arc<Observability>,
     geoip: Arc<GeoIpService>,
     ip_access_policy: Arc<RwLock<IpAccessPolicy>>,
@@ -215,6 +216,39 @@ pub struct RateLimiter {
 
 pub struct AdminLoginRateLimiter {
     attempts: Mutex<HashMap<String, VecDeque<Instant>>>,
+}
+
+/// Anonymous challenges cannot use the legacy username-bound SQLite table.
+/// Keep typed state server-side, expire it and bound unauthenticated allocation.
+#[derive(Default)]
+struct DiscoverableChallenges {
+    pending: Mutex<HashMap<String, (Instant, DiscoverableAuthentication)>>,
+}
+
+impl DiscoverableChallenges {
+    fn insert(&self, authentication: DiscoverableAuthentication) -> Option<String> {
+        let mut pending = self
+            .pending
+            .lock()
+            .expect("passkey challenge lock poisoned");
+        let now = Instant::now();
+        pending.retain(|_, (expires, _)| *expires > now);
+        if pending.len() >= 1024 {
+            return None;
+        }
+        let id = format!("discoverable-{}", uuid::Uuid::new_v4());
+        pending.insert(id.clone(), (now + Duration::from_secs(300), authentication));
+        Some(id)
+    }
+
+    fn take(&self, id: &str) -> Option<DiscoverableAuthentication> {
+        let (expires, state) = self
+            .pending
+            .lock()
+            .expect("passkey challenge lock poisoned")
+            .remove(id)?;
+        (expires > Instant::now()).then_some(state)
+    }
 }
 
 impl AppState {
@@ -1931,6 +1965,7 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
         downloads: Arc::new(download::Runtime::default()),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
+        discoverable_challenges: Default::default(),
         webauthn: Arc::new(RwLock::new(webauthn)),
         config: Arc::new(RwLock::new(Arc::new(config.clone()))),
         database: Arc::new(database),
@@ -3874,7 +3909,7 @@ async fn start_admin_passkey_registration(
             .map(|stored| stored.passkey.cred_id().clone())
             .collect()
     });
-    let (options, registration) = match webauthn.start_passkey_registration(
+    let (mut options, registration) = match webauthn.start_passkey_registration(
         user_handle,
         &identity.username,
         &identity.username,
@@ -3886,6 +3921,11 @@ async fn start_admin_passkey_registration(
             return bad_request_response("unable to start passkey registration".to_string());
         }
     };
+    // Prefer discoverable credentials without excluding older security keys.
+    if let Some(selection) = options.public_key.authenticator_selection.as_mut() {
+        selection.resident_key =
+            Some(serde_json::from_str("\"preferred\"").expect("valid resident key preference"));
+    }
     let state_json = match serde_json::to_string(&registration) {
         Ok(json) => json,
         Err(error) => {
@@ -3986,6 +4026,7 @@ async fn finish_admin_passkey_registration(
 
 #[derive(Deserialize)]
 struct StartAdminPasskeyLoginRequest {
+    #[serde(default)]
     username: String,
 }
 
@@ -3998,6 +4039,22 @@ async fn start_admin_passkey_login(
         Some(webauthn) => webauthn,
         None => return passkey_not_configured_response(),
     };
+    if username.is_empty() {
+        let (mut options, authentication) = match webauthn.start_discoverable_authentication() {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::warn!(%error, "failed to start discoverable passkey login");
+                return unauthorized_response();
+            }
+        };
+        // This flow is explicitly invoked by a button, not conditional autofill.
+        options.mediation = None;
+        let Some(challenge_id) = state.discoverable_challenges.insert(authentication) else {
+            return StatusCode::TOO_MANY_REQUESTS.into_response();
+        };
+        return Json(serde_json::json!({ "challenge_id": challenge_id, "options": options }))
+            .into_response();
+    }
     match state.database.admin_user_handle(username).await {
         Ok(Some(_)) => {}
         Ok(None) => return unauthorized_response(),
@@ -4064,35 +4121,68 @@ async fn finish_admin_passkey_login(
         Some(webauthn) => webauthn,
         None => return passkey_not_configured_response(),
     };
-    let (username, state_json) = match state
-        .database
-        .take_webauthn_challenge(&request.challenge_id, "authentication", None)
-        .await
-    {
-        Ok(Some(challenge)) => challenge,
-        Ok(None) => {
-            return bad_request_response("passkey challenge is invalid or expired".to_string())
-        }
-        Err(error) => {
-            tracing::error!(%error, "failed to consume passkey authentication state");
-            return internal_error_response();
-        }
-    };
-    let authentication: PasskeyAuthentication = match serde_json::from_str(&state_json) {
-        Ok(authentication) => authentication,
-        Err(error) => {
-            tracing::error!(%error, "stored passkey authentication state is invalid");
-            return internal_error_response();
-        }
-    };
-    let result = match webauthn.finish_passkey_authentication(&request.credential, &authentication)
-    {
-        Ok(result) if result.user_verified() => result,
-        Ok(_) => return unauthorized_response(),
-        Err(error) => {
-            tracing::warn!(%error, "administrator passkey authentication failed");
-            return unauthorized_response();
-        }
+    let (username, result) = if request.challenge_id.starts_with("discoverable-") {
+        let Some(authentication) = state.discoverable_challenges.take(&request.challenge_id) else {
+            return bad_request_response("passkey challenge is invalid or expired".to_string());
+        };
+        let (user_handle, credential_id) =
+            match webauthn.identify_discoverable_authentication(&request.credential) {
+                Ok(identity) => identity,
+                Err(_) => return unauthorized_response(),
+            };
+        let (username, passkey) = match state
+            .database
+            .discoverable_admin_passkey(user_handle, credential_id)
+            .await
+        {
+            Ok(Some(identity)) => identity,
+            Ok(None) => return unauthorized_response(),
+            Err(error) => {
+                tracing::error!(%error, "failed to resolve discoverable passkey");
+                return internal_error_response();
+            }
+        };
+        let result = match webauthn.finish_discoverable_authentication(
+            &request.credential,
+            authentication,
+            &[DiscoverableKey::from(passkey)],
+        ) {
+            Ok(result) if result.user_verified() => result,
+            _ => return unauthorized_response(),
+        };
+        (username, result)
+    } else {
+        let (username, state_json) = match state
+            .database
+            .take_webauthn_challenge(&request.challenge_id, "authentication", None)
+            .await
+        {
+            Ok(Some(challenge)) => challenge,
+            Ok(None) => {
+                return bad_request_response("passkey challenge is invalid or expired".to_string())
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to consume passkey authentication state");
+                return internal_error_response();
+            }
+        };
+        let authentication: PasskeyAuthentication = match serde_json::from_str(&state_json) {
+            Ok(authentication) => authentication,
+            Err(error) => {
+                tracing::error!(%error, "stored passkey authentication state is invalid");
+                return internal_error_response();
+            }
+        };
+        let result =
+            match webauthn.finish_passkey_authentication(&request.credential, &authentication) {
+                Ok(result) if result.user_verified() => result,
+                Ok(_) => return unauthorized_response(),
+                Err(error) => {
+                    tracing::warn!(%error, "administrator passkey authentication failed");
+                    return unauthorized_response();
+                }
+            };
+        (username, result)
     };
     match state
         .database

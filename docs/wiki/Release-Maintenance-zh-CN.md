@@ -28,6 +28,42 @@
 推送稳定 `v*` 标签时，Release workflow 会生成包和 manifest、签名并部署 APT 仓库、更新
 Homebrew Tap；WinGet 自动提交只在显式启用后运行。
 
+## 原生 Docker 构建与缓存
+
+Docker 的 `linux/amd64` 在 `ubuntu-24.04`、`linux/arm64` 在
+`ubuntu-24.04-arm` 原生并行构建，不使用 QEMU。各架构镜像先通过入口版本、
+提交标识和本地上游协议 smoke，再将摘要交给合并任务。合并后核对双架构和对应的
+证明清单，并使用 GitHub OIDC 签名；发布镜像保留 SBOM 与构建来源证明。
+
+Cargo registry、Git、target 缓存挂载通过固定提交的 cache-dance action 和
+`actions/cache` 恢复与提取。键按架构隔离，并包含 Dockerfile、Cargo 锁文件/
+manifest 和 npm 锁文件，使用前缀恢复兼容旧构建；不会按每次源码提交重复保存整份
+依赖缓存。Cargo 仍校验源码/编译器指纹，镜像版本、提交和构建元数据仍绑定当前提交；
+BuildKit 层缓存也按架构分 scope。
+PR 和相关 main 推送只构建、测试，不发布；稳定标签或显式 dispatch 按摘要发布，
+仅在两种架构均通过后合并标签。指定现有 digest 的 dispatch 仍可仅签名而不重建。
+
+验证缓存改动时，应连续执行两次原生构建，检查恢复/提取日志及 Cargo 编译耗时，
+并在两个 runner 上运行镜像 smoke；不能用 YAML 校验或未失效的层缓存推断提速。
+
+### 其他工作流缓存
+
+Release 的客户端/服务端和全部 Rust CI 作业使用固定提交、兼容 Node 24 的
+Rust-cache action，复用依赖下载、依赖编译结果及已安装的 Cargo 工具。缓存键包含
+编译器/工具链、manifest/锁文件、编译环境、系统、runner 架构、目标平台和构建用途。
+覆盖率与 CodeQL 分析和普通编译隔离，CodeQL 仅缓存依赖；Cargo 命令、测试和审计
+仍会完整执行。
+
+CI 和 Release 各只构建一次前端。内容缓存键覆盖前端源码/配置、锁文件、精确 Node
+版本、平台与构建环境；复用前校验文件哈希和完整文件清单。当前运行的共享前端制品
+还记录 Git 提交，每个 Rust 消费方在嵌入前核对提交和哈希。缓存命中时仍运行单元、
+工具链和浏览器测试。Release 共用一次校验后的 GeoIP 输入，发布时仅选择客户端/
+服务端交付制品，内部前端与 GeoIP 共享制品不会作为 Release 附件公开。
+
+Playwright 浏览器、npm 下载和固定校验和的 Windows Perl 归档也有缓存；仍安装
+浏览器所需系统依赖并核对 Perl 哈希。真实客户端 smoke 的用户目录/缓存继续隔离，
+避免缓存包内容掩盖代理回归。首次冷构建仍需填充缓存，不能承诺固定构建耗时。
+
 ## Release 下载表格
 
 Release workflow 使用 `scripts/generate-release-body.py` 根据构建产物生成下载表。

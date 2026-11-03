@@ -4,7 +4,7 @@ $archive = Join-Path $env:RUNNER_TEMP 'strawberry-perl-5.42.3.1-portable.zip'
 $destination = Join-Path $env:RUNNER_TEMP 'mirrorproxy-build-perl'
 $url = 'https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54231_64bit/strawberry-perl-5.42.3.1-64bit-portable.zip'
 $expected = '6a081a811781c30aca51dbc036afd93092af91e3297901f02c17043795a10690'
-Invoke-WebRequest $url -OutFile $archive
+if (-not (Test-Path $archive)) { Invoke-WebRequest $url -OutFile $archive }
 if ((Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -ne $expected) {
     throw 'Windows build Perl archive checksum mismatch'
 }
