@@ -37,7 +37,9 @@ Docker 的 `linux/amd64` 在 `ubuntu-24.04`、`linux/arm64` 在
 
 Cargo registry、Git、target 缓存挂载通过固定提交的 cache-dance action 和
 `actions/cache` 恢复与提取。键按架构隔离，并包含 Dockerfile、Cargo 锁文件/
-manifest 和提交，使用前缀恢复兼容旧构建；BuildKit 层缓存也按架构分 scope。
+manifest 和 npm 锁文件，使用前缀恢复兼容旧构建；不会按每次源码提交重复保存整份
+依赖缓存。Cargo 仍校验源码/编译器指纹，镜像版本、提交和构建元数据仍绑定当前提交；
+BuildKit 层缓存也按架构分 scope。
 PR 和相关 main 推送只构建、测试，不发布；稳定标签或显式 dispatch 按摘要发布，
 仅在两种架构均通过后合并标签。指定现有 digest 的 dispatch 仍可仅签名而不重建。
 

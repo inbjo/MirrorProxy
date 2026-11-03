@@ -44,8 +44,11 @@ provenance remain enabled for published images.
 
 Cargo registry, Git and target cache mounts are restored and extracted through
 the pinned cache-dance action and `actions/cache`. Keys separate architectures
-and include Dockerfile, Cargo lock/manifests and commit; fallback keys reuse
-compatible prior builds. BuildKit layer caches also have per-architecture scopes.
+and include Dockerfile, Cargo lock/manifests and the npm lockfile; fallback keys
+reuse compatible prior builds. The dependency cache does not create a duplicate
+for every source commit; Cargo still checks source/compiler fingerprints, and
+image revision/build metadata still belongs to the current commit. BuildKit
+layer caches also have per-architecture scopes.
 PR and relevant `main` pushes build and test locally without publishing; stable
 tags and explicit dispatches publish by digest and merge tags only after both
 platforms pass. Digest-only dispatch still signs without rebuilding.

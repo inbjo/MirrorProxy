@@ -138,8 +138,9 @@ jobs:
             ${{ runner.temp }}/mirrorproxy-cargo-git
             ${{ runner.temp }}/mirrorproxy-cargo-target
             ${{ runner.temp }}/mirrorproxy-npm-cache
-          key: docker-cargo-v2-${{ matrix.arch }}-${{ hashFiles('Dockerfile', 'Cargo.lock', 'crates/**/Cargo.toml', 'web/package-lock.json') }}-${{ github.sha }}
+          key: docker-cargo-v3-${{ matrix.arch }}-${{ hashFiles('Dockerfile', 'Cargo.toml', 'Cargo.lock', 'crates/**/Cargo.toml', 'web/package-lock.json') }}
           restore-keys: |
+            docker-cargo-v3-${{ matrix.arch }}-
             docker-cargo-v2-${{ matrix.arch }}-${{ hashFiles('Dockerfile', 'Cargo.lock', 'crates/**/Cargo.toml', 'web/package-lock.json') }}-
             docker-cargo-v2-${{ matrix.arch }}-
             docker-cargo-v1-${{ matrix.arch }}-
