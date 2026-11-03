@@ -103,6 +103,13 @@ jobs:
       - name: Install browser smoke dependencies
         working-directory: web
         run: npm ci
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('web/package-lock.json') }}
+      - name: Ensure Chromium and required system libraries for real browser smoke
+        working-directory: web
+        run: npx playwright install --with-deps chromium
       - uses: ./.github/actions/download-web
         with:
           name: ci-web-console
