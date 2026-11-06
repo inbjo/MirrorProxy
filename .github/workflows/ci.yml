@@ -51,6 +51,7 @@ jobs:
         run: |
           python3 scripts/test-release-body.py
           python3 scripts/test-package-manifests.py
+          python3 scripts/test-windows-runtime.py
           python3 scripts/test-docker-manifest.py
           python3 scripts/test-frontend-build-manifest.py
       - name: Verify local build cache invalidation
@@ -211,11 +212,28 @@ jobs:
             exit 1
           }
       - name: Run native client tests
-        if: matrix.os != 'windows-11-arm'
+        if: runner.os != 'Windows'
         run: cargo test --locked -p mirrorproxy-cli
+      - name: Run Windows x64 client tests
+        if: matrix.os == 'windows-latest'
+        run: cargo test --locked -p mirrorproxy-cli --target x86_64-pc-windows-msvc
       - name: Run Windows ARM64 client tests
         if: matrix.os == 'windows-11-arm'
         run: cargo test --locked -p mirrorproxy-cli --target aarch64-pc-windows-msvc
+      - uses: actions/setup-python@v6
+        if: runner.os == 'Windows'
+        with:
+          python-version: '3.13'
+      - name: Build and check Windows client runtime dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $architecture = if ('${{ matrix.os }}' -eq 'windows-11-arm') { 'arm64' } else { 'x64' }
+          $target = if ($architecture -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
+          cargo build --locked -p mirrorproxy-cli --target $target
+          if ($LASTEXITCODE -ne 0) { throw 'Windows client build failed' }
+          python scripts/check-windows-runtime.py --architecture $architecture "target/$target/debug/mirrorproxy.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Client runtime dependency check failed' }
       - name: Validate distribution scripts and Linux client packages
         if: runner.os == 'Linux'
         shell: bash
@@ -270,6 +288,12 @@ jobs:
           name: ci-web-console
       - name: Build Windows server
         run: cargo build --locked -p mirrorproxy-server --target ${{ matrix.target }}
+      - name: Check Windows server runtime dependencies
+        shell: pwsh
+        run: |
+          $architecture = if ('${{ matrix.target }}' -eq 'aarch64-pc-windows-msvc') { 'arm64' } else { 'x64' }
+          python scripts/check-windows-runtime.py --architecture $architecture "target/${{ matrix.target }}/debug/mirrorproxy-server.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Server runtime dependency check failed' }
       - name: Verify Windows server protocol
         run: python scripts/smoke-source-details.py target/${{ matrix.target }}/debug/mirrorproxy-server.exe
 

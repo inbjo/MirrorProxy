@@ -44,7 +44,7 @@ class ManifestTests(unittest.TestCase):
                 entry = winget.split('- Architecture: ' + winget_arch + '\n')[1].split('- Architecture:')[0]
                 self.assertIn('/' + name, entry)
                 self.assertIn('InstallerSha256: ' + hashes[name].upper(), entry)
-                self.assertIn(f'PackageIdentifier: Microsoft.VCRedist.2015+.{winget_arch}', entry)
+                self.assertNotIn('Dependencies:', entry)
                 self.assertNotIn('NestedInstallerFiles:', entry)
             locale = (output / 'winget/manifests/i/Inbjo/MirrorProxy/1.7.3/Inbjo.MirrorProxy.locale.en-US.yaml').read_text()
             self.assertIn('ReleaseNotesUrl: https://github.com/inbjo/MirrorProxy/releases/tag/v1.7.3', locale)
@@ -52,6 +52,17 @@ class ManifestTests(unittest.TestCase):
             brew = (output / 'mirrorproxy.rb').read_text()
             for target in targets[:3]:
                 self.assertIn('/mirrorproxy-client-' + target, brew)
+            # Regenerating manifests for immutable older releases must retain
+            # their runtime dependency; fixed and future releases must omit it.
+            for version in ['1.6.0', '1.7.1', '1.7.2', '1.7.10', '1.8.0', '2.0.0']:
+                with self.subTest(version=version):
+                    subprocess.run(['bash', str(Path(__file__).with_name('generate-package-manifests.sh')),
+                                    version, str(artifacts), str(output)], check=True,
+                                   env={**os.environ, 'MIRRORPROXY_RELEASE_DATE': '2026-11-02'})
+                    manifest = (output / f'winget/manifests/i/Inbjo/MirrorProxy/{version}/Inbjo.MirrorProxy.installer.yaml').read_text()
+                    legacy = tuple(map(int, version.split('.'))) <= (1, 7, 2)
+                    for architecture in ['x64', 'arm64']:
+                        self.assertEqual(f'PackageIdentifier: Microsoft.VCRedist.2015+.{architecture}' in manifest, legacy)
 
 
 if __name__ == '__main__':

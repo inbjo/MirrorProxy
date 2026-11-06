@@ -15,7 +15,14 @@ on:
       - .github/actions/download-web/**
       - scripts/frontend-build-manifest.py
       - scripts/setup-windows-build.ps1
+      - .cargo/config.toml
+      - scripts/check-windows-runtime.py
   workflow_dispatch:
+    inputs:
+      validate_only:
+        description: Build and verify all artifacts without publishing
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
@@ -112,6 +119,10 @@ jobs:
           sudo apt-get install --yes gcc-aarch64-linux-gnu
       - name: Build client
         run: cargo build --locked --release -p mirrorproxy-cli --target ${{ matrix.target }}
+      - uses: actions/setup-python@v6
+        if: runner.os == 'Windows'
+        with:
+          python-version: '3.13'
       - name: Verify Windows client
         if: runner.os == 'Windows'
         shell: pwsh
@@ -137,6 +148,14 @@ jobs:
         run: |
           $archive = "${{ matrix.archive }}"
           Compress-Archive -Path "target/${{ matrix.target }}/release/mirrorproxy.exe" -DestinationPath $archive
+          Expand-Archive -Path $archive -DestinationPath verified-client
+          $architecture = if ('${{ matrix.target }}' -eq 'aarch64-pc-windows-msvc') { 'arm64' } else { 'x64' }
+          python scripts/check-windows-runtime.py --architecture $architecture verified-client/mirrorproxy.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged client runtime dependency check failed' }
+          & ./verified-client/mirrorproxy.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged client version check failed' }
+          & ./verified-client/mirrorproxy.exe list
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged client catalog check failed' }
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
           [IO.File]::WriteAllText("$archive.sha256", "$hash  $archive`n", [Text.Encoding]::ASCII)
           $executable = "mirrorproxy-client-${{ matrix.target }}.exe"
@@ -284,6 +303,9 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
           [IO.File]::WriteAllText("$archive.sha256", "$hash  $archive`n", [Text.Encoding]::ASCII)
           Expand-Archive -Path $archive -DestinationPath verified-server
+          $architecture = if ('${{ matrix.target }}' -eq 'aarch64-pc-windows-msvc') { 'arm64' } else { 'x64' }
+          python scripts/check-windows-runtime.py --architecture $architecture verified-server/mirrorproxy-server.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged server runtime dependency check failed' }
           & ./verified-server/mirrorproxy-server.exe --version
           if ($LASTEXITCODE -ne 0) { throw 'Server version check failed' }
           python scripts/smoke-source-details.py verified-server/mirrorproxy-server.exe
@@ -314,7 +336,7 @@ jobs:
 
   publish:
     needs: [client, server]
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && !inputs.validate_only
     permissions:
       contents: write
       pages: write

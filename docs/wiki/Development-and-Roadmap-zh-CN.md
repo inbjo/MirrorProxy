@@ -15,6 +15,19 @@ bash scripts/fetch-geoip.sh
 cargo build --workspace --locked
 ```
 
+Windows x64、ARM64 MSVC 目标通过 `.cargo/config.toml` 静态链接 C/C++ 运行库。
+Windows 构建与测试应显式指定 `--target x86_64-pc-windows-msvc` 或
+`--target aarch64-pc-windows-msvc`。服务端的 vendored OpenSSL 还需要
+`scripts/setup-windows-build.ps1` 中的 Perl 构建工具。覆盖 Rust 编译参数时，
+必须保留 `-C target-feature=+crt-static`。
+
+CI 和发布流程执行 `python scripts/check-windows-runtime.py --architecture x64 path/to/program.exe`
+（ARM64 使用 `arm64`），检查普通及延迟导入表并拒绝外部 CRT/OpenSSL DLL 依赖，
+避免构建机预装的运行库掩盖问题。Windows 系统 DLL 仍是必需的。
+修复计划从 1.7.3 起交付；现有 1.7.2 资产保持不变，其 WinGet 清单保留 VC++ 运行库依赖。
+新产物除了依赖检查，还应在 Windows 上执行 `--version` 和客户端 `list` 验证。
+回滚时使用完整的上一版发布包，并安装该版本声明的运行库依赖。
+
 发布式 Linux 静态构建使用 `./build.sh`，还需要目标工具链、`musl-tools` 与联网获取固定校验和的 GeoIP 数据。
 重复本地构建会核对输入指纹和产物摘要，仅复用一致的锁定依赖和前端；产物缺失或
 被修改时自动重建。每次仍验证 GeoIP 校验和，并执行锁定 Cargo，将服务端与客户端

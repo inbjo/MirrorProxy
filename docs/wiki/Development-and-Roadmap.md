@@ -15,6 +15,23 @@ bash scripts/fetch-geoip.sh
 cargo build --workspace --locked
 ```
 
+Windows x64 and ARM64 MSVC targets statically link the C/C++ runtime through
+`.cargo/config.toml`. Use an explicit `--target x86_64-pc-windows-msvc` or
+`--target aarch64-pc-windows-msvc` for Windows builds and tests. Server builds
+also need the Perl prerequisites in `scripts/setup-windows-build.ps1` for vendored
+OpenSSL. Do not override the configured Rust flags without retaining
+`-C target-feature=+crt-static`.
+
+CI and release builds run `python scripts/check-windows-runtime.py --architecture
+x64 path/to/program.exe` (use `arm64` for ARM64). This inspects both regular and
+delay imports and rejects external CRT/OpenSSL DLL dependencies, independently
+of runtimes installed on the runner. Windows system DLLs are still required.
+The fix is intended for 1.7.3 and later; existing 1.7.2 assets are unchanged and
+their WinGet manifests retain the VC++ Runtime dependency. Verify newly built
+executables on Windows with `--version` and the client `list` command as well as
+the dependency check. Roll back using the complete prior release package and
+its declared runtime prerequisites.
+
 `./build.sh` performs the release-style static Linux build. It also needs the target toolchain, `musl-tools`, and network access for checksum-pinned GeoIP data.
 Repeated local builds reuse the locked dependency installation and frontend only
 when their input fingerprints and output digests match. Missing or changed output

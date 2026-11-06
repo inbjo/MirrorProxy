@@ -7,6 +7,13 @@ output="${3:?output directory required}"
 repository="${GITHUB_REPOSITORY:-inbjo/MirrorProxy}"
 base_url="https://github.com/${repository}/releases/download/v${version}"
 release_date="${MIRRORPROXY_RELEASE_DATE:-$(date -u +%F)}"
+if [[ ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+  echo "version must be a stable major.minor.patch version" >&2
+  exit 2
+fi
+major=$((10#${BASH_REMATCH[1]}))
+minor=$((10#${BASH_REMATCH[2]}))
+patch=$((10#${BASH_REMATCH[3]}))
 if [[ ! "$release_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
   echo "MIRRORPROXY_RELEASE_DATE must be YYYY-MM-DD" >&2
   exit 2
@@ -79,6 +86,13 @@ EOF
 
 winget_dir="$output/winget/manifests/i/Inbjo/MirrorProxy/$version"
 mkdir -p "$winget_dir"
+# Published versions through 1.7.2 still dynamically link the MSVC runtime.
+# Keep their original dependency contract when regenerating old manifests.
+runtime_dependency() {
+  if (( major < 1 || (major == 1 && minor < 7) || (major == 1 && minor == 7 && patch <= 2) )); then
+    printf '  Dependencies:\n    PackageDependencies:\n    - PackageIdentifier: Microsoft.VCRedist.2015+.%s\n' "$1"
+  fi
+}
 cat >"$winget_dir/Inbjo.MirrorProxy.yaml" <<EOF
 # yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.1.10.0.schema.json
 PackageIdentifier: Inbjo.MirrorProxy
@@ -102,15 +116,11 @@ Commands:
 ReleaseDate: ${release_date}
 Installers:
 - Architecture: x64
-  Dependencies:
-    PackageDependencies:
-    - PackageIdentifier: Microsoft.VCRedist.2015+.x64
+$(runtime_dependency x64)
   InstallerUrl: ${base_url}/${windows_x64}
   InstallerSha256: $(checksum "$windows_x64" | tr '[:lower:]' '[:upper:]')
 - Architecture: arm64
-  Dependencies:
-    PackageDependencies:
-    - PackageIdentifier: Microsoft.VCRedist.2015+.arm64
+$(runtime_dependency arm64)
   InstallerUrl: ${base_url}/${windows_arm64}
   InstallerSha256: $(checksum "$windows_arm64" | tr '[:lower:]' '[:upper:]')
 ManifestType: installer

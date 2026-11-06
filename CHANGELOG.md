@@ -5,6 +5,13 @@ follow semantic versioning.
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-11-06
+
+- Statically link the MSVC runtime into Windows x64/ARM64 client and server
+  executables. Check regular and delay-loaded DLL imports in CI and release
+  builds, and omit VC++ Runtime dependencies from WinGet manifests for 1.7.3
+  and later while retaining them for existing releases.
+
 - Cache native Rust dependencies across CI/Release/analysis jobs, share a
   content- and commit-verified frontend build across server targets, and cache
   verified GeoIP/Perl and browser downloads while retaining complete validation.
