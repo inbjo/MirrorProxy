@@ -6,6 +6,7 @@ import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { once } from 'node:events'
+import { request } from 'node:http'
 
 const require = createRequire(import.meta.url)
 const fromPackage = name => createRequire(require.resolve(`${name}/package.json`))
@@ -42,6 +43,16 @@ test('Utoopack serves static files and WebSockets with the patched Hono adapter'
   assert.equal(response.status, 200)
   assert.equal(await response.text(), 'static-ok')
   assert.equal((await fetch(`http://${base}/private/secret.txt`)).status, 403)
+  // Send the raw request target: fetch would normalize the backslash first.
+  const backslashStatus = await new Promise((resolve, reject) => {
+    const req = request(`http://${base}`, { path: '/public\\../private/secret.txt' }, res => {
+      res.resume()
+      resolve(res.statusCode)
+    })
+    req.on('error', reject)
+    req.end()
+  })
+  assert.equal(backslashStatus, 400)
   // A second decoding pass must not turn an unmatched path into a protected file.
   const encoded = await fetch(`http://${base}/%2570rivate/secret.txt`)
   assert.equal(encoded.status, 404)
@@ -54,6 +65,37 @@ test('Utoopack serves static files and WebSockets with the patched Hono adapter'
   const closed = once(ws, 'close')
   ws.close()
   await closed
+})
+
+test('Hono rejects cross-origin text/ping and validates parameterized JSON bodies', async () => {
+  const fromUtoo = createRequire(fromPackage('@umijs/bundler-utoopack').resolve('@utoo/pack/package.json'))
+  const { Hono } = fromUtoo('hono')
+  const { csrf } = fromUtoo('hono/csrf')
+  const { validator } = fromUtoo('hono/validator')
+  const app = new Hono()
+  app.use('/protected', csrf())
+  app.post('/protected', c => c.text('accepted'))
+  app.post('/validated', validator('json', (value, c) => (
+    value.role === 'admin' ? c.text('rejected', 400) : value
+  )), c => c.json(c.req.valid('json')))
+
+  for (const origin of ['https://attacker.example', 'http://localhost']) {
+    const response = await app.request('/protected', {
+      method: 'POST', headers: { Origin: origin, 'Content-Type': 'text/ping' }, body: 'PING',
+    })
+    assert.equal(response.status, origin === 'http://localhost' ? 200 : 403)
+  }
+  for (const contentType of ['application/json', 'application/json ; charset=utf-8', 'application/json;']) {
+    const rejected = await app.request('/validated', {
+      method: 'POST', headers: { 'Content-Type': contentType }, body: JSON.stringify({ role: 'admin' }),
+    })
+    assert.equal(rejected.status, 400)
+    const accepted = await app.request('/validated', {
+      method: 'POST', headers: { 'Content-Type': contentType }, body: JSON.stringify({ role: 'reader' }),
+    })
+    assert.equal(accepted.status, 200)
+    assert.deepEqual(await accepted.json(), { role: 'reader' })
+  }
 })
 
 test('SVGR uses the patched SVG optimizer and preserves React component generation', () => {
