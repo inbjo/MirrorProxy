@@ -3,6 +3,16 @@ import { readFileSync } from 'node:fs'
 
 const stylesheet = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 const dockerfile = readFileSync(new URL('../../Dockerfile', import.meta.url), 'utf8')
+const serverManifest = readFileSync(new URL('../../crates/server/Cargo.toml', import.meta.url), 'utf8')
+const dockerRust = dockerfile.match(/^ARG RUST_VERSION=(\d+\.\d+(?:\.\d+)?)-/m)?.[1]
+const serverRust = serverManifest.match(/^rust-version\s*=\s*"(\d+\.\d+(?:\.\d+)?)"/m)?.[1]
+assert(dockerRust && serverRust, 'Docker and server must declare their Rust versions')
+const versionParts = version => version.split('.').map(Number).concat(0).slice(0, 3)
+const actual = versionParts(dockerRust)
+const required = versionParts(serverRust)
+const difference = actual.findIndex((part, index) => part !== required[index])
+assert(difference === -1 || actual[difference] > required[difference],
+  `Docker Rust ${dockerRust} must meet the server minimum ${serverRust}`)
 const config = readFileSync(new URL('../config/config.ts', import.meta.url), 'utf8')
 const runtime = readFileSync(new URL('../src/app.tsx', import.meta.url), 'utf8')
 assert.match(stylesheet, /@import\s+["']\.\/tokens\.css["']/)

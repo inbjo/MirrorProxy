@@ -82,3 +82,24 @@ On Windows with Rust 1.96.1:
 All databases, downloaded tools and smoke logs stayed under ignored `target/`.
 No existing user database or production installation was touched. CI and CodeQL
 must be evaluated for the new commit separately from these local results.
+
+## Docker toolchain follow-up
+
+The first Docker build after the SQLx update failed because its build stage
+still pinned Rust 1.93, below SQLx's Rust 1.94 minimum. This was reproduced
+with the already installed toolchain using
+`cargo +1.93.1 check --locked --package mirrorproxy-server --bin mirrorproxy-server`:
+Cargo rejected SQLx, sqlx-core and sqlx-sqlite for requiring Rust 1.94.0.
+
+The Docker builder now uses official `rust:1.94-bookworm`, available for both
+amd64 and arm64. The server declares `rust-version = "1.94"`, and the existing
+frontend Docker-context gate compares the builder's Rust version against that
+declared minimum. The gate failed against the former 1.93 Dockerfile and passed
+with 1.94. Formatting, locked Clippy and `git diff --check` passed after the fix.
+No runtime image, configuration, dependency lockfile or security exception
+changes in this follow-up.
+
+Docker is not installed on the Windows workstation, so image compilation and
+the existing native HTTP/proxy smoke checks must run on the Docker workflow's
+amd64 and arm64 runners. The passing host checks alone do not establish that
+the container build succeeds.

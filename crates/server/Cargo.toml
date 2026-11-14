@@ -1,6 +1,7 @@
 [package]
 name = "mirrorproxy-server"
 version = "1.7.3"
+rust-version = "1.94"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

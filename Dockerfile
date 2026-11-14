@@ -1,5 +1,5 @@
 ARG NODE_VERSION=24-bookworm-slim
-ARG RUST_VERSION=1.93-bookworm
+ARG RUST_VERSION=1.94-bookworm
 ARG BASE_IMAGE_REGISTRY=docker.io/library
 
 FROM --platform=$BUILDPLATFORM ${BASE_IMAGE_REGISTRY}/node:${NODE_VERSION} AS web-build
