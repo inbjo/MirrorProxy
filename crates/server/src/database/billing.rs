@@ -35,7 +35,8 @@ impl Database {
         } else {
             let needle = search.to_lowercase();
             let query = format!("SELECT u.id, u.display_name || ' ' || COALESCE(u.username, '') || ' ' || u.email || ' ' || r.routing_id AS search_text {base}");
-            let mut rows = sqlx::query(&query).fetch(&mut *tx);
+            // SQL fragments are literals; the Unicode search runs in Rust.
+            let mut rows = sqlx::query(sqlx::AssertSqlSafe(query)).fetch(&mut *tx);
             let mut ids = Vec::new();
             use futures_util::TryStreamExt;
             while let Some(row) = rows.try_next().await? {
@@ -52,12 +53,15 @@ impl Database {
                 serde_json::to_string(&ids)?,
             )
         };
-        let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*){filter}"))
-            .bind(&search)
-            .fetch_one(&mut *tx)
-            .await?;
+        // Both filter branches contain only literal SQL. Search, pagination and
+        // month values remain bound parameters, never interpolated text.
+        let total: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*){filter}")))
+                .bind(&search)
+                .fetch_one(&mut *tx)
+                .await?;
         // Page before joining traffic and billing data. No per-user database queries.
-        let rows = sqlx::query(&format!("WITH selected AS (SELECT u.*, r.routing_id, r.created_at AS routing_rotated_at {filter} ORDER BY u.id LIMIT ? OFFSET ?) SELECT u.*, u.id AS user_id, g.id AS group_id, g.name AS group_name, gq.monthly_limit_bytes AS group_limit, uq.mode AS quota_mode, uq.monthly_limit_bytes AS user_limit, COALESCE(t.response_bytes, 0) AS response_bytes FROM selected u LEFT JOIN group_members gm ON gm.user_id = u.id AND gm.is_billing = 1 LEFT JOIN groups g ON g.id = gm.group_id LEFT JOIN group_quota_settings gq ON gq.group_id = g.id LEFT JOIN user_quota_overrides uq ON uq.user_id = u.id LEFT JOIN user_traffic_monthly t ON t.user_id = u.id AND t.month = ? ORDER BY u.id"))
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!("WITH selected AS (SELECT u.*, r.routing_id, r.created_at AS routing_rotated_at {filter} ORDER BY u.id LIMIT ? OFFSET ?) SELECT u.*, u.id AS user_id, g.id AS group_id, g.name AS group_name, gq.monthly_limit_bytes AS group_limit, uq.mode AS quota_mode, uq.monthly_limit_bytes AS user_limit, COALESCE(t.response_bytes, 0) AS response_bytes FROM selected u LEFT JOIN group_members gm ON gm.user_id = u.id AND gm.is_billing = 1 LEFT JOIN groups g ON g.id = gm.group_id LEFT JOIN group_quota_settings gq ON gq.group_id = g.id LEFT JOIN user_quota_overrides uq ON uq.user_id = u.id LEFT JOIN user_traffic_monthly t ON t.user_id = u.id AND t.month = ? ORDER BY u.id")))
             .bind(&search).bind(i64::from(per_page)).bind(i64::from(page - 1) * i64::from(per_page)).bind(month).fetch_all(&mut *tx).await?;
         let items = rows
             .into_iter()
@@ -184,5 +188,13 @@ mod tests {
                 .total,
             1
         );
+        for search in ["' OR 1=1 --", "中文' OR 1=1 --"] {
+            let page = database
+                .user_summaries(search, 1, 10, "2026-10")
+                .await
+                .unwrap();
+            assert_eq!(page.total, 0);
+            assert!(page.items.is_empty());
+        }
     }
 }

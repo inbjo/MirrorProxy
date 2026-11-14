@@ -129,9 +129,10 @@ async fn dropping_pending_body_bills_partial_delivery_and_releases_all_quota_sco
     drop(body);
     assert_settled(&database, 10, 1).await;
     for table in ["user_traffic_monthly", "group_traffic_monthly"] {
-        let row: (i64, i64, i64) = sqlx::query_as(&format!(
+        // Table names are fixed fixture identifiers from the list above.
+        let row: (i64, i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT response_bytes, reserved_bytes, request_count FROM {table} WHERE month = ?"
-        ))
+        )))
         .bind(MONTH)
         .fetch_one(&database.pool)
         .await

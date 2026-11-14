@@ -129,6 +129,25 @@ minimatch 11 改为对象导出，因此自动更新器无法解析兼容的安�
 此更新任务失败不表示告警已清除或依赖已修复；继续适用上文的限定审计例外，
 上游依赖变化后应重新复核。
 
+## Bundled SQLite WAL fix / 内嵌 SQLite WAL 修复
+
+On 2026-11-14, the bundled SQLite dependency was updated to `libsqlite3-sys`
+0.39.1 (SQLite 3.54.1), fixing
+[RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459.html).
+This advisory is not excepted. SQLx is temporarily pinned to upstream commit
+`10462fa4414c6c7f1ed1d39bb31678e3b726878c` (PR #4502), because published SQLx
+0.9.0 excludes the patched driver. Replace the Git pin with a stable release
+once it permits `libsqlite3-sys` 0.39 or newer. Builds require Rust 1.94 or newer
+and must retain locked dependency resolution. This changes no database schema;
+back up the database using the existing backup command before upgrading.
+
+2026-11-14：内嵌 SQLite 已升级到 `libsqlite3-sys` 0.39.1（SQLite 3.54.1），
+修复 RUSTSEC-2026-0459，未为该告警添加例外。由于已发布的 SQLx 0.9.0
+不允许使用修复版驱动，暂时固定到上游 PR #4502 的完整提交
+`10462fa4414c6c7f1ed1d39bb31678e3b726878c`。稳定版支持 0.39 或更新的驱动后，
+应将 Git 固定提交替换为稳定版。构建需要 Rust 1.94 或更新版本，并继续使用锁定依赖。
+此更新不改变数据库结构；升级前请使用现有备份命令备份数据库。
+
 ## Reporting a vulnerability / 报告安全漏洞
 
 Do not disclose suspected vulnerabilities in a public issue, discussion, or

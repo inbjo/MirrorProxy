@@ -454,7 +454,7 @@ impl Database {
             .context("failed to enable SQLite WAL mode")?;
         let mut transaction = self.pool.begin().await?;
         for statement in &MIGRATIONS[1..] {
-            sqlx::query(statement)
+            sqlx::query(*statement)
                 .execute(&mut *transaction)
                 .await
                 .context("failed to apply SQLite migration")?;
@@ -753,7 +753,8 @@ impl Database {
             ("auth_providers", "encrypted_client_secret", "client_secret"),
             ("user_auth_flows", "encrypted_payload", "payload"),
         ] {
-            let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
+            // Identifiers come only from the literal migration list above.
+            let columns = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})")))
                 .fetch_all(&self.pool)
                 .await?
                 .into_iter()
@@ -762,9 +763,9 @@ impl Database {
             if columns.iter().any(|column| column == old_column)
                 && !columns.iter().any(|column| column == new_column)
             {
-                sqlx::query(&format!(
+                sqlx::query(sqlx::AssertSqlSafe(format!(
                     "ALTER TABLE {table} RENAME COLUMN {old_column} TO {new_column}"
-                ))
+                )))
                 .execute(&self.pool)
                 .await
                 .with_context(|| {
@@ -2539,7 +2540,8 @@ impl Database {
         let column = if is_code { "code_hash" } else { "token_hash" };
         let query = format!("SELECT id, invitation_id FROM email_login_tokens WHERE email = ? AND {column} = ? AND used_at IS NULL AND expires_at > ? AND attempts < 5 ORDER BY id DESC LIMIT 1");
         let mut transaction = self.pool.begin().await?;
-        let row = sqlx::query(&query)
+        // The column is selected from two literals; credentials remain bound.
+        let row = sqlx::query(sqlx::AssertSqlSafe(query))
             .bind(&email)
             .bind(hash_token(credential))
             .bind(unix_timestamp())

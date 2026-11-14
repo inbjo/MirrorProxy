@@ -1,6 +1,25 @@
 use super::*;
 
 #[tokio::test]
+async fn sqlite_runtime_includes_the_mismatched_wal_page_fix() {
+    let (database, _) = Database::open(":memory:").await.unwrap();
+    let version: String = sqlx::query_scalar("SELECT sqlite_version()")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    let parts = version
+        .split('.')
+        .map(|part| part.parse::<u32>().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(parts.len(), 3);
+    assert!(
+        (parts[0], parts[1], parts[2]) >= (3, 54, 0),
+        "SQLite {version} predates the RUSTSEC-2026-0459 fix"
+    );
+    database.pool.close().await;
+}
+
+#[tokio::test]
 async fn argon2_verification_preserves_salts_and_rejects_invalid_credentials() {
     let password = random_secret(28);
     let other = random_secret(28);

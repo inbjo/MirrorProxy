@@ -1,5 +1,11 @@
 # Dependency security review, 2026-11-14
 
+Follow-up: the SQLite limitation recorded below was subsequently resolved by
+pinning SQLx to its upstream compatibility fix and updating the bundled driver.
+See [SQLite security follow-up](SQLite-Security-2026-11-14.md) for the current
+dependency choice, validation, and upgrade/rollback notes. The original results
+below describe commit `694dbd5` before that follow-up.
+
 ## Scope and fixes
 
 [Dependabot PR #16](https://github.com/inbjo/MirrorProxy/pull/16) updates only

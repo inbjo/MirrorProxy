@@ -47,7 +47,9 @@ sha2 = "0.10"
 sqids = "0.4.2"
 # SQLite is local-only; enabling a database TLS backend unnecessarily retains
 # an obsolete webpki-roots compatibility package in the dependency graph.
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+# SQLx 0.9.0's published SQLite bound excludes the RUSTSEC-2026-0459 fix.
+# Pin upstream PR #4502 until a stable release supports libsqlite3-sys 0.39.
+sqlx = { git = "https://github.com/launchbadge/sqlx", rev = "10462fa4414c6c7f1ed1d39bb31678e3b726878c", default-features = false, features = ["runtime-tokio", "sqlite"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 toml = "0.9"

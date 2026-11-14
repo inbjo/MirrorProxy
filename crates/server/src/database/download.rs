@@ -365,7 +365,9 @@ impl Database {
             ("totals", "'all' AS scope", "", 1),
         ] {
             let sql=format!("SELECT {selection},COALESCE(SUM(requests),0) AS requests,COALESCE(SUM(errors),0) AS errors,COALESCE(SUM(denied),0) AS denied,COALESCE(SUM(bytes),0) AS bytes,COALESCE(SUM(upstream_bytes),0) AS upstream_bytes FROM download_usage WHERE day>=? AND (? IS NULL OR user_id=?) AND (? IS NULL OR domain=? OR entry_domain=?) {group} ORDER BY bytes DESC LIMIT {limit}");
-            let data = sqlx::query(&sql)
+            // Projection, grouping and limit come from the literal list above;
+            // every request-supplied filter remains a bound parameter.
+            let data = sqlx::query(sqlx::AssertSqlSafe(sql))
                 .bind(&cutoff)
                 .bind(user)
                 .bind(user)
@@ -652,7 +654,8 @@ mod tests {
             "download_blocks",
             "download_usage",
         ] {
-            sqlx::query(&format!("DROP TABLE {table}"))
+            // Table names are fixed fixture identifiers from the list above.
+            sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE {table}")))
                 .execute(&db.pool)
                 .await
                 .unwrap();
