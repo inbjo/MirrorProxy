@@ -1,8 +1,5 @@
 # MirrorProxy
 
-Optional DNS over HTTPS: enable `[doh]` to serve `/dns-query` through Cloudflare,
-Google, or Quad9. See [DoH configuration](docs/wiki/Proxy-Adapters.md#dns-over-https-doh).
-
 [English](README.md) | [简体中文](README_CN.md)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/inbjo/MirrorProxy/ci.yml?branch=main&style=flat-square&logo=githubactions&label=CI)](https://github.com/inbjo/MirrorProxy/actions/workflows/ci.yml)
@@ -80,6 +77,7 @@ administrator-defined static operating-system repositories:
 | Developer tools and application sources | Homebrew, WinGet, TeX Live, ELPA, Nix, GNU Guix, Flatpak |
 | Linux / BSD / operating-system sources | Debian, Ubuntu, Fedora, Arch Linux, Alpine, openSUSE, Void Linux, Gentoo, FreeBSD, Kali, Rocky Linux, AlmaLinux, Manjaro, Raspberry Pi OS, Armbian, openEuler, Anolis OS, Deepin, Linux Mint, Solus, Trisquel, Linux Lite, NetBSD, OpenBSD |
 | Specialized systems and tool sources | OpenWrt, Termux, MSYS2, ROS, and administrator-defined static repositories |
+| DNS over HTTPS (DoH) | Optional `/dns-query` proxy for Cloudflare (default `1.1.1.1`), Google and Quad9; enable and configure in Administration → Advanced. [Configuration](docs/wiki/Proxy-Adapters.md#dns-over-https-doh). |
 
 ## Capabilities
 

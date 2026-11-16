@@ -1,8 +1,5 @@
 # MirrorProxy
 
-可选 DNS over HTTPS：启用 `[doh]` 后，通过 `/dns-query` 转发至 Cloudflare、Google
-或 Quad9。参见 [DoH 配置](docs/wiki/Proxy-Adapters-zh-CN.md#dns-over-httpsdoh)。
-
 [English](README.md) | [简体中文](README_CN.md)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/inbjo/MirrorProxy/ci.yml?branch=main&style=flat-square&logo=githubactions&label=CI)](https://github.com/inbjo/MirrorProxy/actions/workflows/ci.yml)
@@ -63,6 +60,7 @@ MirrorProxy 提供约 30 类内置代理适配器，并允许在后台添加自�
 | 开发工具与应用源     | Homebrew、WinGet、TeX Live、ELPA、Nix、GNU Guix、Flatpak                                                                                                                                                                                   |
 | Linux / BSD / 系统源 | Debian、Ubuntu、Fedora、Arch Linux、Alpine、openSUSE、Void Linux、Gentoo、FreeBSD、Kali、Rocky Linux、AlmaLinux、Manjaro、Raspberry Pi OS、Armbian、openEuler、Anolis OS、Deepin、Linux Mint、Solus、Trisquel、Linux Lite、NetBSD、OpenBSD |
 | 专用系统与工具源     | OpenWrt、Termux、MSYS2、ROS，以及管理员配置的自定义静态仓库                                                                                                                                                                                |
+| DNS over HTTPS（DoH） | 可选 `/dns-query` 代理，支持 Cloudflare（默认 `1.1.1.1`）、Google 和 Quad9；在后台高级设置中启用和配置。[配置说明](docs/wiki/Proxy-Adapters-zh-CN.md#dns-over-httpsdoh)。 |
 
 ## MirrorProxy 提供的能力
 
