@@ -599,6 +599,9 @@ pub(super) fn should_forward_request_header(name: &HeaderName) -> bool {
             | "authorization"
             | "cookie"
             | "connection"
+            // h2c settings describe the client-to-proxy connection only.
+            // Forwarding them over a negotiated HTTP/2 upstream is invalid.
+            | "http2-settings"
             | "keep-alive"
             | "proxy-authenticate"
             | "proxy-authorization"
@@ -616,6 +619,7 @@ fn should_forward_response_header(name: &HeaderName) -> bool {
     !matches!(
         name.as_str().to_ascii_lowercase().as_str(),
         "connection"
+            | "http2-settings"
             | "keep-alive"
             | "proxy-authenticate"
             | "proxy-authorization"
@@ -850,6 +854,13 @@ mod tests {
             "baggage"
         )));
         assert!(should_forward_request_header(&header::ACCEPT));
+    }
+
+    #[test]
+    fn never_forwards_h2c_connection_settings() {
+        let settings = HeaderName::from_static("http2-settings");
+        assert!(!should_forward_request_header(&settings));
+        assert!(!should_forward_response_header(&settings));
     }
 
     #[test]

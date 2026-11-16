@@ -1007,6 +1007,17 @@ async fn respond_ok(stream: &mut TcpStream) {
 async fn proxy_test_tls_origin(
     host: &str,
 ) -> (SocketAddr, Certificate, axum_server::Handle<SocketAddr>) {
+    proxy_test_tls_origin_with_router(
+        host,
+        Router::new().route("/from-socks", get(|| async { "ok" })),
+    )
+    .await
+}
+
+async fn proxy_test_tls_origin_with_router(
+    host: &str,
+    router: Router,
+) -> (SocketAddr, Certificate, axum_server::Handle<SocketAddr>) {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let generated = rcgen::generate_simple_self_signed(vec![host.to_string()]).unwrap();
     let certificate = Certificate::from_pem(generated.cert.pem().as_bytes()).unwrap();
@@ -1025,15 +1036,56 @@ async fn proxy_test_tls_origin(
         axum_server::from_tcp_rustls(listener, tls)
             .unwrap()
             .handle(server_handle)
-            .serve(
-                Router::new()
-                    .route("/from-socks", get(|| async { "ok" }))
-                    .into_make_service(),
-            )
+            .serve(router.into_make_service())
             .await
             .unwrap();
     });
     (address, certificate, handle)
+}
+
+#[tokio::test]
+async fn cargo_h2c_upgrade_headers_are_not_forwarded_to_https_index() {
+    const INDEX: &str =
+        "{\"name\":\"bytes\",\"vers\":\"1.10.1\",\"deps\":[],\"features\":{},\"yanked\":false}\n";
+    let router = Router::new().route(
+        "/by/te/bytes",
+        get(|request: axum::extract::Request| async move {
+            assert_eq!(request.version(), reqwest::Version::HTTP_2);
+            assert!(!request.headers().contains_key("http2-settings"));
+            assert!(!request.headers().contains_key(header::UPGRADE));
+            assert!(!request.headers().contains_key(header::CONNECTION));
+            assert_eq!(request.headers()["cargo-protocol"], "version=1");
+            INDEX
+        }),
+    );
+    let (address, certificate, handle) =
+        proxy_test_tls_origin_with_router("cargo-index.test", router).await;
+    let (state, _) = admin_test_state().await;
+    let mut config = (*state.config()).clone();
+    config.upstreams.crates_index = format!("https://cargo-index.test:{}", address.port());
+    let client = build_upstream_client_builder(&config)
+        .unwrap()
+        .add_root_certificate(certificate)
+        .resolve("cargo-index.test", address)
+        .build()
+        .unwrap();
+    *state.config.write().unwrap() = Arc::new(config);
+    *state.client.write().unwrap() = client;
+    let request = Request::builder()
+        .uri("/crates-index/by/te/bytes")
+        .header(header::CONNECTION, "Upgrade, HTTP2-Settings")
+        .header(header::UPGRADE, "h2c")
+        .header("http2-settings", "AAMAAABkAAQAAQAAAAIAAAAA")
+        .header("cargo-protocol", "version=1")
+        .header(header::ACCEPT, "text/plain")
+        .body(Body::empty())
+        .unwrap();
+    let response = cratesio::index(State(state), AxumPath("by/te/bytes".to_string()), request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), INDEX);
+    handle.graceful_shutdown(Some(Duration::from_secs(5)));
 }
 
 #[test]
@@ -1301,19 +1353,21 @@ async fn global_socks5h_proxy_resolves_dns_and_authenticates_remotely() {
         },
         ..Config::default()
     };
-    let response = build_upstream_client_builder(&config)
+    let client = build_upstream_client_builder(&config)
         .unwrap()
         .add_root_certificate(certificate)
         .build()
-        .unwrap()
+        .unwrap();
+    let response = client
         .get("https://upstream.example.invalid/from-socks")
         .send()
         .await
         .unwrap();
 
     assert_eq!(response.text().await.unwrap(), "ok");
-    // Close any keep-alive connection before awaiting the tunnel.
-    tls_handle.shutdown();
+    // Finish HTTP/2 GOAWAY/TLS shutdown before closing the tunnel. Abrupt
+    // shutdown can reset a connection with control frames still in flight.
+    tls_handle.graceful_shutdown(Some(Duration::from_secs(5)));
     let (username, password, domain, port) = proxy_task.await.unwrap();
     assert_eq!(username, "proxy-user");
     assert_eq!(password, proxy_password);
@@ -1369,7 +1423,7 @@ async fn global_socks5_proxy_resolves_dns_locally() {
         },
         ..Config::default()
     };
-    let response = build_upstream_client_builder(&config)
+    let client = build_upstream_client_builder(&config)
         .unwrap()
         .add_root_certificate(certificate)
         .resolve(
@@ -1377,14 +1431,15 @@ async fn global_socks5_proxy_resolves_dns_locally() {
             SocketAddr::from(([127, 0, 0, 1], 18080)),
         )
         .build()
-        .unwrap()
+        .unwrap();
+    let response = client
         .get("https://socks-local.test:18080/from-socks")
         .send()
         .await
         .unwrap();
 
     assert_eq!(response.text().await.unwrap(), "ok");
-    tls_handle.shutdown();
+    tls_handle.graceful_shutdown(Some(Duration::from_secs(5)));
     let (address_type, port) = proxy_task.await.unwrap();
     assert!(matches!(address_type, 1 | 4));
     assert_eq!(port, 18080);
