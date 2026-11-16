@@ -22,6 +22,7 @@ import { AdminAcmeStatus } from '../pages/admin-acme'
 import { AdminAuthProviders } from '../pages/admin-providers'
 import { AdminEmailSettings } from '../pages/admin-email'
 import { AdminSessionManagement } from '../pages/admin-sessions'
+import { AdminDohSettings } from '../components/admin-doh-settings'
 
 export function AdminPage() {
   const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en', ['en', 'zh']))
@@ -42,6 +43,7 @@ export function AdminPage() {
 }
 
 export function adminConfigErrorMessage(reason: string, status: number, locale: Locale, fallback: string) {
+  if (reason.includes('doh.upstreams')) return locale === 'zh' ? '请选择至少一个受支持的 DoH 上游（最多六个）。' : 'Select between one and six supported DoH upstreams.'
   if (reason === 'invalid CSRF proof') return csrfErrorMessage(reason, locale)
   if (reason.includes('super administrator access required')) {
     return locale === 'zh' ? '只有超级管理员可以修改访问、注册或 Passkey 策略。' : 'Only a super administrator can change access, registration, or passkey policies.'
@@ -287,6 +289,7 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
       site: config.site ?? { title: 'MirrorProxy', description: '', keywords: [], icon_url: '/favicon.svg' },
       outbound_proxy: config.outbound_proxy ?? { enabled: false, url: '', no_proxy: ['127.0.0.1', 'localhost'], username: null, password: null, has_password: false },
       upstream_tls: config.upstream_tls ?? { ca_certificates: [], insecure_skip_verify: false },
+      doh: config.doh ?? { enabled: false, upstreams: ['https://1.1.1.1/dns-query'] },
       upstream_selection: config.upstream_selection ?? { strategy: 'ordered', failure_threshold: 3, cooldown_secs: 30 },
       management: config.management ?? { enabled: false, listen_addr: '127.0.0.1:3001' },
       metrics: config.metrics ?? { local_only: true },
@@ -612,6 +615,7 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
                   <label className="wide-field">{locale === 'zh' ? '不使用代理的地址' : 'Bypass proxy for'}<Field placeholder="127.0.0.1, localhost" value={draft.outbound_proxy.no_proxy.join(', ')} onChange={(event) => updateOutboundProxy('no_proxy', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small>{locale === 'zh' ? '多个主机或地址用逗号分隔。' : 'Separate hosts or addresses with commas.'}</small></label>
                 </div>
               </section>
+              <AdminDohSettings locale={locale} value={draft.doh} baseUrl={draft.public_base_url} onChange={(value) => update('doh', value)} />
               <section className={`runtime-config-group runtime-config-group-wide${draft.upstream_tls.insecure_skip_verify ? ' runtime-config-group-danger' : ''}`}>
                 <div className="runtime-config-group-head"><h5>{locale === 'zh' ? '镜像上游 TLS 信任' : 'Mirror upstream TLS trust'}</h5><p>{locale === 'zh' ? '默认同时信任 WebPKI 公共根证书和操作系统根证书；以下设置只影响镜像上游，不影响 ACME、DNS API 或 OAuth。' : 'WebPKI public roots and native system roots are trusted by default. These settings affect mirror upstreams only, never ACME, DNS APIs, or OAuth.'}</p></div>
                 <div className="runtime-config-fields">
@@ -644,7 +648,7 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
           </Panel>
           <Panel className="settings-card"><h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><Field type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div><details className="advanced-details"><summary>{text.showUpstreams}</summary><p className="field-hint">{text.upstreamHint}</p><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><Field value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : [])}</div><AdditionalOsEditor locale={locale} publicBaseUrl={draft.public_base_url} sources={typeof draft.upstreams.additional_os === 'object' ? draft.upstreams.additional_os : {}} onChange={updateAdditionalOsUpstreams} /></details></Panel>
         </section> : null}
-        {activeTab === 'users' ? <React.Suspense fallback={<p role="status">{locale === 'zh' ? '加载中…' : 'Loading…'}</p>}><AdminBillingManagement locale={locale} targets={PROXY_ADAPTERS} /></React.Suspense> : null}
+        {activeTab === 'users' ? <React.Suspense fallback={<p role="status">{locale === 'zh' ? '加载中…' : 'Loading…'}</p>}><AdminBillingManagement locale={locale} targets={[...PROXY_ADAPTERS, 'doh']} /></React.Suspense> : null}
         {activeTab === 'providers' ? <AdminAuthProviders locale={locale} /> : null}
         {activeTab === 'email' ? <AdminEmailSettings locale={locale} /> : null}
         {activeTab === 'security' ? <section className="admin-tab-panel settings-stack security-settings"><Panel className="settings-card security-credentials-card">

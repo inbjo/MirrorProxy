@@ -5,6 +5,7 @@ mod admin_billing;
 mod alerts;
 mod config;
 mod database;
+mod doh;
 mod download;
 mod email;
 mod geoip;
@@ -1888,6 +1889,7 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
     config.upstreams.upgrade_legacy_defaults();
     // Listener topology is service-owned and only takes effect on restart.
     config.management = service_config.management.clone();
+    config.doh.validate()?;
     // Private upstream credentials remain service-owned. Environment variables
     // for the global outbound proxy deliberately override the persisted admin
     // setting at process startup for managed/container deployments.
@@ -1986,6 +1988,7 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
 
     let router = Router::new()
         .route("/healthz", get(healthz))
+        .route("/dns-query", get(doh::query).post(doh::query))
         .route("/version", get(version))
         .route("/metrics", get(metrics))
         .route("/api/config", get(public_config))
@@ -3238,7 +3241,9 @@ fn quota_period(timezone: &str) -> (String, String) {
 }
 
 fn proxy_target_for_path(path: &str) -> Option<&'static str> {
-    if path == "/composer" || path.starts_with("/composer/") {
+    if path == "/dns-query" {
+        Some("doh")
+    } else if path == "/composer" || path.starts_with("/composer/") {
         Some("composer")
     } else if path == "/npm" || path.starts_with("/npm/") {
         Some("npm")
@@ -3313,7 +3318,8 @@ fn proxy_target_for_path(path: &str) -> Option<&'static str> {
 }
 
 fn is_proxy_path(path: &str) -> bool {
-    path == "/composer"
+    path == "/dns-query"
+        || path == "/composer"
         || path.starts_with("/composer/")
         || path == "/npm"
         || path.starts_with("/npm/")

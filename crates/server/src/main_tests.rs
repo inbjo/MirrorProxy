@@ -2030,6 +2030,13 @@ async fn admin_config_update_persists_and_applies_runtime_values() {
         password: Some("proxy-password".to_string()),
     };
     next_config.upstream_tls.insecure_skip_verify = true;
+    next_config.doh = config::DohConfig {
+        enabled: true,
+        upstreams: vec![
+            "https://8.8.8.8/dns-query".into(),
+            "https://9.9.9.9/dns-query".into(),
+        ],
+    };
     next_config.alerts.enabled = true;
     next_config.alerts.webhook_url = "https://hooks.example/private-token".to_string();
 
@@ -2064,6 +2071,12 @@ async fn admin_config_update_persists_and_applies_runtime_values() {
         Some("proxy-password")
     );
     assert!(reloaded.upstream_tls.insecure_skip_verify);
+    assert!(state.config().doh.enabled);
+    assert_eq!(state.config().doh, reloaded.doh);
+    assert_eq!(
+        response["config"]["doh"]["upstreams"][0],
+        "https://8.8.8.8/dns-query"
+    );
 }
 
 #[tokio::test]

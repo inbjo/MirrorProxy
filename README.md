@@ -1,5 +1,8 @@
 # MirrorProxy
 
+Optional DNS over HTTPS: enable `[doh]` to serve `/dns-query` through Cloudflare,
+Google, or Quad9. See [DoH configuration](docs/wiki/Proxy-Adapters.md#dns-over-https-doh).
+
 [English](README.md) | [简体中文](README_CN.md)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/inbjo/MirrorProxy/ci.yml?branch=main&style=flat-square&logo=githubactions&label=CI)](https://github.com/inbjo/MirrorProxy/actions/workflows/ci.yml)

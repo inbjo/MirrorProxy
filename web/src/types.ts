@@ -30,6 +30,7 @@ export type PublicConfig = {
 }
 
 export type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access' | 'site'> & {
+  doh: { enabled: boolean; upstreams: string[] }
   site: SiteSettings
   quota: PublicConfig['quota'] & { request_event_retention_days: number; default_user_monthly_gb: number | null }
   trusted_proxies: string[]

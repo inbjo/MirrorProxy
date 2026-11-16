@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// DNS-over-HTTPS settings, also configurable through the admin console.
+    #[serde(default)]
+    pub doh: DohConfig,
     #[serde(default = "default_database_path")]
     pub database_path: String,
     #[serde(default = "default_listen_addr")]
@@ -76,6 +79,61 @@ pub struct Config {
     /// snapshots. They must remain in the service TOML, not in the admin console.
     #[serde(default, skip_serializing)]
     pub upstream_auth: BTreeMap<String, UpstreamAuth>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DohConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_doh_upstreams")]
+    pub upstreams: Vec<String>,
+}
+
+fn default_doh_upstreams() -> Vec<String> {
+    vec!["https://1.1.1.1/dns-query".into()]
+}
+
+impl Default for DohConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            upstreams: default_doh_upstreams(),
+        }
+    }
+}
+
+impl DohConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.upstreams.is_empty() || self.upstreams.len() > 6 {
+            anyhow::bail!("doh.upstreams must contain between 1 and 6 endpoints");
+        }
+        for endpoint in &self.upstreams {
+            let url = Url::parse(endpoint)
+                .map_err(|_| anyhow::anyhow!("doh.upstreams contains an invalid URL"))?;
+            if url.scheme() != "https"
+                || !matches!(
+                    url.host_str(),
+                    Some(
+                        "1.1.1.1"
+                            | "1.0.0.1"
+                            | "8.8.8.8"
+                            | "8.8.4.4"
+                            | "9.9.9.9"
+                            | "149.112.112.112"
+                    )
+                )
+                || url.port_or_known_default() != Some(443)
+                || url.path() != "/dns-query"
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                anyhow::bail!("doh.upstreams requires an approved public resolver HTTPS /dns-query endpoint on port 443");
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -988,6 +1046,7 @@ impl Config {
     }
 
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        self.doh.validate()?;
         self.download.validate()?;
         if self.database_path.trim().is_empty() {
             anyhow::bail!("database_path cannot be empty");
@@ -1437,6 +1496,7 @@ fn upstream_path_suffix<'a>(
 impl Default for Config {
     fn default() -> Self {
         Self {
+            doh: DohConfig::default(),
             database_path: default_database_path(),
             listen_addr: default_listen_addr(),
             management: ManagementConfig::default(),

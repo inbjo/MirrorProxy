@@ -162,7 +162,8 @@ pub(super) async fn update_group_target_access(
         Ok(identity) => identity,
         Err(response) => return response,
     };
-    let supported = Config::default().enabled_proxies;
+    let mut supported = Config::default().enabled_proxies;
+    supported.push("doh".to_string());
     let mut target_codes = request
         .target_codes
         .into_iter()

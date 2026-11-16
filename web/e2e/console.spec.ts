@@ -76,6 +76,7 @@ const adminConfig = {
   upstream_selection: { strategy: 'ordered', failure_threshold: 3, cooldown_secs: 30 },
   alerts: { enabled: false, webhook_url: '', has_webhook_url: false, email_enabled: false, email_recipients: [], quota_percent: 80, source_failures: 3, cooldown_secs: 3600 },
   outbound_proxy: { enabled: false, url: '', no_proxy: ['127.0.0.1', 'localhost'], username: null, password: null, has_password: false },
+  doh: { enabled: false, upstreams: ['https://1.1.1.1/dns-query'] },
   rate_limit: { enabled: true, requests_per_minute: 120 },
   cache: { enabled: false, directory: 'cache', max_entry_mb: 8, max_total_mb: 256, default_ttl_secs: 300, max_ttl_secs: 86400 },
   user_access: { base_domain: '', mode: 'public', infrastructure_ready: false, routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
@@ -463,6 +464,10 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await deleteDialog.getByRole('button', { name: 'Cancel' }).click()
   await expect(page.getByLabel('Upstream URL for clickhouse')).toBeVisible()
   await page.getByLabel('Enable mirror upstream proxy').check()
+  await page.getByLabel('Enable DoH proxy').check()
+  await expect(page.getByLabel('Client DoH URL')).toHaveValue('https://updated.example/dns-query')
+  await selectChoice(page, page.getByRole('combobox', { name: 'DoH upstreams (failover in selection order)' }), 'Google · 8.8.8.8')
+  await page.keyboard.press('Escape')
   await page.getByLabel('Proxy URL').fill('socks5h://proxy.example:1080')
   await page.getByLabel('Username (optional)').fill('proxy-user')
   await page.getByLabel('Password (optional)').fill('proxy-password')
@@ -477,6 +482,13 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
     has_password: false,
   })
   await expect(page.getByLabel('Password (optional)')).toHaveAttribute('placeholder', 'Saved; leave blank to keep')
+  await expect.poll(() => savedConfig?.doh).toEqual({ enabled: true, upstreams: ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'] })
+  await page.reload()
+  await page.locator('.admin-username-field input').fill('admin')
+  await page.getByLabel('Administrator password').fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await page.getByRole('link', { name: 'Advanced', exact: true }).click()
+  await expect(page.getByLabel('Enable DoH proxy')).toBeChecked()
 })
 
 test('refreshes statistics from the admin console', async ({ page }) => {

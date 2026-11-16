@@ -18,6 +18,53 @@ taking precedence. Cookies are not forwarded. Hugging Face always blocks client
 credentials and server upstream credentials, regardless of the global setting;
 it supports public HTTP downloads only, with native Xet disabled.
 
+## DNS over HTTPS (DoH)
+
+The optional `/dns-query` endpoint supports RFC 8484 wire-format GET (`dns=`
+unpadded base64url) and POST (`Content-Type: application/dns-message`). This is
+DoH; no DoT/port 853 listener or JSON DNS API is provided.
+
+Open **Administration → Advanced → DNS over HTTPS (DoH)**, enable the proxy,
+select upstreams, and save. Changes apply immediately and persist across restarts.
+Selection order controls failover. The panel also displays the client URL.
+For first-time initialization, the service TOML accepts:
+
+```toml
+[doh]
+enabled = true
+upstreams = ["https://1.1.1.1/dns-query"]
+```
+
+For ordered failover, set `upstreams` to
+`["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query", "https://9.9.9.9/dns-query"]`.
+Also accepted: `1.0.0.1`, `8.8.4.4`, `149.112.112.112`, using HTTPS, port 443
+and the exact `/dns-query` path. Hostnames, private IPs, credentials, URL queries
+and redirects are rejected; clients cannot select an upstream.
+
+Expose `https://xx.com/dns-query` through your existing HTTPS listener or reverse
+proxy, preserving query strings and POST bodies, then configure it as your
+browser/router's custom DoH URL. Single-question standard queries, EDNS and DNSSEC
+records are supported. Requests and answers are limited to 65,535 bytes.
+The dedicated resolver client uses verified TLS and HTTP/2, connects directly,
+and ignores mirror outbound proxy/custom TLS settings. Each upstream attempt
+has a ten-second deadline, with at most six configured endpoints. Network/HTTP
+failures and invalid DNS responses trigger failover; valid DNS errors such as
+NXDOMAIN are returned unchanged. DNS responses bypass disk caching and use
+`Cache-Control: no-store`; client credentials and upstream cookies are not forwarded.
+
+Existing IP policy, rate limits, quotas, user-subdomain routing and traffic
+accounting apply under target `doh`; restricted teams must allow this target.
+DNS names and wire payloads are not logged. The source catalog and health probes
+continue to describe package sources only.
+
+Verify GET, POST, DNS transaction/question/answer contents and malformed-request
+rejection using `python scripts/smoke-doh.py https://xx.com` (standard library
+only). Run against each provider configuration to verify upstream connectivity.
+Rollback: disable DoH in the console and save; the route returns 404 immediately.
+Old and new installations default to disabled. Existing databases use persisted
+admin settings rather than reloading TOML values. No database migration or DNS
+configuration changes by the package-source CLI are needed.
+
 ## Covered categories
 
 | Category | Representative targets |

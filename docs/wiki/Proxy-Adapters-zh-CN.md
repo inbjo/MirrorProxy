@@ -1,5 +1,41 @@
 # 支持的软件源
 
+## DNS over HTTPS（DoH）
+
+可选 `/dns-query` 端点支持 RFC 8484 二进制 GET（`dns=` 使用无填充 base64url）
+和 POST（`Content-Type: application/dns-message`）。这是 DoH，不监听 DoT/853
+端口，不提供 JSON DNS API。
+
+打开**后台 → 高级设置 → DNS over HTTPS (DoH)**，启用代理、选择上游并保存，
+配置立即生效并在重启后保留。选择顺序决定故障回退顺序，面板同时展示客户端地址。
+首次初始化也可以在服务 TOML 中配置：
+
+```toml
+[doh]
+enabled = true
+upstreams = ["https://1.1.1.1/dns-query"]
+```
+
+需要顺序故障回退时设置
+`upstreams = ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query", "https://9.9.9.9/dns-query"]`。
+另支持 `1.0.0.1`、`8.8.4.4`、`149.112.112.112`，须使用 HTTPS、443 端口和准确的
+`/dns-query` 路径。不接受域名、私网 IP、URL 凭据、查询参数或重定向，客户端不能指定上游。
+
+通过现有 HTTPS 监听或反向代理暴露 `https://xx.com/dns-query`，保留查询参数和 POST
+请求体，再填入浏览器或路由器的自定义 DoH URL。支持单问题标准 DNS 查询、EDNS、DNSSEC
+记录；请求和应答最大 65,535 字节。专用解析客户端启用 TLS 证书校验和 HTTP/2，直接
+连接上游，不继承软件源出站代理或自定义 TLS 设置。每个上游尝试最多十秒，最多配置六个
+地址；网络、HTTP 错误或无效应答触发回退，NXDOMAIN 等有效 DNS 错误原样返回。
+不使用磁盘缓存，响应为 `Cache-Control: no-store`，不转发客户端凭据或上游 Cookie。
+
+复用 IP 策略、限流、配额、用户子域名路由和流量统计，目标为 `doh`；限制目标的团队
+需要允许该目标。不记录 DNS 域名或二进制内容。软件源目录及健康探测仍只描述软件源。
+
+执行 `python scripts/smoke-doh.py https://xx.com` 验证 GET、POST、DNS 事务 ID、问题、
+应答记录和畸形请求拒绝（仅需 Python 标准库）。验证公网连通性时分别切换各上游执行。
+回退：后台关闭 DoH 并保存，端点立即恢复 404。新旧实例均默认关闭；已有数据库使用
+持久化后台配置，不重新加载 TOML 值。无需数据库迁移，软件源 CLI 不修改客户端 DNS。
+
 先打开实例首页，选择软件源，复制生成的命令；本机自动改源见[客户端](Client-zh-CN)，容器镜像见[容器指南](Container-Registries-and-Runtimes-zh-CN)。
 
 > **服务端支持代理，不代表客户端能自动修改每一种配置。** MirrorProxy 是按需的只读代理/缓存，不是任意转发代理，也不提供私有制品上传。

@@ -1,5 +1,8 @@
 # MirrorProxy
 
+可选 DNS over HTTPS：启用 `[doh]` 后，通过 `/dns-query` 转发至 Cloudflare、Google
+或 Quad9。参见 [DoH 配置](docs/wiki/Proxy-Adapters-zh-CN.md#dns-over-httpsdoh)。
+
 [English](README.md) | [简体中文](README_CN.md)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/inbjo/MirrorProxy/ci.yml?branch=main&style=flat-square&logo=githubactions&label=CI)](https://github.com/inbjo/MirrorProxy/actions/workflows/ci.yml)

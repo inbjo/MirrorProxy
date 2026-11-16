@@ -28,6 +28,21 @@ listen_addr = "127.0.0.1:3001"
 [metrics]
 local_only = true
 
+# Optional RFC 8484 DNS-over-HTTPS relay at /dns-query (not DoT/port 853).
+# Initial settings; existing installations use the persisted admin configuration.
+# Configure in Administration > Advanced settings; saves apply immediately.
+# Only the six listed public resolver IPs are accepted, with verified HTTPS,
+# port 443 and /dns-query. Entries are tried in order on transport/HTTP errors
+# or invalid DNS responses. DNS error responses (e.g. NXDOMAIN) are preserved.
+[doh]
+enabled = false
+upstreams = ["https://1.1.1.1/dns-query"]
+# Other supported endpoints: https://1.0.0.1/dns-query,
+# https://8.8.8.8/dns-query, https://8.8.4.4/dns-query,
+# https://9.9.9.9/dns-query, https://149.112.112.112/dns-query.
+# No disk cache, client credential forwarding, custom CA, insecure TLS or
+# outbound proxy settings apply to this dedicated resolver client.
+
 [upstreams]
 # Every string field accepts one or more HTTP(S) endpoints separated by commas.
 # Safe requests try the next endpoint after transport errors, 404/408/429, or
