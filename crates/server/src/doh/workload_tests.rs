@@ -214,6 +214,13 @@ async fn doh_capacity_baseline() {
     );
     let report = serde_json::json!({"schema":1,"profile":if cfg!(debug_assertions){"debug"}else{"release"},"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"version":env!("CARGO_PKG_VERSION"),"ips":64,"cache_miss":summarize(misses),"cache_hit":summarize(hits),"concurrent_hits":summarize(parallel),"upstream_requests":128,"rss_before_kib":rss_before,"rss_after_kib":rss_kib(),"elapsed_ms":started.elapsed().as_millis()});
     if let Ok(path) = std::env::var("MIRRORPROXY_BASELINE_PATH") {
+        let path = std::path::Path::new(&path);
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).unwrap();
+        }
         std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     }
     println!("{report}");

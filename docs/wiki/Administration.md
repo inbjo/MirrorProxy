@@ -141,7 +141,7 @@ Run the explicit protocol and baseline checks with:
 
 ```sh
 cargo test --locked -p mirrorproxy-server local_doh_protocol_smoke -- --ignored --nocapture
-MIRRORPROXY_BASELINE_PATH=target/doh-baseline.json cargo test --locked -p mirrorproxy-server doh_capacity_baseline -- --ignored --nocapture
+MIRRORPROXY_BASELINE_PATH="$PWD/target/doh-baseline.json" cargo test --locked -p mirrorproxy-server doh_capacity_baseline -- --ignored --nocapture
 python3 scripts/smoke-shutdown.py target/debug/mirrorproxy-server
 ```
 

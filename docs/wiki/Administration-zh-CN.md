@@ -115,7 +115,7 @@ CI 固定运行并发保存、DoH 慢请求、连接取消、SQLite 只读/写�
 
 ```sh
 cargo test --locked -p mirrorproxy-server local_doh_protocol_smoke -- --ignored --nocapture
-MIRRORPROXY_BASELINE_PATH=target/doh-baseline.json cargo test --locked -p mirrorproxy-server doh_capacity_baseline -- --ignored --nocapture
+MIRRORPROXY_BASELINE_PATH="$PWD/target/doh-baseline.json" cargo test --locked -p mirrorproxy-server doh_capacity_baseline -- --ignored --nocapture
 python3 scripts/smoke-shutdown.py target/debug/mirrorproxy-server
 ```
 

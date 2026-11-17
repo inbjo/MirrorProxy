@@ -124,7 +124,7 @@ jobs:
         run: cargo test --locked -p mirrorproxy-server local_doh_protocol_smoke -- --ignored --nocapture
       - name: DNS cache and multi-IP capacity baseline
         env:
-          MIRRORPROXY_BASELINE_PATH: target/doh-baseline.json
+          MIRRORPROXY_BASELINE_PATH: ${{ github.workspace }}/target/doh-baseline.json
         run: cargo test --locked -p mirrorproxy-server doh_capacity_baseline -- --ignored --nocapture
       - name: Archive capacity baseline
         uses: actions/upload-artifact@v6
