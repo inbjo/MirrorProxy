@@ -11,6 +11,17 @@ import { request } from 'node:http'
 const require = createRequire(import.meta.url)
 const fromPackage = name => createRequire(require.resolve(`${name}/package.json`))
 
+test('registry lock entries stay portable with npm remote downloads disabled', () => {
+  const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'))
+  // npm remaps the canonical registry host to the configured registry. Pins to
+  // other mirrors are treated as remote URLs and rejected by npm 12 by default.
+  for (const [path, pkg] of Object.entries(lock.packages)) {
+    if (!pkg.resolved || pkg.link) continue
+    assert.equal(new URL(pkg.resolved).origin, 'https://registry.npmjs.org', path)
+    assert.ok(pkg.integrity, `${path} must retain its tarball integrity`)
+  }
+})
+
 test('Utoopack serves static files and WebSockets with the patched Hono adapter', { timeout: 10000 }, async t => {
   const fromUtoo = createRequire(fromPackage('@umijs/bundler-utoopack').resolve('@utoo/pack/package.json'))
   const { Hono } = fromUtoo('hono')
