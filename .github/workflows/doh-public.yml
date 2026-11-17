@@ -1,0 +1,43 @@
+name: Public DoH verification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '41 4 * * 2'
+
+permissions:
+  contents: read
+
+jobs:
+  public-doh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - uses: actions/setup-node@v6
+        id: node
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - uses: ./.github/actions/build-web
+        with:
+          node-version: ${{ steps.node.outputs.node-version }}
+      - run: cargo build --locked -p mirrorproxy-server
+      - name: Public resolver protocol verification
+        run: >-
+          python3 scripts/smoke-doh-public.py target/debug/mirrorproxy-server
+          --upstream https://1.1.1.1/dns-query
+          --upstream https://dns.google/dns-query
+          --report target/public-doh.json
+      - name: Archive public connectivity results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: public-doh-results
+          path: target/public-doh.json
+          if-no-files-found: warn

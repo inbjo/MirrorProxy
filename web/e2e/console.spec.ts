@@ -34,7 +34,8 @@ async function setTheme(page: Page, value: string) {
 }
 
 const runtimeErrors = new WeakMap<Page, string[]>()
-test.beforeEach(({ page }) => {
+test.beforeEach(async ({ page }) => {
+  await page.route('**/admin/api/doh/status', route => route.fulfill({ json: { enabled: true, running: false, cache_hits: 3, cache_misses: 1, coalesced: 2, responses_by_rcode: [], items: [] } }))
   const errors: string[] = []
   runtimeErrors.set(page, errors)
   page.on('pageerror', error => errors.push(error.message))
@@ -465,8 +466,8 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await expect(page.getByLabel('Upstream URL for clickhouse')).toBeVisible()
   await page.getByLabel('Enable mirror upstream proxy').check()
   await page.getByLabel('Enable DoH proxy').check()
-  await expect(page.getByLabel('Client DoH URL')).toHaveValue('https://updated.example/dns-query')
-  const dohUpstreams = page.getByRole('combobox', { name: 'DoH upstreams (failover in selection order)' })
+  await expect(page.getByLabel('Client URL', { exact: true })).toHaveValue('https://updated.example/dns-query')
+  const dohUpstreams = page.getByRole('combobox', { name: 'Upstream resolvers' })
   await selectChoice(page, dohUpstreams, 'Google · 8.8.8.8')
   await selectChoice(page, dohUpstreams, 'AliDNS · dns.alidns.com')
   await dohUpstreams.fill('https://resolver.example/custom/dns')
@@ -476,12 +477,11 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0)
   const dohSettings = page.locator('.runtime-config-group').filter({ has: page.getByRole('heading', { name: 'DNS over HTTPS (DoH)', exact: true }) })
   const upstreamBounds = await dohSettings.locator('.doh-upstreams').boundingBox()
-  const endpointBounds = await dohSettings.getByLabel('Client DoH URL').boundingBox()
+  const endpointBounds = await dohSettings.getByLabel('Client URL', { exact: true }).boundingBox()
   expect(Math.abs(upstreamBounds!.y - endpointBounds!.y)).toBeLessThanOrEqual(2)
   for (const field of await dohSettings.locator('.doh-settings-field').all()) {
-    const control = await field.locator('.ant-select, input').first().boundingBox()
-    const hint = await field.locator('small').first().boundingBox()
-    expect(hint!.y).toBeGreaterThanOrEqual(control!.y + control!.height)
+    expect(await field.locator('small').count()).toBe(0)
+    await expect(field.getByRole('button')).toBeVisible()
   }
   await dohSettings.screenshot({ path: test.info().outputPath('doh-upstreams-desktop.png') })
   expect(savedConfig?.doh.enabled).toBe(false)
@@ -561,7 +561,7 @@ test('operates the v1.3 cache, alerts, and adaptive upstream controls', async ({
   await expect(page.getByRole('heading', { name: 'Site identity & SEO' })).toBeVisible()
   await expect(page.getByLabel('Site title')).toHaveValue('Mirror Hub')
   await expect(page.getByLabel('Footer text')).toHaveValue('Private mirror service')
-  const siteFieldTops = await page.locator('.site-settings-fields > label').evaluateAll((labels) => labels.slice(0, 2).map((label) => label.querySelector('input')!.getBoundingClientRect().top))
+  const siteFieldTops = await page.locator('.site-settings-fields > label, .site-settings-fields > div').evaluateAll((labels) => labels.slice(0, 2).map((label) => label.querySelector('input')!.getBoundingClientRect().top))
   expect(Math.abs(siteFieldTops[0] - siteFieldTops[1])).toBeLessThanOrEqual(1)
   await page.getByRole('link', { name: 'Advanced', exact: true }).click()
   const nativeHttps = page.getByLabel('Enable native HTTPS')
@@ -928,7 +928,7 @@ test('configures SMTP, queues a test email, and resends an invitation', async ({
   const history = page.locator('.invitation-history')
   await expect(history.getByRole('heading', { name: '最近邀请' })).toBeVisible()
   await expect(history.getByRole('listitem')).toHaveCount(4)
-  await expect(history.getByRole('button')).toHaveCount(2)
+  await expect(history.getByRole('listitem').getByRole('button')).toHaveCount(2)
   for (const theme of ['light', 'dark']) {
     await setTheme(page, theme)
     for (const width of [1440, 768, 414, 375, 320]) {
@@ -1831,8 +1831,15 @@ test('keeps settings actions compact and security and advanced forms readable', 
       expect(button!.y - input!.y - input!.height).toBeGreaterThanOrEqual(16)
     }
     if (route === 'advanced') {
-      await expect(page.locator('.runtime-config-group-head p').first()).toHaveCSS('font-size', '14px')
-      await expect(page.locator('.acme-config-grid small').first()).toHaveCSS('font-size', '14px')
+      const proxyHelp = page.locator('.runtime-config-group').filter({ has: page.getByRole('heading', { name: 'Proxy and request headers', exact: true }) }).getByRole('button', { name: 'Help', exact: true })
+      await proxyHelp.focus()
+      await expect(page.getByRole('tooltip')).toContainText('Only forwarding headers from trusted reverse proxies')
+      await page.keyboard.press('Tab')
+      await expect(page.locator('.runtime-config-group-head p')).toHaveCount(0)
+      await page.locator('button[aria-description="Certificate domains help"]').click()
+      await expect(page.getByRole('tooltip', { name: /Separate domains with commas/ })).toContainText('Wildcard domains require DNS-01')
+      await page.locator('button[aria-description="Certificate domains help"]').click()
+      await page.keyboard.press('Tab')
       await expect(page.locator('.acme-status-card .ant-descriptions')).toBeVisible()
       const cache = page.locator('.runtime-config-group').filter({ has: page.getByRole('heading', { name: 'Small-object disk cache', exact: true }) })
       const rows = await cache.locator('.runtime-config-fields > label').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()))
@@ -2396,4 +2403,88 @@ test('shows the enabled DoH endpoint and setup guide across languages, themes an
   enabled = false
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(page.locator('.doh-guide')).toHaveCount(0)
+})
+
+test('configures DoH ECS and limits and checks saved upstreams without losing unsaved edits', async ({ page }) => {
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
+  const config = { ...adminConfig, doh: { ...adminConfig.doh, enabled: true, ecs_mode: 'passthrough', ecs_auto_upstreams: [] as string[], requests_per_minute: 6000 } }
+  let saved: typeof config | undefined
+  await page.route('**/admin/api/config', async route => {
+    if (route.request().method() === 'PUT') { saved = route.request().postDataJSON() as typeof config; await route.fulfill({ json: { config: saved, restart_required: [] } }); return }
+    await route.fulfill({ json: config })
+  })
+  await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
+  const endpoint = `https://resolver.example/${'long-path/'.repeat(12)}dns-query`
+  const report = { enabled: true, running: false, cache_hits: 3, cache_misses: 1, coalesced: 20, responses_by_rcode: [0, 0, 2], items: [{ endpoint, healthy: true, latency_ms: 25, checked_at: 1700000000, checks_passed: 4, attempts: 30, failures: 1, timeouts: 1, failovers: 1 }] }
+  await page.route('**/admin/api/doh/status', route => route.fulfill({ json: report }))
+  let checks = 0
+  await page.route('**/admin/api/doh/check', async route => {
+    expect(route.request().method()).toBe('POST')
+    checks += 1
+    await route.fulfill(checks === 1 ? { status: 409, json: {} } : { json: report })
+  })
+  await page.goto('/admin')
+  await page.getByRole('link', { name: 'Advanced', exact: true }).click()
+  const settings = page.locator('.runtime-config-group').filter({ has: page.getByRole('heading', { name: 'DNS over HTTPS (DoH)', exact: true }) })
+  await expect(settings.locator('.doh-status-summary')).toHaveText('Cache hits 75.0%Coalesced 20SERVFAIL 2')
+  await expect(settings.getByRole('combobox', { name: 'Upstreams for automatic ECS' })).toHaveCount(0)
+  await settings.getByRole('button', { name: 'About upstream resolvers', exact: true }).focus()
+  await expect(page.getByRole('tooltip')).toContainText('10 minutes')
+  await page.keyboard.press('Tab')
+  await selectChoice(page, page.getByRole('combobox', { name: 'ECS policy', exact: true }), 'Add client subnet automatically')
+  await expect(page.getByRole('combobox', { name: 'Upstreams for automatic ECS' })).toHaveCount(0)
+  await page.getByLabel('Requests per IP per minute').fill('1234')
+  await page.getByRole('button', { name: 'Check upstreams' }).click()
+  await expect(settings.getByRole('alert')).toContainText('A check is running')
+  await page.getByRole('button', { name: 'Check upstreams' }).click()
+  await expect(settings.getByRole('alert')).toHaveCount(0)
+  await expect(page.getByLabel('Requests per IP per minute')).toHaveValue('1234')
+  for (const theme of ['light', 'dark']) {
+    await setTheme(page, theme)
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+      const identity = settings.locator('.doh-health-identity').first()
+      const health = settings.locator('.doh-health-table .ant-tag').first()
+      const latency = settings.locator('.doh-latency').first()
+      expect((await identity.boundingBox())!.height).toBeLessThan(64)
+      expect((await health.boundingBox())!.x + (await health.boundingBox())!.width).toBeLessThanOrEqual((await latency.boundingBox())!.x)
+      await settings.screenshot({ path: test.info().outputPath(`doh-runtime-${theme}-${width}.png`) })
+    }
+  }
+  await page.getByTitle('Language').click()
+  await expect(settings.getByRole('button', { name: '检测上游' })).toBeVisible()
+  await expect(settings.getByText('正常', { exact: true })).toBeVisible()
+  await expect(settings.getByText('25 ms', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('每 IP 每分钟请求上限')).toHaveValue('1234')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect.poll(() => saved?.doh).toEqual({ ...config.doh, ecs_mode: 'auto', ecs_auto_upstreams: [], requests_per_minute: 1234 })
+})
+
+test('preserves settings drafts during statistics refresh and rejects stale saves', async ({ page }) => {
+  await page.route('**/admin/api/auth/session', route => route.fulfill({ json: { username: 'admin', role: 'super_admin' } }))
+  let writes = 0
+  await page.route('**/admin/api/config', async route => {
+    if (route.request().method() === 'PUT') {
+      writes++
+      expect(route.request().headers()['if-match']).toBe('"revision-one"')
+      await route.fulfill({ status: 412, json: { code: 'config_conflict' } })
+    } else await route.fulfill({ headers: { ETag: '"revision-one"' }, json: adminConfig })
+  })
+  await page.route('**/admin/api/stats', route => route.fulfill({ json: adminStats }))
+  await page.goto('/admin/access')
+  await page.getByLabel('Public URL', { exact: true }).fill('https://unsaved.example')
+  await expect(page.getByText('1 unsaved setting groups')).toBeVisible()
+  await page.getByRole('link', { name: 'Overview', exact: true }).click()
+  await page.getByRole('button', { name: 'Refresh stats', exact: true }).click()
+  await page.getByRole('link', { name: 'Access & quotas', exact: true }).click()
+  await expect(page.getByLabel('Public URL', { exact: true })).toHaveValue('https://unsaved.example')
+  await page.getByRole('button', { name: 'Save configuration', exact: true }).click()
+  await expect(page.getByText('Configuration changed elsewhere')).toBeVisible()
+  expect(writes).toBe(1)
+  await expect(page.getByLabel('Public URL', { exact: true })).toHaveValue('https://unsaved.example')
+  await page.getByRole('button', { name: 'Reload configuration', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Reload configuration' })).toBeVisible()
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(page.getByLabel('Public URL', { exact: true })).toHaveValue('https://unsaved.example')
 })

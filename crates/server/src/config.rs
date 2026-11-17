@@ -87,6 +87,28 @@ pub struct DohConfig {
     pub enabled: bool,
     #[serde(default = "default_doh_upstreams")]
     pub upstreams: Vec<String>,
+    /// Do not add client network information unless explicitly enabled.
+    #[serde(default = "default_doh_ecs")]
+    pub ecs_mode: DohEcsMode,
+    /// Empty means every upstream in automatic mode; otherwise only this subset.
+    #[serde(default)]
+    pub ecs_auto_upstreams: Vec<String>,
+    #[serde(default = "default_doh_rate_limit")]
+    pub requests_per_minute: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DohEcsMode {
+    Passthrough,
+    Auto,
+}
+
+fn default_doh_ecs() -> DohEcsMode {
+    DohEcsMode::Passthrough
+}
+fn default_doh_rate_limit() -> u32 {
+    2000
 }
 
 fn default_doh_upstreams() -> Vec<String> {
@@ -98,12 +120,37 @@ impl Default for DohConfig {
         Self {
             enabled: false,
             upstreams: default_doh_upstreams(),
+            ecs_mode: DohEcsMode::Passthrough,
+            ecs_auto_upstreams: Vec::new(),
+            requests_per_minute: default_doh_rate_limit(),
         }
     }
 }
 
 impl DohConfig {
+    pub fn cache_namespace(&self) -> Vec<String> {
+        let mut namespace = self.upstreams.clone();
+        if !self.ecs_auto_upstreams.is_empty() {
+            namespace.push(format!(
+                "ecs:{:?}:{:?}",
+                self.ecs_mode, self.ecs_auto_upstreams
+            ));
+        }
+        namespace
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
+        let selected: std::collections::HashSet<_> = self.ecs_auto_upstreams.iter().collect();
+        if selected.len() != self.ecs_auto_upstreams.len()
+            || selected
+                .iter()
+                .any(|endpoint| !self.upstreams.contains(endpoint))
+        {
+            anyhow::bail!("doh.ecs_auto_upstreams must be a unique subset of doh.upstreams");
+        }
+        if self.requests_per_minute == 0 || self.requests_per_minute > 600_000 {
+            anyhow::bail!("doh.requests_per_minute must be between 1 and 600000");
+        }
         if (self.enabled && self.upstreams.is_empty()) || self.upstreams.len() > 16 {
             anyhow::bail!("doh.upstreams requires at least one endpoint when enabled, and at most 16 endpoints");
         }

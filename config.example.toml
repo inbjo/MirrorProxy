@@ -29,28 +29,23 @@ listen_addr = "127.0.0.1:3001"
 local_only = true
 
 # Optional RFC 8484 DNS-over-HTTPS relay at /dns-query (not DoT/port 853).
-# Initial settings; existing installations use the persisted admin configuration.
-# Configure in Administration > Advanced settings; saves apply immediately.
-# Built-in and custom public HTTPS endpoints on port 443 are supported.
-# Domain names and custom paths are allowed; credentials/query/fragment,
-# private/special IPs, redirects and DNS rebinding are rejected.
-# Select at least one upstream when enabled (maximum 16 unique endpoints).
-# Entries are tried in order on transport/HTTP errors or invalid DNS responses.
+# DNS is exempt from all traffic quotas and persistent traffic billing.
+# IP access, user-subdomain and team-target policies still apply.
 [doh]
 enabled = false
+# Probe every 10 minutes; prefer the fastest healthy endpoint. Try at most two,
+# each with a 3s deadline covering connection, headers and the full DNS body.
 upstreams = ["https://1.1.1.1/dns-query"]
-# Examples: https://dns.google/dns-query, https://dns.quad9.net/dns-query,
-# https://dns.alidns.com/dns-query, https://doh.pub/dns-query,
-# https://doh.dns.sb/dns-query, https://unfiltered.adguard-dns.com/dns-query.
-# Queries without ECS automatically include the verified public client subnet:
-# IPv4 /24, IPv6 /56. Existing ECS (including /0 opt-out) is preserved.
-# Uses trusted_proxies for real client IPs; private/unknown IPs are not added.
-# Cache keys include ECS; automatic ECS is hidden in downstream replies.
-# Bounded in-memory DNS TTL cache (1024 entries / 16 MiB), cleared on restart.
-# Independent of the package disk-cache toggle. Cache hits retain access,
-# rate-limit and quota checks. Downstream HTTP responses remain no-store.
-# No client credential forwarding, custom CA, insecure TLS or outbound proxy
-# settings apply to this dedicated resolver client.
+# New installations: preserve client ECS without adding identifying metadata.
+# Missing ECS settings also default to "passthrough".
+# "auto" adds verified public IPv4 /24 or IPv6 /56; explicit /0 is preserved.
+ecs_mode = "passthrough"
+# Optional subset in auto mode. Empty means all configured upstreams.
+ecs_auto_upstreams = []
+# Independent per-client-IP DNS limit, always active; package limits are separate.
+requests_per_minute = 2000
+# DNS TTL cache: 1024 entries / 16 MiB, memory only. Identical concurrent
+# queries share one upstream request, preserving each caller's transaction ID.
 
 [upstreams]
 # Every string field accepts one or more HTTP(S) endpoints separated by commas.

@@ -59,6 +59,8 @@ fn maintain_capacity(cache: &CacheConfig, previous_bytes: u64, written_bytes: u6
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct DiskCacheMetadata {
+    #[serde(default)]
+    pub(super) body_sha256: Option<String>,
     pub(super) status: u16,
     pub(super) headers: Vec<(String, String)>,
     #[serde(default)]
@@ -108,6 +110,10 @@ pub(super) fn load_disk_cache(
         return None;
     }
     let body = fs::read(&body_path).ok()?;
+    // Legacy unverified pairs and interrupted replacements are safe misses.
+    if metadata.body_sha256.as_deref() != Some(format!("{:x}", Sha256::digest(&body)).as_str()) {
+        return None;
+    }
     let _ = fs::OpenOptions::new()
         .write(true)
         .open(&body_path)
@@ -164,6 +170,7 @@ pub(super) fn write_disk_cache(
         return;
     };
     let metadata = DiskCacheMetadata {
+        body_sha256: Some(format!("{:x}", Sha256::digest(body))),
         status: status.as_u16(),
         headers: headers
             .iter()
@@ -186,15 +193,13 @@ pub(super) fn write_disk_cache(
         && serde_json::to_vec(&metadata)
             .ok()
             .is_some_and(|value| fs::write(&metadata_tmp, value).is_ok())
+        && fs::rename(&body_tmp, &body_path).is_ok()
+        && fs::rename(&metadata_tmp, &metadata_path).is_ok()
     {
-        if fs::rename(&body_tmp, &body_path).is_ok()
-            && fs::rename(&metadata_tmp, &metadata_path).is_ok()
-        {
-            maintain_capacity(cache, previous_bytes, body.len() as u64);
-        }
-        let _ = fs::remove_file(body_tmp);
-        let _ = fs::remove_file(metadata_tmp);
+        maintain_capacity(cache, previous_bytes, body.len() as u64);
     }
+    let _ = fs::remove_file(body_tmp);
+    let _ = fs::remove_file(metadata_tmp);
 }
 
 pub(super) fn refresh_cache_metadata(
@@ -455,6 +460,104 @@ mod tests {
         .unwrap();
         cache_work(true, move || {
             purge_disk_cache(&cache).unwrap();
+            fs::remove_dir_all(directory).unwrap();
+        })
+        .await
+        .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod crash_tests {
+    use super::*;
+    #[tokio::test]
+    async fn mismatched_and_legacy_pairs_are_cache_misses() {
+        let directory =
+            std::env::temp_dir().join(format!("mirrorproxy-cache-crash-{}", uuid::Uuid::new_v4()));
+        let cache = CacheConfig {
+            enabled: true,
+            directory: directory.to_string_lossy().into(),
+            ..Default::default()
+        };
+        let url = Url::parse("https://example.com/package").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CACHE_CONTROL, "max-age=60".parse().unwrap());
+        let c = cache.clone();
+        let u = url.clone();
+        cache_work(true, move || {
+            write_disk_cache(
+                &c,
+                &u,
+                &HeaderMap::new(),
+                StatusCode::OK,
+                &headers,
+                b"old payload",
+            )
+        })
+        .await
+        .unwrap();
+        assert!(load_disk_cache(&cache, &url, &HeaderMap::new()).is_some());
+        let (body, meta) = cache_paths(&cache, &url).unwrap();
+        fs::write(&body, b"new payload").unwrap();
+        assert!(load_disk_cache(&cache, &url, &HeaderMap::new()).is_none());
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&meta).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("body_sha256");
+        fs::write(&meta, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(load_disk_cache(&cache, &url, &HeaderMap::new()).is_none());
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod disk_full_tests {
+    use super::*;
+    #[tokio::test]
+    async fn disk_full_during_cache_write_preserves_the_previous_valid_entry() {
+        let directory =
+            std::env::temp_dir().join(format!("mirrorproxy-full-{}", uuid::Uuid::new_v4()));
+        let cache = CacheConfig {
+            enabled: true,
+            directory: directory.to_string_lossy().into(),
+            ..Default::default()
+        };
+        let url = Url::parse("https://example.com/package").unwrap();
+        cache_work(true, move || {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::CACHE_CONTROL, "max-age=60".parse().unwrap());
+            write_disk_cache(
+                &cache,
+                &url,
+                &HeaderMap::new(),
+                StatusCode::OK,
+                &headers,
+                b"original",
+            );
+            let (body, _) = cache_paths(&cache, &url).unwrap();
+            let temporary = body.with_extension("body.tmp");
+            // A kernel ENOSPC device gives a deterministic disk-full fault without filling a disk.
+            std::os::unix::fs::symlink("/dev/full", &temporary).unwrap();
+            assert_eq!(
+                fs::write(&temporary, b"replacement")
+                    .unwrap_err()
+                    .raw_os_error(),
+                Some(28)
+            );
+            write_disk_cache(
+                &cache,
+                &url,
+                &HeaderMap::new(),
+                StatusCode::OK,
+                &headers,
+                b"replacement",
+            );
+            assert_eq!(
+                load_disk_cache(&cache, &url, &HeaderMap::new())
+                    .unwrap()
+                    .body,
+                b"original"
+            );
+            assert!(!temporary.exists());
             fs::remove_dir_all(directory).unwrap();
         })
         .await

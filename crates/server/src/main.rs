@@ -2,10 +2,16 @@ use admin_billing::*;
 mod acme;
 mod acme_dns;
 mod admin_billing;
+mod admin_config;
 mod alerts;
 mod config;
 mod database;
 mod doh;
+mod maintenance;
+mod rate_limit;
+mod runtime;
+use admin_config::{admin_config, update_admin_config};
+use rate_limit::RateLimiter;
 mod download;
 mod email;
 mod geoip;
@@ -195,12 +201,14 @@ enum ConfigCommand {
 
 #[derive(Clone)]
 pub struct AppState {
-    config: Arc<RwLock<Arc<Config>>>,
+    runtime: Arc<RwLock<runtime::RuntimeState>>,
+    config_update: Arc<tokio::sync::Mutex<()>>,
+    maintenance: Arc<maintenance::Health>,
     database: Arc<Database>,
-    client: Arc<RwLock<Client>>,
+
     rate_limiter: Arc<RateLimiter>,
     admin_login_limiter: Arc<AdminLoginRateLimiter>,
-    webauthn: Arc<RwLock<Option<Arc<Webauthn>>>>,
+
     discoverable_challenges: Arc<DiscoverableChallenges>,
     observability: Arc<Observability>,
     geoip: Arc<GeoIpService>,
@@ -210,10 +218,6 @@ pub struct AppState {
     upstream_selector: Arc<upstream_selection::UpstreamSelector>,
     downloads: Arc<download::Runtime>,
     doh_cache: Arc<doh::Cache>,
-}
-
-pub struct RateLimiter {
-    windows: Mutex<HashMap<String, VecDeque<Instant>>>,
 }
 
 pub struct AdminLoginRateLimiter {
@@ -255,17 +259,10 @@ impl DiscoverableChallenges {
 
 impl AppState {
     pub fn config(&self) -> Arc<Config> {
-        self.config
-            .read()
-            .expect("runtime config lock poisoned")
-            .clone()
+        runtime::request_config().unwrap_or_else(|| self.runtime.read().unwrap().config.clone())
     }
-
     pub fn client(&self) -> Client {
-        self.client
-            .read()
-            .expect("upstream client lock poisoned")
-            .clone()
+        runtime::request_client().unwrap_or_else(|| self.runtime.read().unwrap().client.clone())
     }
 
     /// Uses the configured external URL when present. Otherwise, URLs embedded
@@ -653,6 +650,7 @@ impl BuiltApplication {
 }
 
 async fn serve_http(mut application: BuiltApplication) -> anyhow::Result<()> {
+    let shutdown_state = application.state.clone();
     let addr: SocketAddr = application
         .config
         .listen_addr
@@ -666,8 +664,8 @@ async fn serve_http(mut application: BuiltApplication) -> anyhow::Result<()> {
         listener,
         public_router.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal());
-    if application.config.management.enabled {
+    .with_graceful_shutdown(maintenance::stop_accepting(shutdown_state.clone()));
+    let result = if application.config.management.enabled {
         let management_addr = application
             .config
             .management
@@ -685,12 +683,15 @@ async fn serve_http(mut application: BuiltApplication) -> anyhow::Result<()> {
                 .layer(middleware::from_fn(management_plane_guard))
                 .into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown_signal());
-        tokio::try_join!(public_server, management_server)?;
+        .with_graceful_shutdown(maintenance::stop_accepting(shutdown_state.clone()));
+        tokio::try_join!(public_server, management_server)
+            .map(|_| ())
+            .map_err(Into::into)
     } else {
-        public_server.await?;
-    }
-    Ok(())
+        public_server.await.map_err(Into::into)
+    };
+    maintenance::drain(&shutdown_state).await;
+    result
 }
 
 fn is_management_path(path: &str) -> bool {
@@ -704,6 +705,7 @@ async fn management_plane_guard(request: axum::extract::Request, next: Next) -> 
     let path = request.uri().path();
     if !is_management_path(path)
         && path != "/healthz"
+        && path != "/readyz"
         && path != "/version"
         && !path.starts_with("/assets/")
         && path != "/favicon.svg"
@@ -815,42 +817,45 @@ async fn serve_direct_https(mut application: BuiltApplication) -> anyhow::Result
         https_addr,
     ));
 
-    tokio::select! {
-        result = &mut http_task => {
-            https_handle.shutdown();
-            https_task.abort();
-            if let Some(task) = &management_task { task.abort(); }
-            flatten_server_task("HTTP", result)
-        }
-        result = &mut https_task => {
-            http_handle.shutdown();
-            http_task.abort();
-            if let Some(task) = &management_task { task.abort(); }
-            flatten_server_task("HTTPS", result)
-        }
-        result = async { management_task.as_mut().expect("guarded management task").await }, if management_task.is_some() => {
-            http_handle.shutdown();
-            https_handle.shutdown();
-            http_task.abort();
-            https_task.abort();
-            result.context("management server task failed")?.context("management server failed")
-        }
-        _ = shutdown_signal() => {
-            http_handle.graceful_shutdown(Some(Duration::from_secs(30)));
-            if https_ready_for_shutdown.load(Ordering::Acquire) {
-                https_handle.graceful_shutdown(Some(Duration::from_secs(30)));
-            } else {
-                https_task.abort();
-            }
-            let _ = tokio::time::timeout(Duration::from_secs(31), async {
-                let _ = tokio::join!(&mut http_task, &mut https_task);
-            }).await;
-            http_task.abort();
-            https_task.abort();
-            if let Some(task) = &management_task { task.abort(); }
-            Ok(())
-        }
-    }
+    let result = tokio::select! {
+       result = &mut http_task => {
+           https_handle.shutdown();
+           https_task.abort();
+           if let Some(task) = &management_task { task.abort(); }
+           flatten_server_task("HTTP", result)
+       }
+       result = &mut https_task => {
+           http_handle.shutdown();
+           http_task.abort();
+           if let Some(task) = &management_task { task.abort(); }
+           flatten_server_task("HTTPS", result)
+       }
+       result = async { management_task.as_mut().expect("guarded management task").await }, if management_task.is_some() => {
+           http_handle.shutdown();
+           https_handle.shutdown();
+           http_task.abort();
+           https_task.abort();
+           result.context("management server task failed")?.context("management server failed")
+       }
+       _ = shutdown_signal() => {
+            application.state.maintenance.draining.store(true, std::sync::atomic::Ordering::SeqCst);
+           http_handle.graceful_shutdown(Some(Duration::from_secs(30)));
+           if https_ready_for_shutdown.load(Ordering::Acquire) {
+               https_handle.graceful_shutdown(Some(Duration::from_secs(30)));
+           } else {
+               https_task.abort();
+           }
+           let _ = tokio::time::timeout(Duration::from_secs(31), async {
+               let _ = tokio::join!(&mut http_task, &mut https_task);
+           }).await;
+           http_task.abort();
+           https_task.abort();
+           if let Some(task) = &management_task { task.abort(); }
+           Ok(())
+       }
+    };
+    maintenance::drain(&application.state).await;
+    result
 }
 
 fn flatten_server_task(
@@ -1965,15 +1970,19 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
     }
 
     let state = AppState {
+        runtime: crate::runtime::RuntimeState::from_parts(
+            Arc::new(RwLock::new(Arc::new(config.clone()))),
+            Arc::new(RwLock::new(client)),
+            Arc::new(RwLock::new(webauthn)),
+        ),
+        config_update: Default::default(),
+        maintenance: Default::default(),
         downloads: Arc::new(download::Runtime::default()),
         doh_cache: Default::default(),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         discoverable_challenges: Default::default(),
-        webauthn: Arc::new(RwLock::new(webauthn)),
-        config: Arc::new(RwLock::new(Arc::new(config.clone()))),
         database: Arc::new(database),
-        client: Arc::new(RwLock::new(client)),
         observability,
         geoip,
         ip_access_policy: Arc::new(RwLock::new(ip_access_policy)),
@@ -1984,13 +1993,18 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
 
     email::spawn_email_outbox_worker(state.database.clone());
     if !cfg!(test) {
+        maintenance::spawn(state.clone());
         source_health::spawn_worker(state.clone());
+        doh::spawn_worker(state.clone());
         alerts::spawn_worker(state.clone());
     }
 
     let router = Router::new()
         .route("/healthz", get(healthz))
+        .route("/readyz", get(maintenance::ready))
         .route("/dns-query", get(doh::query).post(doh::query))
+        .route("/admin/api/doh/status", get(doh::status))
+        .route("/admin/api/doh/check", post(doh::check))
         .route("/version", get(version))
         .route("/metrics", get(metrics))
         .route("/api/config", get(public_config))
@@ -2377,6 +2391,7 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
             state.clone(),
             observability_middleware,
         ))
+        .layer(middleware::from_fn_with_state(state.clone(), runtime::pin))
         .with_state(state.clone());
     Ok(BuiltApplication {
         router,
@@ -2882,36 +2897,6 @@ fn initial_admin_credentials_log(
     )
 }
 
-impl RateLimiter {
-    fn new() -> Self {
-        Self {
-            windows: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn check(&self, key: &str, requests_per_minute: u32, now: Instant) -> bool {
-        let cutoff = now - Duration::from_secs(60);
-        let mut windows = self.windows.lock().expect("rate limit mutex poisoned");
-        windows.retain(|_, window| {
-            while window.front().is_some_and(|timestamp| *timestamp <= cutoff) {
-                window.pop_front();
-            }
-            !window.is_empty()
-        });
-        let window = windows.entry(key.to_string()).or_default();
-        while window.front().is_some_and(|timestamp| *timestamp <= cutoff) {
-            window.pop_front();
-        }
-
-        if window.len() >= requests_per_minute as usize {
-            return false;
-        }
-
-        window.push_back(now);
-        true
-    }
-}
-
 impl AdminLoginRateLimiter {
     fn new() -> Self {
         Self {
@@ -3037,11 +3022,23 @@ async fn rate_limit_middleware(
             .map(|context| format!("user:{}", context.user_id))
             .unwrap_or_else(|| format!("ip:{}", resolve_client_ip(&request, &config)))
     });
-    if config.rate_limit.enabled
+    let is_doh = target_code == Some("doh");
+    let rate_limit_key = if is_doh {
+        Some(format!("doh:ip:{}", resolve_client_ip(&request, &config)))
+    } else {
+        rate_limit_key
+    };
+    if (is_doh || config.rate_limit.enabled)
         && rate_limit_key.as_ref().is_some_and(|key| {
-            !state
-                .rate_limiter
-                .check(key, config.rate_limit.requests_per_minute, Instant::now())
+            !state.rate_limiter.check(
+                key,
+                if is_doh {
+                    config.doh.requests_per_minute
+                } else {
+                    config.rate_limit.requests_per_minute
+                },
+                Instant::now(),
+            )
         })
     {
         state.observability.observe_rejection("rate_limit");
@@ -3076,18 +3073,6 @@ async fn rate_limit_middleware(
             )
                 .into_response();
         }
-        let location = state.geoip.lookup(client_ip);
-        state.observability.observe_geoip_lookup(
-            if client_ip.is_ipv4() { "4" } else { "6" },
-            location.country_code.is_some(),
-        );
-        let (day, month) = quota_period(&config.quota.timezone);
-        let accounting_multiplier = if config.quota.bidirectional_accounting {
-            2
-        } else {
-            1
-        };
-        let reservation_bytes = QUOTA_RESERVATION_BYTES.saturating_mul(accounting_multiplier);
         let user_context = request.extensions().get::<UserRoutingContext>().cloned();
         if let Some(context) = &user_context {
             match state
@@ -3112,6 +3097,21 @@ async fn rate_limit_middleware(
                 }
             }
         }
+        if is_doh {
+            return next.run(request).await;
+        }
+        let location = state.geoip.lookup(client_ip);
+        state.observability.observe_geoip_lookup(
+            if client_ip.is_ipv4() { "4" } else { "6" },
+            location.country_code.is_some(),
+        );
+        let (day, month) = quota_period(&config.quota.timezone);
+        let accounting_multiplier = if config.quota.bidirectional_accounting {
+            2
+        } else {
+            1
+        };
+        let reservation_bytes = QUOTA_RESERVATION_BYTES.saturating_mul(accounting_multiplier);
         let global_limit = config
             .quota
             .enabled
@@ -4292,11 +4292,7 @@ async fn delete_admin_passkey(
 }
 
 fn webauthn_instance(state: &AppState) -> Option<Arc<Webauthn>> {
-    state
-        .webauthn
-        .read()
-        .expect("WebAuthn lock poisoned")
-        .clone()
+    runtime::request_webauthn().unwrap_or_else(|| state.runtime.read().unwrap().webauthn.clone())
 }
 
 fn passkey_not_configured_response() -> Response {
@@ -4341,6 +4337,20 @@ async fn change_admin_username(
     State(state): State<AppState>,
     Json(request): Json<AdminUsernameChangeRequest>,
 ) -> Response {
+    let pending = state.database.tasks.enter();
+    tokio::spawn(async move {
+        let _pending = pending;
+        change_admin_username_inner(headers, State(state), Json(request)).await
+    })
+    .await
+    .unwrap_or_else(|_| internal_error_response())
+}
+
+async fn change_admin_username_inner(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<AdminUsernameChangeRequest>,
+) -> Response {
     let identity = match authenticated_admin(&headers, &state).await {
         Ok(Some(identity)) => identity,
         Ok(None) => return unauthorized_response(),
@@ -4349,6 +4359,7 @@ async fn change_admin_username(
             return internal_error_response();
         }
     };
+    let _update = state.config_update.lock().await;
     let new_username = request.new_username.trim();
     if let Err(error) = validate_admin_username(new_username) {
         return bad_request_response(error.to_string());
@@ -4364,10 +4375,12 @@ async fn change_admin_username(
         .await
     {
         Ok(AdminUsernameChangeOutcome::Changed) => {
-            let mut config = state.config.write().expect("config lock poisoned");
+            let mut runtime = state.runtime.write().expect("config lock poisoned");
+            let config = &mut runtime.config;
             if config.webauthn.break_glass_username == identity.username {
-                Arc::make_mut(&mut config).webauthn.break_glass_username = new_username.to_string();
+                Arc::make_mut(config).webauthn.break_glass_username = new_username.to_string();
             }
+            runtime.revision = uuid::Uuid::new_v4().to_string();
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(AdminUsernameChangeOutcome::InvalidCredentials) => (
@@ -4432,17 +4445,6 @@ async fn change_admin_password(
     }
 }
 
-async fn admin_config(headers: HeaderMap, State(state): State<AppState>) -> Response {
-    match is_admin_authorized(&headers, &state).await {
-        Ok(true) => Json(admin_config_value((*state.config()).clone())).into_response(),
-        Ok(false) => unauthorized_response(),
-        Err(error) => {
-            tracing::error!(%error, "administrator authorization query failed");
-            internal_error_response()
-        }
-    }
-}
-
 async fn admin_cache_stats(headers: HeaderMap, State(state): State<AppState>) -> Response {
     match is_admin_authorized(&headers, &state).await {
         Ok(true) => {
@@ -4495,27 +4497,6 @@ async fn admin_cache_purge(headers: HeaderMap, State(state): State<AppState>) ->
 struct AdminConfigUpdateResponse {
     config: serde_json::Value,
     restart_required: Vec<&'static str>,
-}
-
-fn admin_config_value(mut config: Config) -> serde_json::Value {
-    let has_password = config.outbound_proxy.password.is_some();
-    let has_alert_webhook = !config.alerts.webhook_url.is_empty();
-    config.outbound_proxy.password = None;
-    config.alerts.webhook_url.clear();
-    let mut value = serde_json::to_value(config).expect("configuration is serializable");
-    if let Some(outbound_proxy) = value
-        .get_mut("outbound_proxy")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        outbound_proxy.insert("has_password".into(), has_password.into());
-    }
-    if let Some(alerts) = value
-        .get_mut("alerts")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        alerts.insert("has_webhook_url".into(), has_alert_webhook.into());
-    }
-    value
 }
 
 #[derive(Serialize)]
@@ -4648,6 +4629,20 @@ async fn admin_acme_config(headers: HeaderMap, State(state): State<AppState>) ->
 async fn update_admin_acme_config(
     headers: HeaderMap,
     State(state): State<AppState>,
+    Json(request): Json<AcmeConfig>,
+) -> Response {
+    let pending = state.database.tasks.enter();
+    tokio::spawn(async move {
+        let _pending = pending;
+        update_admin_acme_config_inner(headers, State(state), Json(request)).await
+    })
+    .await
+    .unwrap_or_else(|_| internal_error_response())
+}
+
+async fn update_admin_acme_config_inner(
+    headers: HeaderMap,
+    State(state): State<AppState>,
     Json(mut next): Json<AcmeConfig>,
 ) -> Response {
     let identity = match require_super_admin(&headers, &state).await {
@@ -4659,6 +4654,7 @@ async fn update_admin_acme_config(
             "ACME settings are managed by environment variables and cannot be changed in the admin console",
         );
     }
+    let _update = state.config_update.lock().await;
     let current = match state.database.acme_settings().await {
         Ok(Some(settings)) => settings,
         Ok(None) => state.config().acme.clone(),
@@ -4680,8 +4676,11 @@ async fn update_admin_acme_config(
         tracing::error!(%error, "failed to save ACME settings");
         return internal_error_response();
     }
-    Arc::make_mut(&mut state.config.write().expect("runtime config lock poisoned")).acme =
-        next.clone();
+    {
+        let mut runtime = state.runtime.write().unwrap();
+        Arc::make_mut(&mut runtime.config).acme = next.clone();
+        runtime.revision = uuid::Uuid::new_v4().to_string();
+    }
     Json(admin_acme_config_value(&next, false, true)).into_response()
 }
 
@@ -5154,162 +5153,6 @@ async fn admin_audit_log(
             internal_error_response()
         }
     }
-}
-
-async fn update_admin_config(
-    headers: HeaderMap,
-    State(state): State<AppState>,
-    Json(mut next_config): Json<Config>,
-) -> Response {
-    let identity = match authenticated_admin(&headers, &state).await {
-        Ok(Some(identity)) => identity,
-        Ok(None) => return unauthorized_response(),
-        Err(error) => {
-            tracing::error!(%error, "administrator authorization query failed");
-            return internal_error_response();
-        }
-    };
-
-    let current = state.config();
-    if next_config.download != current.download && identity.role != "super_admin" {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error":"super administrator access required"})),
-        )
-            .into_response();
-    }
-    if next_config.alerts.webhook_url.trim().is_empty()
-        && !current.alerts.webhook_url.trim().is_empty()
-    {
-        next_config.alerts.webhook_url = current.alerts.webhook_url.clone();
-    }
-    if next_config
-        .outbound_proxy
-        .username
-        .as_deref()
-        .is_none_or(|username| username.trim().is_empty())
-    {
-        next_config.outbound_proxy.username = None;
-        next_config.outbound_proxy.password = None;
-    } else if next_config.outbound_proxy.password.is_none()
-        && next_config.outbound_proxy.username == current.outbound_proxy.username
-    {
-        next_config.outbound_proxy.password = current.outbound_proxy.password.clone();
-    }
-    // ACME settings use a dedicated super-admin endpoint so secrets never pass
-    // through the general runtime configuration API.
-    next_config.acme = current.acme.clone();
-    if next_config.alerts.enabled && next_config.alerts.email_enabled {
-        match state.database.smtp_settings().await {
-            Ok(Some(settings)) if settings.enabled => {}
-            Ok(_) => {
-                return (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({
-                        "error": "SMTP must be enabled before email alerts can be enabled"
-                    })),
-                )
-                    .into_response();
-            }
-            Err(error) => {
-                tracing::error!(%error, "failed to validate SMTP for email alerts");
-                return internal_error_response();
-            }
-        }
-    }
-    if let Err(error) = next_config.validate() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": error.to_string() })),
-        )
-            .into_response();
-    }
-    // Private per-upstream credentials remain service-owned.
-    next_config.upstream_auth = current.upstream_auth.clone();
-    if next_config.listen_addr != current.listen_addr
-        || next_config.management != current.management
-        || next_config.database_path != current.database_path
-    {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "listener addresses and database_path cannot be changed through the runtime API; update the service configuration and restart"
-            })),
-        )
-            .into_response();
-    }
-    let next_webauthn = if next_config.webauthn != current.webauthn {
-        if next_config.webauthn.require_passkey {
-            match state
-                .database
-                .admins_without_minimum_passkeys(2, &next_config.webauthn.break_glass_username)
-                .await
-            {
-                Ok(admins) if admins.is_empty() => {}
-                Ok(admins) => {
-                    return conflict_response(&format!(
-                        "cannot require passkeys until every non-break-glass administrator has two passkeys: {}",
-                        admins.join(", ")
-                    ));
-                }
-                Err(error) => {
-                    tracing::error!(%error, "failed to verify administrator passkey readiness");
-                    return internal_error_response();
-                }
-            }
-        }
-        match build_webauthn(&next_config) {
-            Ok(webauthn) => Some(webauthn),
-            Err(error) => return bad_request_response(error.to_string()),
-        }
-    } else {
-        None
-    };
-    let next_client = if next_config.timeout.request_secs != current.timeout.request_secs
-        || next_config.outbound_proxy != current.outbound_proxy
-        || next_config.upstream_tls != current.upstream_tls
-    {
-        match build_upstream_client(&next_config) {
-            Ok(client) => Some(client),
-            Err(error) => return bad_request_response(error.to_string()),
-        }
-    } else {
-        None
-    };
-    let restart_required = if next_config.geoip != current.geoip {
-        vec!["geoip"]
-    } else {
-        Vec::new()
-    };
-    if let Err(error) = state
-        .database
-        .save_runtime_config(
-            &identity.username,
-            &next_config,
-            "update runtime configuration",
-        )
-        .await
-    {
-        tracing::error!(%error, "failed to save runtime configuration");
-        return internal_error_response();
-    }
-    if next_config.download != current.download {
-        state.downloads.cancel_all();
-    }
-    state.upstream_selector.configure(&next_config);
-    *state.config.write().expect("runtime config lock poisoned") = Arc::new(next_config.clone());
-    if let Some(client) = next_client {
-        *state.client.write().expect("upstream client lock poisoned") = client;
-        log_upstream_tls_configuration(&next_config);
-    }
-    if let Some(webauthn) = next_webauthn {
-        *state.webauthn.write().expect("WebAuthn lock poisoned") = webauthn;
-    }
-    Json(AdminConfigUpdateResponse {
-        config: admin_config_value(next_config),
-        restart_required,
-    })
-    .into_response()
 }
 
 #[cfg(test)]

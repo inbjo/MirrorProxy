@@ -46,6 +46,7 @@ pub struct DatabaseHealth {
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
+    pub(crate) tasks: std::sync::Arc<crate::maintenance::Tasks>,
     secrets: SecretCipher,
 }
 
@@ -256,7 +257,6 @@ pub struct ProxyTrafficRecord<'a> {
     pub reserved_bytes: u64,
     pub user_id: Option<i64>,
     pub group_id: Option<i64>,
-    pub request_event_retention_days: u32,
     pub location: &'a GeoLocation,
 }
 
@@ -438,6 +438,7 @@ impl Database {
             harden_private_file(Path::new(database_path))?;
         }
         let database = Self {
+            tasks: Default::default(),
             pool,
             secrets: SecretCipher::from_env()?,
         };
@@ -483,6 +484,20 @@ impl Database {
             .await?;
         self.migrate_local_accounts().await?;
         self.migrate_downloads().await?;
+        Ok(())
+    }
+
+    pub async fn ping(&self) -> anyhow::Result<()> {
+        sqlx::query("SELECT COUNT(*) FROM schema_migrations")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+    pub async fn prune_request_events(&self, retention_days: u32) -> anyhow::Result<()> {
+        let cutoff =
+            unix_timestamp().saturating_sub(i64::from(retention_days).saturating_mul(86400));
+        // Bound each maintenance transaction, continuing next minute if needed.
+        sqlx::query("DELETE FROM request_events WHERE id IN (SELECT id FROM request_events WHERE created_at < ? LIMIT 10000)").bind(cutoff).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -3159,13 +3174,6 @@ impl Database {
         .bind(bytes)
         .execute(&mut *transaction)
         .await?;
-        let cutoff = now.saturating_sub(
-            i64::from(record.request_event_retention_days).saturating_mul(24 * 60 * 60),
-        );
-        sqlx::query("DELETE FROM request_events WHERE created_at < ?")
-            .bind(cutoff)
-            .execute(&mut *transaction)
-            .await?;
         transaction.commit().await?;
         Ok(())
     }

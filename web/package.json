@@ -7,7 +7,7 @@
     "dev": "cross-env PORT=4173 umi dev",
     "build": "umi setup && tsc --noEmit && umi build && node scripts/check-browser-build.mjs",
     "preview": "umi preview --port 4173",
-    "pretest": "node scripts/check-docker-context.mjs && node scripts/check-browser-dependencies.mjs",
+    "pretest": "node scripts/check-docker-context.mjs && node scripts/check-browser-dependencies.mjs && node scripts/check-config-contract.mjs",
     "test": "vitest run",
     "test:toolchain": "node --test scripts/toolchain-compat.test.mjs scripts/audit-dependencies.test.mjs",
     "test:e2e": "playwright test",

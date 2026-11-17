@@ -76,3 +76,60 @@ API：管理员可使用 `POST /admin/api/local-users`，请求体为 `{username
 用户与计费组页面通过服务端分页摘要加载配额设置和月流量，每页 10 位用户，搜索也在服务端执行。`GET /admin/api/users/summary?page=1&per_page=10&search=` 要求超级管理员权限，返回 `{items,page,per_page,total}`；每项保留用户字段，增加 `billing` 和 `response_bytes`。每页最多 100 条。原有用户、配额和用量接口保持兼容。
 
 同一配置端点的不同请求共享上游健康状态，同一主机上不同仓库基础路径保持独立。状态最多保留 512 项，运行时配置更新会重置已学习状态。缓存 I/O 和密码计算使用有并发上限的阻塞任务。缓存容量采用增量统计，写入时至少每 30 秒重新核对目录，统计值超过上限时执行淘汰。现有缓存文件、配置和数据库结构保持兼容，无需迁移或修改配置；回滚使用旧版程序及其匹配的内嵌控制台。
+
+## 运行配置一致性与服务就绪检查
+
+配置接口返回强 `ETag`，保存时通过 `If-Match` 发送该值。旧版本保存返回 HTTP 412，
+不修改当前运行配置；后台保留草稿，并提供需要确认的重新加载入口。为兼容已有 API，
+不带 `If-Match` 的调用仍可使用，按串行、后写覆盖处理；新自动化应始终携带版本条件。
+进程重启后旧标签失效。校验后的配置、上游 HTTP 客户端和 WebAuthn 状态一起发布，
+已接受的保存即使调用方断开也会继续完成。刷新统计不覆盖未保存配置；后台按分组展示
+修改摘要，不展示密钥值。刷新/关闭页面或退出登录时提示未保存修改；在后台栏目之间
+切换会保留草稿。GeoIP 配置仍需重启生效。
+
+`GET /healthz` 继续表示进程存活；新增 `GET /readyz` 检查本地数据库和维护任务，
+返回 200 或 503、有界状态字段及 `Cache-Control: no-store`。它不检测公网上游，
+明细清理结果单独报告，某个公网 DNS 不可达不会使整个实例不就绪。停止服务时先将
+就绪状态设为不可用，HTTP 服务停止后最多等待 10 秒，让已跟踪的配置/计费任务完成。
+强制终止进程仍不能保证结算完成。
+
+请求明细清理改为每分钟执行，每批最多删除 10,000 行，不再放在每次计费事务内。
+配额预留和结算保持事务性。限流仍采用 60 秒滑动窗口，拆成 32 个分片，每片最多
+1,024 个活跃键和 131,072 个时间戳，达到容量时拒绝请求而不清掉活跃限额；每 15 秒
+清理过期键。
+
+磁盘缓存元数据新增正文 SHA-256 校验。旧缓存缺少摘要、正文和元数据不匹配时均视为
+未命中并重新获取，避免异常退出后返回错配内容。不需要数据库迁移；升级后可能出现
+短暂缓存未命中。回退无需删除配置或数据库。
+
+
+## 故障验收与容量基线
+
+CI 固定运行并发保存、DoH 慢请求、连接取消、SQLite 只读/写失败、缓存正文与元数据
+错配，以及 Linux ENOSPC 磁盘满写入测试。`local_doh_protocol_smoke` 将
+`scripts/smoke-doh.py` 接到本地模拟解析器，协议门禁不依赖公网 DNS。
+`scripts/smoke-shutdown.py` 启动独立的真实服务器，在下载过程中发送 SIGTERM，检查
+精确计费、预留额度释放和重启后的持久化结果。
+
+显式执行协议与基线检查：
+
+```sh
+cargo test --locked -p mirrorproxy-server local_doh_protocol_smoke -- --ignored --nocapture
+MIRRORPROXY_BASELINE_PATH=target/doh-baseline.json cargo test --locked -p mirrorproxy-server doh_capacity_baseline -- --ignored --nocapture
+python3 scripts/smoke-shutdown.py target/debug/mirrorproxy-server
+```
+
+CI 保存 `doh-capacity-baseline` 报告：128 次冷查询、1,024 次缓存命中、来自多个 IP 的
+64 次并发缓存命中，包含 p50/p95/p99 延迟和 Linux RSS 前后值。测试断言响应内容、事务 ID、
+上游调用次数及并发名额释放。耗时仅用于同主机、同编译配置的基线比较，不代表通用吞吐承诺，
+也不作为跨机器的硬性性能阈值。常规测试另外检查限流器/缓存容量和并发限流准确性。
+
+定时或手动触发的 **Public DoH verification** 工作流单独检测 Cloudflare 和 Google，
+保存逐提供商结果。公网故障会使该工作流失败，与本地确定性 CI 结果分开报告。
+可按当前主机连通性选择上游：
+
+```sh
+python3 scripts/smoke-doh-public.py target/debug/mirrorproxy-server --upstream https://dns.alidns.com/dns-query --upstream https://doh.pub/dns-query --report target/public-doh.json
+```
+
+进程测试均使用并清理临时配置/数据库，不操作已部署实例，无需升级依赖或迁移数据库。

@@ -77,6 +77,10 @@ fn inspect(packet: &[u8]) -> Option<Message> {
     (cursor == packet.len()).then_some(message)
 }
 
+pub(super) fn authenticated(packet: &[u8]) -> bool {
+    inspect(packet).is_some_and(|message| message.signed)
+}
+
 fn valid_ecs(data: &[u8], query: bool) -> bool {
     if data.len() < 4 {
         return false;

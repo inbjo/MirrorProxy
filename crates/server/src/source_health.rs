@@ -805,17 +805,19 @@ mod tests {
             .additional_os
             .insert("clickhouse".to_string(), format!("http://{available}"));
         let state = AppState {
+            runtime: crate::runtime::RuntimeState::from_parts(
+                std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(config.clone()))),
+                std::sync::Arc::new(std::sync::RwLock::new(reqwest::Client::new())),
+                std::sync::Arc::new(std::sync::RwLock::new(None)),
+            ),
+            config_update: Default::default(),
+            maintenance: Default::default(),
             downloads: std::sync::Arc::new(crate::download::Runtime::default()),
             doh_cache: Default::default(),
-            config: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
-                config.clone(),
-            ))),
             database: std::sync::Arc::new(database),
-            client: std::sync::Arc::new(std::sync::RwLock::new(reqwest::Client::new())),
             rate_limiter: std::sync::Arc::new(crate::RateLimiter::new()),
             admin_login_limiter: std::sync::Arc::new(crate::AdminLoginRateLimiter::new()),
             discoverable_challenges: Default::default(),
-            webauthn: std::sync::Arc::new(std::sync::RwLock::new(None)),
             observability: std::sync::Arc::new(crate::observability::Observability::new().unwrap()),
             geoip: std::sync::Arc::new(crate::geoip::GeoIpService::new(
                 false,
@@ -887,17 +889,19 @@ mod tests {
         let mut config = crate::config::Config::default();
         config.upstreams.docker_hub = format!("http://{address}");
         let state = AppState {
+            runtime: crate::runtime::RuntimeState::from_parts(
+                std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(config.clone()))),
+                std::sync::Arc::new(std::sync::RwLock::new(reqwest::Client::new())),
+                std::sync::Arc::new(std::sync::RwLock::new(None)),
+            ),
+            config_update: Default::default(),
+            maintenance: Default::default(),
             downloads: std::sync::Arc::new(crate::download::Runtime::default()),
             doh_cache: Default::default(),
-            config: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
-                config.clone(),
-            ))),
             database: std::sync::Arc::new(database),
-            client: std::sync::Arc::new(std::sync::RwLock::new(reqwest::Client::new())),
             rate_limiter: std::sync::Arc::new(crate::RateLimiter::new()),
             admin_login_limiter: std::sync::Arc::new(crate::AdminLoginRateLimiter::new()),
             discoverable_challenges: Default::default(),
-            webauthn: std::sync::Arc::new(std::sync::RwLock::new(None)),
             observability: std::sync::Arc::new(crate::observability::Observability::new().unwrap()),
             geoip: std::sync::Arc::new(crate::geoip::GeoIpService::new(
                 false,

@@ -496,7 +496,47 @@ html, .config-modal .ant-modal-body, .config-option code { scrollbar-width: thin
 
 .admin-console .security-subheading { font-size: 15px; margin: 8px 0; }
 
-.admin-console .doh-upstreams { width: 100%; min-width: 0; }
-
+.admin-console .doh-upstreams, .admin-console .doh-ecs-policy { width: 100%; min-width: 0; }
+.admin-console .doh-settings-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.admin-console .doh-settings-head h5 { margin: 0; }
+.admin-console .doh-settings-head .toggle-field { margin: 0; }
 .admin-console .doh-settings-fields { align-items: start; gap: 20px 24px; }
 .admin-console .doh-settings-field { display: grid; gap: 8px; min-width: 0; }
+.admin-console .doh-field-label { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.admin-console .doh-field-label label { margin: 0; }
+.admin-console .admin-help { display: inline-flex; flex: 0 0 28px; width: 28px; height: 28px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: help; }
+.admin-console .admin-help:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.admin-console .doh-runtime-status { display: grid; gap: 12px; min-width: 0; padding-top: 20px; border-top: 1px solid var(--line); }
+.admin-console .doh-status-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.admin-console .doh-status-toolbar h6 { margin: 0; font: inherit; font-weight: 600; }
+.admin-console .doh-status-summary { display: flex; gap: 8px 24px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+.admin-console .doh-status-summary strong { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.admin-console .doh-health-table .ant-table-cell { overflow-wrap: anywhere; }
+.admin-console .doh-health-identity { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.admin-console .doh-health-endpoint { min-width: 0; overflow-wrap: anywhere; }
+.admin-console .doh-latency, .admin-console .doh-health-table time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.admin-console .doh-disabled-note { color: var(--muted); }
+.doh-probe-details { display: grid; gap: 4px; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .admin-console .doh-health-table .ant-table-thead { display: none; }
+  .admin-console .doh-health-table .ant-table-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding-block: 8px; border-bottom: 1px solid var(--line); }
+  .admin-console .doh-health-table .ant-table-cell { border-bottom: 0; padding: 4px 8px; }
+  .admin-console .doh-health-table .ant-table-cell:first-child { grid-column: 1 / -1; }
+  .admin-console .doh-health-table .ant-table-cell:last-child { text-align: end; }
+}
+@media (max-width: 640px) {
+  .admin-console .doh-health-table colgroup { display: none; }
+  .admin-console .doh-health-table table,
+  .admin-console .doh-health-table .ant-table-tbody { display: block; width: 100%; }
+  .admin-console .doh-health-table .ant-table-cell { display: block; min-width: 0; width: auto; }
+  .admin-console .doh-status-summary > span { white-space: nowrap; }
+}
+
+.admin-console .admin-heading-help { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.admin-console .admin-heading-help :is(h2, h4, h5) { margin: 0; }
+.admin-console .admin-field-label { display: flex; align-items: center; gap: 4px; margin-bottom: 7px; }
+.admin-console .admin-field-label label { margin: 0; }
+.admin-console .config-fields > div:has(.admin-field-label), .admin-console .runtime-config-fields > div:has(.admin-field-label) { min-width: 0; }
+
+.admin-console .admin-field-label .admin-help { height: 1.6em; font-size: 12px; }
+.admin-console .advanced-settings .admin-field-label .admin-help { font-size: 14px; }

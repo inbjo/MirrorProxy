@@ -438,3 +438,81 @@ async fn concurrent_reservations_cannot_overbook_global_capacity() {
     assert_eq!(accepted, 10);
     assert_eq!(reserved(&database).await, LIMIT as i64);
 }
+
+#[tokio::test]
+async fn sqlite_write_failure_rolls_back_all_settlement_tables_and_can_be_retried() {
+    let (database, _) = Database::open(":memory:").await.unwrap();
+    assert!(database
+        .try_reserve_monthly_bytes(MONTH, LIMIT, RESERVED)
+        .await
+        .unwrap());
+    sqlx::query("CREATE TRIGGER reject_fixture_write BEFORE INSERT ON request_events BEGIN SELECT RAISE(FAIL, 'injected write failure'); END").execute(&database.pool).await.unwrap();
+    let location = GeoLocation::default();
+    let record = || ProxyTrafficRecord {
+        day: "2026-07-31",
+        month: MONTH,
+        target_code: "npm",
+        method: "GET",
+        path: "/npm/fixture",
+        status_code: 200,
+        response_bytes: 42,
+        delivered_response_bytes: 42,
+        stream_error: false,
+        reserved_bytes: RESERVED,
+        user_id: None,
+        group_id: None,
+        location: &location,
+    };
+    assert!(database.record_proxy_response(record()).await.is_err());
+    assert_eq!(reserved(&database).await, RESERVED as i64);
+    assert_eq!(
+        database
+            .traffic_overview(MONTH)
+            .await
+            .unwrap()
+            .response_bytes,
+        0
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM traffic_daily")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    sqlx::query("DROP TRIGGER reject_fixture_write")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    database.record_proxy_response(record()).await.unwrap();
+    assert_settled(&database, 42, 0).await;
+}
+
+#[tokio::test]
+async fn sqlite_read_only_rejects_reservations_without_changing_usage() {
+    let (database, _) = Database::open(":memory:").await.unwrap();
+    sqlx::query("PRAGMA query_only=ON")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        traffic(&database, None)
+            .reserve(Some(LIMIT), None, RESERVED)
+            .await,
+        Err(ReservationError::Database(_))
+    ));
+    assert_eq!(
+        database
+            .traffic_overview(MONTH)
+            .await
+            .unwrap()
+            .response_bytes,
+        0
+    );
+    sqlx::query("PRAGMA query_only=OFF")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(database
+        .try_reserve_monthly_bytes(MONTH, LIMIT, RESERVED)
+        .await
+        .unwrap());
+}

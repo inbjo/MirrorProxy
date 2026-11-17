@@ -40,7 +40,7 @@ struct TrafficRecord {
     accounting_multiplier: u64,
     user_id: Option<i64>,
     group_id: Option<i64>,
-    request_event_retention_days: u32,
+
     location: GeoLocation,
 }
 
@@ -56,7 +56,7 @@ impl ProxyTraffic {
         path: String,
         accounting_multiplier: u64,
         user_id: Option<i64>,
-        request_event_retention_days: u32,
+        _request_event_retention_days: u32,
         location: GeoLocation,
     ) -> Self {
         Self {
@@ -78,7 +78,6 @@ impl ProxyTraffic {
                 accounting_multiplier,
                 user_id,
                 group_id: None,
-                request_event_retention_days,
                 location,
             }),
         }
@@ -93,7 +92,9 @@ impl ProxyTraffic {
         // Cancellation must not lose a successful COMMIT before its guard is
         // armed. A dropped JoinHandle detaches this task; its returned guard is
         // then dropped and settles the reservation even if nobody receives it.
+        let pending = self.database.tasks.enter();
         let task = self.runtime.clone().spawn(async move {
+            let _pending = pending;
             let record = self.record.as_mut().expect("traffic has not been settled");
             if let Some(user_id) = record.user_id {
                 match self
@@ -143,7 +144,9 @@ impl ProxyTraffic {
         // Both EOF/error settlement and Drop use one detached task. Cancelling
         // the response while this task awaits SQLite cannot cancel the write
         // or start a second settlement.
+        let pending = database.tasks.enter();
         Some(self.runtime.spawn(async move {
+            let _pending = pending;
             if let Err(error) = database
                 .record_proxy_response(ProxyTrafficRecord {
                     day: &record.day,
@@ -160,7 +163,6 @@ impl ProxyTraffic {
                     reserved_bytes: record.reserved_bytes,
                     user_id: record.user_id,
                     group_id: record.group_id,
-                    request_event_retention_days: record.request_event_retention_days,
                     location: &record.location,
                 })
                 .await

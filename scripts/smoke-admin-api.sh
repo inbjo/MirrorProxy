@@ -76,6 +76,8 @@ curl --fail --silent --cookie "$cookie_jar" \
   -H "X-MirrorProxy-CSRF: $csrf_token" \
   -X DELETE "http://$management_addr/admin/api/cache" >/dev/null
 
+python3 "$(dirname "$0")/smoke-runtime-config.py" "http://$listen_addr" "$cookie_jar"
+
 python3 "$(dirname "$0")/smoke-local-accounts.py" "http://$listen_addr"
 
 kill "$server_pid"

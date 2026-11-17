@@ -13,6 +13,10 @@ pub struct Observability {
     proxy_stream_errors: IntCounterVec,
     rejections: IntCounterVec,
     geoip_lookups: IntCounterVec,
+    doh_cache: IntCounterVec,
+    doh_responses: IntCounterVec,
+    doh_upstream_duration: HistogramVec,
+    doh_failovers: IntCounterVec,
 }
 
 impl Observability {
@@ -85,6 +89,39 @@ impl Observability {
         registry.register(Box::new(geoip_lookups.clone()))?;
         registry.register(Box::new(build_info))?;
 
+        let doh_cache = IntCounterVec::new(
+            Opts::new(
+                "mirrorproxy_doh_cache_total",
+                "DNS cache lookups and coalesced requests.",
+            ),
+            &["result"],
+        )?;
+        let doh_responses = IntCounterVec::new(
+            Opts::new(
+                "mirrorproxy_doh_responses_total",
+                "DNS responses by bounded RCODE.",
+            ),
+            &["rcode"],
+        )?;
+        let doh_upstream_duration = HistogramVec::new(
+            HistogramOpts::new(
+                "mirrorproxy_doh_upstream_duration_seconds",
+                "DNS attempts by configured slot and outcome.",
+            )
+            .buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0]),
+            &["slot", "outcome"],
+        )?;
+        let doh_failovers = IntCounterVec::new(
+            Opts::new(
+                "mirrorproxy_doh_failovers_total",
+                "DNS backup attempts by configured slot.",
+            ),
+            &["slot"],
+        )?;
+        registry.register(Box::new(doh_cache.clone()))?;
+        registry.register(Box::new(doh_responses.clone()))?;
+        registry.register(Box::new(doh_upstream_duration.clone()))?;
+        registry.register(Box::new(doh_failovers.clone()))?;
         Ok(Self {
             registry,
             http_requests,
@@ -93,6 +130,10 @@ impl Observability {
             proxy_stream_errors,
             rejections,
             geoip_lookups,
+            doh_cache,
+            doh_responses,
+            doh_upstream_duration,
+            doh_failovers,
         })
     }
 
@@ -122,6 +163,31 @@ impl Observability {
         self.geoip_lookups
             .with_label_values(&[ip_version, if found { "found" } else { "unknown" }])
             .inc();
+    }
+
+    pub fn observe_doh_cache(&self, result: &str) {
+        self.doh_cache.with_label_values(&[result]).inc();
+    }
+    pub fn observe_doh_response(&self, rcode: u8, bytes: usize) {
+        self.doh_responses
+            .with_label_values(&[&(rcode & 15).to_string()])
+            .inc();
+        self.observe_proxy_body("doh", 200, bytes as u64, false);
+    }
+    pub fn observe_doh_upstream(
+        &self,
+        slot: usize,
+        outcome: &str,
+        duration: Duration,
+        failover: bool,
+    ) {
+        let slot = slot.min(15).to_string();
+        self.doh_upstream_duration
+            .with_label_values(&[&slot, outcome])
+            .observe(duration.as_secs_f64());
+        if failover {
+            self.doh_failovers.with_label_values(&[&slot]).inc();
+        }
     }
 
     pub fn encode(&self) -> anyhow::Result<(String, Vec<u8>)> {

@@ -120,12 +120,25 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Rust tests
         run: cargo test --workspace --locked
+      - name: Deterministic DoH protocol acceptance
+        run: cargo test --locked -p mirrorproxy-server local_doh_protocol_smoke -- --ignored --nocapture
+      - name: DNS cache and multi-IP capacity baseline
+        env:
+          MIRRORPROXY_BASELINE_PATH: target/doh-baseline.json
+        run: cargo test --locked -p mirrorproxy-server doh_capacity_baseline -- --ignored --nocapture
+      - name: Archive capacity baseline
+        uses: actions/upload-artifact@v6
+        with:
+          name: doh-capacity-baseline
+          path: target/doh-baseline.json
+          if-no-files-found: error
       - name: Controlled download public artifact smoke
         run: cargo test --locked -p mirrorproxy-server public_artifact_download_checks_payload_quota_stats_and_domain_block -- --ignored --nocapture
       - name: Real server and administration smoke
         run: |
           cargo build --locked -p mirrorproxy-server
           ./scripts/smoke-admin-api.sh target/debug/mirrorproxy-server
+          python3 scripts/smoke-shutdown.py target/debug/mirrorproxy-server
           python3 scripts/smoke-source-details.py target/debug/mirrorproxy-server
           node web/scripts/smoke-admin-browser.mjs target/debug/mirrorproxy-server
           node web/scripts/smoke-passkey-browser.mjs target/debug/mirrorproxy-server

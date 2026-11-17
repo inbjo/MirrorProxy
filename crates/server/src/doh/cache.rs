@@ -13,6 +13,7 @@ const MAX_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Default)]
 pub(crate) struct Cache {
     entries: Mutex<HashMap<[u8; 32], Entry>>,
+    pub(super) runtime: super::runtime::Runtime,
 }
 
 struct Entry {
@@ -21,7 +22,7 @@ struct Entry {
     ttl: u32,
 }
 
-fn key(upstreams: &[String], query: &[u8]) -> [u8; 32] {
+pub(super) fn key(upstreams: &[String], query: &[u8]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(upstreams.len().to_be_bytes());
     for endpoint in upstreams {
@@ -31,6 +32,9 @@ fn key(upstreams: &[String], query: &[u8]) -> [u8; 32] {
     // Preserve flags, case, QTYPE/QCLASS and every EDNS option (including ECS).
     // Only the transaction ID is independent of the answer.
     hash.update(&query[2..]);
+    if super::ecs::authenticated(query) {
+        hash.update(&query[..2]);
+    }
     hash.finalize().into()
 }
 
@@ -232,6 +236,12 @@ mod tests {
             other[offset] ^= 1;
             assert!(cache.get(&upstreams, &other, now).is_none());
         }
+        let mut signed = query.to_vec();
+        signed[11] = 1;
+        signed.extend_from_slice(&[0, 0, 250, 0, 255, 0, 0, 0, 0, 0, 0]);
+        let first = key(&upstreams, &signed);
+        signed[0] = 1;
+        assert_ne!(first, key(&upstreams, &signed));
         let mut edns = query.to_vec();
         edns[11] = 1;
         edns.extend_from_slice(&[0, 0, 41, 0x10, 0, 0, 0, 0x80, 0, 0, 0]);

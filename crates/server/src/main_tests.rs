@@ -207,7 +207,7 @@ async fn connection_diagnostics_explain_untrusted_https_without_granting_trust()
     assert_eq!(error["code"], "csrf_invalid");
     assert!(error.get("peer_ip").is_none());
     // Only an explicit administrator configuration change establishes trust.
-    Arc::make_mut(&mut state.config.write().unwrap())
+    Arc::make_mut(&mut state.runtime.write().unwrap().config)
         .trusted_proxies
         .push(peer.ip().to_string());
     let https_cookie = format!("{ADMIN_SESSION_COOKIE}={}", session.token);
@@ -564,7 +564,7 @@ async fn local_registration_respects_policy_origin_and_password_validation() {
         )))
         .with_state(state.clone());
     let billing = serde_json::json!({"quota_mode":"default","group_id":null,"monthly_gb":null});
-    Arc::make_mut(&mut state.config.write().unwrap())
+    Arc::make_mut(&mut state.runtime.write().unwrap().config)
         .registration
         .mode = "disabled".into();
     for (path, body, expected) in [
@@ -599,7 +599,7 @@ async fn local_registration_respects_policy_origin_and_password_validation() {
             .unwrap();
         assert_eq!(response.status(), expected);
     }
-    Arc::make_mut(&mut state.config.write().unwrap())
+    Arc::make_mut(&mut state.runtime.write().unwrap().config)
         .registration
         .mode = "invite_only".into();
     for (origin, password, expected) in [
@@ -619,7 +619,7 @@ async fn local_registration_respects_policy_origin_and_password_validation() {
 async fn invitation_registration_defaults_optional_display_name_to_account() {
     use tower::ServiceExt;
     let (state, _) = admin_test_state().await;
-    Arc::make_mut(&mut state.config.write().unwrap())
+    Arc::make_mut(&mut state.runtime.write().unwrap().config)
         .registration
         .mode = "invite_only".into();
     let app = Router::new()
@@ -690,15 +690,19 @@ async fn invitation_registration_defaults_optional_display_name_to_account() {
 async fn admin_test_state() -> (AppState, database::InitialAdminCredentials) {
     let (database, credentials) = Database::open(":memory:").await.unwrap();
     let state = AppState {
+        runtime: crate::runtime::RuntimeState::from_parts(
+            Arc::new(RwLock::new(Arc::new(Config::default()))),
+            Arc::new(RwLock::new(Client::new())),
+            Arc::new(RwLock::new(None)),
+        ),
+        config_update: Default::default(),
+        maintenance: Default::default(),
         downloads: Arc::new(crate::download::Runtime::default()),
         doh_cache: Default::default(),
-        config: Arc::new(RwLock::new(Arc::new(Config::default()))),
         database: Arc::new(database),
-        client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         discoverable_challenges: Default::default(),
-        webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
             false,
@@ -958,15 +962,19 @@ async fn routing_test_state(mode: &str) -> (AppState, database::UserAccount) {
         ..Config::default()
     };
     let state = AppState {
+        runtime: crate::runtime::RuntimeState::from_parts(
+            Arc::new(RwLock::new(Arc::new(config))),
+            Arc::new(RwLock::new(Client::new())),
+            Arc::new(RwLock::new(None)),
+        ),
+        config_update: Default::default(),
+        maintenance: Default::default(),
         downloads: Arc::new(crate::download::Runtime::default()),
         doh_cache: Default::default(),
-        config: Arc::new(RwLock::new(Arc::new(config))),
         database: Arc::new(database),
-        client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         discoverable_challenges: Default::default(),
-        webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
             false,
@@ -1071,8 +1079,8 @@ async fn cargo_h2c_upgrade_headers_are_not_forwarded_to_https_index() {
         .resolve("cargo-index.test", address)
         .build()
         .unwrap();
-    *state.config.write().unwrap() = Arc::new(config);
-    *state.client.write().unwrap() = client;
+    state.runtime.write().unwrap().config = Arc::new(config);
+    state.runtime.write().unwrap().client = client;
     let request = Request::builder()
         .uri("/crates-index/by/te/bytes")
         .header(header::CONNECTION, "Upgrade, HTTP2-Settings")
@@ -2047,15 +2055,19 @@ async fn admin_config_update_persists_and_applies_runtime_values() {
         .await
         .unwrap();
     let state = AppState {
+        runtime: crate::runtime::RuntimeState::from_parts(
+            Arc::new(RwLock::new(Arc::new(initial_config))),
+            Arc::new(RwLock::new(Client::new())),
+            Arc::new(RwLock::new(None)),
+        ),
+        config_update: Default::default(),
+        maintenance: Default::default(),
         downloads: Arc::new(crate::download::Runtime::default()),
         doh_cache: Default::default(),
-        config: Arc::new(RwLock::new(Arc::new(initial_config))),
         database: Arc::new(database.clone()),
-        client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         discoverable_challenges: Default::default(),
-        webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
             false,
@@ -2094,6 +2106,7 @@ async fn admin_config_update_persists_and_applies_runtime_values() {
             "https://8.8.8.8/dns-query".into(),
             "https://9.9.9.9/dns-query".into(),
         ],
+        ..Default::default()
     };
     next_config.alerts.enabled = true;
     next_config.alerts.webhook_url = "https://hooks.example/private-token".to_string();
@@ -2159,18 +2172,22 @@ async fn super_admin_updates_acme_settings_without_exposing_or_erasing_secrets()
         .await
         .unwrap();
     let state = AppState {
+        runtime: crate::runtime::RuntimeState::from_parts(
+            Arc::new(RwLock::new(Arc::new(Config {
+                acme: acme_settings.clone(),
+                ..Config::default()
+            }))),
+            Arc::new(RwLock::new(Client::new())),
+            Arc::new(RwLock::new(None)),
+        ),
+        config_update: Default::default(),
+        maintenance: Default::default(),
         downloads: Arc::new(crate::download::Runtime::default()),
         doh_cache: Default::default(),
-        config: Arc::new(RwLock::new(Arc::new(Config {
-            acme: acme_settings.clone(),
-            ..Config::default()
-        }))),
         database: Arc::new(database.clone()),
-        client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         discoverable_challenges: Default::default(),
-        webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
             false,
@@ -2250,21 +2267,24 @@ async fn admin_stats_returns_monthly_usage_and_targets() {
             reserved_bytes: 0,
             user_id: None,
             group_id: None,
-            request_event_retention_days: 30,
             location: &GeoLocation::default(),
         })
         .await
         .unwrap();
     let state = AppState {
+        runtime: crate::runtime::RuntimeState::from_parts(
+            Arc::new(RwLock::new(Arc::new(config))),
+            Arc::new(RwLock::new(Client::new())),
+            Arc::new(RwLock::new(None)),
+        ),
+        config_update: Default::default(),
+        maintenance: Default::default(),
         downloads: Arc::new(crate::download::Runtime::default()),
         doh_cache: Default::default(),
-        config: Arc::new(RwLock::new(Arc::new(config))),
         database: Arc::new(database.clone()),
-        client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         discoverable_challenges: Default::default(),
-        webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
             false,
@@ -2305,15 +2325,19 @@ async fn admin_audit_log_requires_authentication_and_returns_entries() {
         .await
         .unwrap();
     let state = AppState {
+        runtime: crate::runtime::RuntimeState::from_parts(
+            Arc::new(RwLock::new(Arc::new(Config::default()))),
+            Arc::new(RwLock::new(Client::new())),
+            Arc::new(RwLock::new(None)),
+        ),
+        config_update: Default::default(),
+        maintenance: Default::default(),
         downloads: Arc::new(crate::download::Runtime::default()),
         doh_cache: Default::default(),
-        config: Arc::new(RwLock::new(Arc::new(Config::default()))),
         database: Arc::new(database.clone()),
-        client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         discoverable_challenges: Default::default(),
-        webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
             false,
@@ -2371,15 +2395,19 @@ async fn admin_password_change_revokes_current_session() {
     let (database, credentials) = Database::open(":memory:").await.unwrap();
     let credentials = credentials.unwrap();
     let state = AppState {
+        runtime: crate::runtime::RuntimeState::from_parts(
+            Arc::new(RwLock::new(Arc::new(Config::default()))),
+            Arc::new(RwLock::new(Client::new())),
+            Arc::new(RwLock::new(None)),
+        ),
+        config_update: Default::default(),
+        maintenance: Default::default(),
         downloads: Arc::new(crate::download::Runtime::default()),
         doh_cache: Default::default(),
-        config: Arc::new(RwLock::new(Arc::new(Config::default()))),
         database: Arc::new(database.clone()),
-        client: Arc::new(RwLock::new(Client::new())),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         discoverable_challenges: Default::default(),
-        webauthn: Arc::new(RwLock::new(None)),
         observability: Arc::new(Observability::new().unwrap()),
         geoip: Arc::new(GeoIpService::new(
             false,
@@ -2459,7 +2487,7 @@ async fn admin_username_change_renames_account_and_revokes_current_session() {
         .unwrap()
         .is_some());
     assert_eq!(
-        state.config.read().unwrap().webauthn.break_glass_username,
+        state.config().webauthn.break_glass_username,
         "renamed-admin"
     );
 }
@@ -2568,12 +2596,12 @@ async fn successful_administrator_logins_do_not_consume_failure_limit() {
 
 #[tokio::test]
 async fn passkey_only_policy_blocks_password_except_for_break_glass_admin() {
-    let (mut state, credentials) = admin_test_state().await;
+    let (state, credentials) = admin_test_state().await;
     let mut config = Config::default();
     config.webauthn.enabled = true;
     config.webauthn.require_passkey = true;
     config.webauthn.break_glass_username = "recovery".to_string();
-    state.config = Arc::new(RwLock::new(Arc::new(config)));
+    state.runtime.write().unwrap().config = Arc::new(config);
 
     let blocked = admin_cookie_login(
         State(state.clone()),
@@ -2587,7 +2615,7 @@ async fn passkey_only_policy_blocks_password_except_for_break_glass_admin() {
     .await;
     assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
 
-    Arc::make_mut(&mut state.config.write().unwrap())
+    Arc::make_mut(&mut state.runtime.write().unwrap().config)
         .webauthn
         .break_glass_username = credentials.username.clone();
     let recovery = admin_cookie_login(
@@ -2605,7 +2633,7 @@ async fn passkey_only_policy_blocks_password_except_for_break_glass_admin() {
 
 #[tokio::test]
 async fn passkey_only_policy_rejects_new_administrator_accounts() {
-    let (mut state, credentials) = admin_test_state().await;
+    let (state, credentials) = admin_test_state().await;
     let session = state
         .database
         .login(&credentials.username, &credentials.password)
@@ -2615,7 +2643,7 @@ async fn passkey_only_policy_rejects_new_administrator_accounts() {
     let mut config = Config::default();
     config.webauthn.enabled = true;
     config.webauthn.require_passkey = true;
-    state.config = Arc::new(RwLock::new(Arc::new(config)));
+    state.runtime.write().unwrap().config = Arc::new(config);
     let mut headers = HeaderMap::new();
     headers.insert(
         header::COOKIE,
@@ -2677,7 +2705,7 @@ async fn super_admin_can_create_and_manage_a_routed_user() {
 
 #[tokio::test]
 async fn passwordless_email_login_creates_user_and_host_only_session() {
-    let (mut state, _) = admin_test_state().await;
+    let (state, _) = admin_test_state().await;
     let config = Config {
         public_base_url: "https://mirror.example.com".to_string(),
         registration: config::RegistrationConfig {
@@ -2686,7 +2714,7 @@ async fn passwordless_email_login_creates_user_and_host_only_session() {
         },
         ..Config::default()
     };
-    state.config = Arc::new(RwLock::new(Arc::new(config)));
+    state.runtime.write().unwrap().config = Arc::new(config);
     state
         .database
         .save_smtp_settings(
@@ -2753,7 +2781,7 @@ async fn passwordless_email_login_creates_user_and_host_only_session() {
 
 #[tokio::test]
 async fn invitation_login_is_bound_to_the_invited_email() {
-    let (mut state, _) = admin_test_state().await;
+    let (state, _) = admin_test_state().await;
     let config = Config {
         public_base_url: "https://mirror.example.com".to_string(),
         registration: config::RegistrationConfig {
@@ -2762,7 +2790,7 @@ async fn invitation_login_is_bound_to_the_invited_email() {
         },
         ..Config::default()
     };
-    state.config = Arc::new(RwLock::new(Arc::new(config)));
+    state.runtime.write().unwrap().config = Arc::new(config);
     state
         .database
         .save_smtp_settings(
@@ -2937,7 +2965,7 @@ async fn registration_links_use_validated_request_origin_without_public_config()
         origin.set_fragment(None);
         assert_eq!(origin.as_str(), expected);
     }
-    Arc::make_mut(&mut state.config.write().unwrap()).public_base_url =
+    Arc::make_mut(&mut state.runtime.write().unwrap().config).public_base_url =
         "https://configured.example".into();
     let request = Request::builder()
         .method("POST")
@@ -2954,7 +2982,7 @@ async fn registration_links_use_validated_request_origin_without_public_config()
         .as_str()
         .unwrap()
         .starts_with("https://configured.example/login#register="));
-    Arc::make_mut(&mut state.config.write().unwrap())
+    Arc::make_mut(&mut state.runtime.write().unwrap().config)
         .public_base_url
         .clear();
     for host in [
@@ -2997,10 +3025,10 @@ async fn registration_links_use_validated_request_origin_without_public_config()
 
 #[tokio::test]
 async fn invitation_uses_request_origin_when_public_url_is_empty() {
-    let (mut state, credentials) = admin_test_state().await;
+    let (state, credentials) = admin_test_state().await;
     let mut config = Config::default();
     config.public_base_url.clear();
-    state.config = Arc::new(RwLock::new(Arc::new(config)));
+    state.runtime.write().unwrap().config = Arc::new(config);
     state
         .database
         .save_smtp_settings(
@@ -3090,14 +3118,14 @@ async fn passkey_only_policy_requires_two_credentials_for_each_non_break_glass_a
 
 #[tokio::test]
 async fn passkey_registration_challenge_is_server_stored_session_bound_and_one_time() {
-    let (mut state, credentials) = admin_test_state().await;
+    let (state, credentials) = admin_test_state().await;
     let mut config = Config::default();
     config.webauthn.enabled = true;
     config.webauthn.rp_id = "mirror.example".to_string();
     config.webauthn.rp_origin = "https://mirror.example".to_string();
     let webauthn = build_webauthn(&config).unwrap();
-    state.config = Arc::new(RwLock::new(Arc::new(config)));
-    state.webauthn = Arc::new(RwLock::new(webauthn));
+    state.runtime.write().unwrap().config = Arc::new(config);
+    state.runtime.write().unwrap().webauthn = webauthn;
     let session = state
         .database
         .login(&credentials.username, &credentials.password)
@@ -3139,12 +3167,12 @@ async fn passkey_registration_challenge_is_server_stored_session_bound_and_one_t
 
 #[tokio::test]
 async fn discoverable_passkey_start_is_anonymous_one_time_expiring_and_bounded() {
-    let (mut state, _) = admin_test_state().await;
+    let (state, _) = admin_test_state().await;
     let mut config = Config::default();
     config.webauthn.enabled = true;
     config.webauthn.rp_id = "mirror.example".into();
     config.webauthn.rp_origin = "https://mirror.example".into();
-    state.webauthn = Arc::new(RwLock::new(build_webauthn(&config).unwrap()));
+    state.runtime.write().unwrap().webauthn = build_webauthn(&config).unwrap();
     let request = serde_json::from_str::<StartAdminPasskeyLoginRequest>("{}").unwrap();
     let response = start_admin_passkey_login(State(state.clone()), Json(request)).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -3574,14 +3602,14 @@ async fn quota_guard_blocks_proxy_paths_only() {
 
 #[tokio::test]
 async fn user_subdomain_enforces_personal_quota_when_global_quota_is_disabled() {
-    let (mut state, _) = admin_test_state().await;
+    let (state, _) = admin_test_state().await;
     let user = state
         .database
         .create_user("admin", "quota@example.com", "Quota User", 12)
         .await
         .unwrap()
         .unwrap();
-    state.config = Arc::new(RwLock::new(Arc::new(Config {
+    state.runtime.write().unwrap().config = Arc::new(Config {
         public_base_url: "https://mirror.example.com".to_string(),
         user_access: config::UserAccessConfig {
             base_domain: "mirror.example.com".to_string(),
@@ -3592,7 +3620,7 @@ async fn user_subdomain_enforces_personal_quota_when_global_quota_is_disabled() 
             ..config::QuotaConfig::default()
         },
         ..Config::default()
-    })));
+    });
     let app = Router::new()
         .route("/npm/{*path}", get(|| async { "ok" }))
         .layer(middleware::from_fn_with_state(
@@ -4754,7 +4782,9 @@ async fn user_summary_requires_super_admin_and_preserves_config_snapshots() {
     let viewer_password = uuid::Uuid::new_v4().to_string();
     let snapshot = state.config();
     assert!(Arc::ptr_eq(&snapshot, &state.config()));
-    Arc::make_mut(&mut state.config.write().unwrap()).site.title = "Updated".into();
+    Arc::make_mut(&mut state.runtime.write().unwrap().config)
+        .site
+        .title = "Updated".into();
     assert_ne!(snapshot.site.title, state.config().site.title);
     let app = Router::new()
         .route(
@@ -4825,4 +4855,200 @@ fn monthly_quota_blank_is_unlimited_but_zero_is_a_zero_allowance() {
     assert_eq!(quota_gb_to_bytes(None).unwrap(), None);
     assert_eq!(quota_gb_to_bytes(Some(0)).unwrap(), Some(0));
     assert_eq!(quota_gb_to_bytes(Some(1)).unwrap(), Some(1 << 30));
+}
+
+#[tokio::test]
+async fn doh_admin_status_and_probe_preserve_authentication_and_browser_csrf() {
+    let (state, credentials) = admin_test_state().await;
+    let app = Router::new()
+        .route("/admin/api/doh/status", get(doh::status))
+        .route("/admin/api/doh/check", post(doh::check))
+        .layer(middleware::from_fn(csrf_protection_middleware))
+        .with_state(state.clone());
+    for (method, path) in [
+        (Method::GET, "/admin/api/doh/status"),
+        (Method::POST, "/admin/api/doh/check"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    let session = state
+        .database
+        .login(&credentials.username, &credentials.password)
+        .await
+        .unwrap()
+        .unwrap();
+    let cookie = format!("{ADMIN_SESSION_COOKIE}={}", session.token);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/admin/api/doh/status")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 65535).await.unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(report["attempt_timeout_seconds"], 3);
+    assert_eq!(report["probe_interval_seconds"], 600);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/admin/api/doh/check")
+                .header(header::COOKIE, &cookie)
+                .header(header::ORIGIN, "https://attacker.example")
+                .header(header::HOST, "mirror.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn config_etag_rejects_a_stale_writer_and_publishes_one_snapshot() {
+    let (state, credentials) = admin_test_state().await;
+    let session = state
+        .database
+        .login(&credentials.username, &credentials.password)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::COOKIE,
+        format!("{ADMIN_SESSION_COOKIE}={}", session.token)
+            .parse()
+            .unwrap(),
+    );
+    let response = admin_config(headers.clone(), State(state.clone())).await;
+    let etag = response.headers()[header::ETAG].clone();
+    headers.insert(header::IF_MATCH, etag.clone());
+    let mut a = (*state.config()).clone();
+    a.site.title = "First writer".into();
+    let mut b = (*state.config()).clone();
+    b.site.title = "Second writer".into();
+    let (ra, rb) = tokio::join!(
+        update_admin_config(headers.clone(), State(state.clone()), Json(a)),
+        update_admin_config(headers.clone(), State(state.clone()), Json(b))
+    );
+    assert!(matches!(
+        (ra.status(), rb.status()),
+        (StatusCode::OK, StatusCode::PRECONDITION_FAILED)
+            | (StatusCode::PRECONDITION_FAILED, StatusCode::OK)
+    ));
+    let persisted = state
+        .database
+        .load_or_seed_runtime_config(Config::default())
+        .await
+        .unwrap();
+    assert_eq!(persisted.site.title, state.config().site.title);
+    let next = admin_config(headers, State(state.clone())).await;
+    assert_ne!(next.headers()[header::ETAG], etag);
+}
+
+#[tokio::test]
+async fn readiness_reports_database_failure_without_changing_liveness() {
+    let app = build_application(Config::default()).await.unwrap();
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    app.state
+        .maintenance
+        .draining
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let response = app
+        .router
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn accepted_config_save_finishes_after_caller_cancellation() {
+    let (state, credentials) = admin_test_state().await;
+    let session = state
+        .database
+        .login(&credentials.username, &credentials.password)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::COOKIE,
+        format!("{ADMIN_SESSION_COOKIE}={}", session.token)
+            .parse()
+            .unwrap(),
+    );
+    let gate = state.config_update.lock().await;
+    let mut next = (*state.config()).clone();
+    next.site.title = "Saved after disconnect".into();
+    let copy = state.clone();
+    let task = tokio::spawn(update_admin_config(headers, State(copy), Json(next)));
+    // Let the wrapper spawn its tracked operation, which waits on the held gate.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while state.database.tasks.pending() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    task.abort();
+    let _ = task.await;
+    drop(gate);
+    assert!(state.database.tasks.drain().await);
+    assert_eq!(state.config().site.title, "Saved after disconnect");
+    assert_eq!(
+        state
+            .database
+            .load_or_seed_runtime_config(Config::default())
+            .await
+            .unwrap()
+            .site
+            .title,
+        "Saved after disconnect"
+    );
 }

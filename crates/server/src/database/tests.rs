@@ -849,7 +849,6 @@ async fn records_monthly_and_daily_proxy_traffic() {
             reserved_bytes: 0,
             user_id: None,
             group_id: None,
-            request_event_retention_days: 30,
             location: &GeoLocation::default(),
         })
         .await
@@ -868,7 +867,6 @@ async fn records_monthly_and_daily_proxy_traffic() {
             reserved_bytes: 0,
             user_id: None,
             group_id: None,
-            request_event_retention_days: 30,
             location: &GeoLocation::default(),
         })
         .await
@@ -907,7 +905,6 @@ async fn aggregates_geo_traffic_without_storing_client_ips() {
             reserved_bytes: 0,
             user_id: None,
             group_id: None,
-            request_event_retention_days: 30,
             location: &location,
         })
         .await
@@ -959,7 +956,7 @@ async fn manages_normalized_ip_access_rules() {
 }
 
 #[tokio::test]
-async fn prunes_expired_request_events_when_recording_traffic() {
+async fn maintenance_prunes_expired_request_events() {
     let (database, _) = Database::open(":memory:").await.unwrap();
     sqlx::query("INSERT INTO request_events (created_at, method, path, status_code, response_bytes) VALUES (?, 'GET', '/old', 200, 1)")
         .bind(unix_timestamp() - 2 * 24 * 60 * 60)
@@ -980,11 +977,11 @@ async fn prunes_expired_request_events_when_recording_traffic() {
             reserved_bytes: 0,
             user_id: None,
             group_id: None,
-            request_event_retention_days: 1,
             location: &GeoLocation::default(),
         })
         .await
         .unwrap();
+    database.prune_request_events(1).await.unwrap();
     let count: i64 = sqlx::query("SELECT COUNT(*) AS count FROM request_events")
         .fetch_one(&database.pool)
         .await
@@ -1019,7 +1016,6 @@ async fn reserves_monthly_capacity_atomically() {
             reserved_bytes: 6,
             user_id: None,
             group_id: None,
-            request_event_retention_days: 30,
             location: &GeoLocation::default(),
         })
         .await
@@ -1153,7 +1149,6 @@ async fn hierarchical_quota_reservations_are_atomic_and_usage_is_attributed() {
             reserved_bytes: 6,
             user_id: Some(first.id),
             group_id: Some(group.id),
-            request_event_retention_days: 30,
             location: &GeoLocation::default(),
         })
         .await
@@ -1186,7 +1181,6 @@ async fn hierarchical_quota_reservations_are_atomic_and_usage_is_attributed() {
             reserved_bytes: 4,
             user_id: Some(first.id),
             group_id: Some(group.id),
-            request_event_retention_days: 30,
             location: &GeoLocation::default(),
         })
         .await
@@ -1581,4 +1575,12 @@ fn test_auth_provider(slug: &str, client_secret: &str) -> AuthProvider {
         allow_registration: true,
         auto_link_by_email: false,
     }
+}
+
+#[tokio::test]
+async fn readiness_ping_detects_an_unavailable_database() {
+    let (database, _) = Database::open(":memory:").await.unwrap();
+    assert!(database.ping().await.is_ok());
+    database.pool.close().await;
+    assert!(database.ping().await.is_err());
 }

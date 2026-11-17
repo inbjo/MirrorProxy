@@ -44,6 +44,7 @@ fn doh_configuration_defaults_roundtrip_and_restricts_targets() {
         DohConfig {
             enabled: true,
             upstreams: vec![format!("https://{host}/dns-query")],
+            ..Default::default()
         }
         .validate()
         .unwrap();
@@ -61,7 +62,8 @@ fn doh_configuration_defaults_roundtrip_and_restricts_targets() {
         assert!(
             DohConfig {
                 enabled: true,
-                upstreams: vec![url.into()]
+                upstreams: vec![url.into()],
+                ..Default::default()
             }
             .validate()
             .is_err(),
@@ -71,7 +73,8 @@ fn doh_configuration_defaults_roundtrip_and_restricts_targets() {
     for upstreams in [vec![], vec!["https://1.1.1.1/dns-query".into(); 17]] {
         assert!(DohConfig {
             enabled: true,
-            upstreams
+            upstreams,
+            ..Default::default()
         }
         .validate()
         .is_err());
@@ -302,16 +305,29 @@ async fn doh_relay_preserves_payload_fails_over_and_strips_credentials() {
     .collect();
     let query = wire_query();
     let question = validate_message(&query, false).unwrap();
-    assert!(resolve(&client, &endpoints[..4], &query, &question)
-        .await
-        .is_none());
-    assert_eq!(
-        resolve(&client, &endpoints, &query, &question)
+    for bad in &endpoints[..4] {
+        assert!(
+            resolve(&client, std::slice::from_ref(bad), &query, &question)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            resolve(
+                &client,
+                &[bad.clone(), endpoints[4].clone()],
+                &query,
+                &question
+            )
             .await
             .unwrap()
             .wire,
-        answer()
-    );
+            answer()
+        );
+    }
+    // Never reach a third endpoint.
+    assert!(resolve(&client, &endpoints, &query, &question)
+        .await
+        .is_none());
     // Exercise the real route and middleware with a local upstream injected
     // after normal configuration validation; production accepts only public IPs.
     let application = crate::build_application(Config {
@@ -325,7 +341,7 @@ async fn doh_relay_preserves_payload_fails_over_and_strips_credentials() {
     .unwrap();
     let mut local_config = (*application.state.config()).clone();
     local_config.doh.upstreams = vec![format!("{base}/dns-query")];
-    *application.state.config.write().unwrap() = std::sync::Arc::new(local_config);
+    application.state.runtime.write().unwrap().config = std::sync::Arc::new(local_config);
     for method in [Method::GET, Method::POST] {
         let uri = if method == Method::GET {
             format!("/dns-query?dns={}", URL_SAFE_NO_PAD.encode(&query))
@@ -375,6 +391,7 @@ async fn doh_reuses_proxy_classification_and_rate_limits() {
     let app = build_router(Config {
         doh: DohConfig {
             enabled: true,
+            requests_per_minute: 1,
             ..DohConfig::default()
         },
         rate_limit: crate::config::RateLimitConfig {
@@ -415,6 +432,7 @@ fn custom_doh_endpoints_accept_public_hosts_and_paths_but_reject_unsafe_targets(
         DohConfig {
             enabled: true,
             upstreams: vec![endpoint.into()],
+            ..Default::default()
         }
         .validate()
         .unwrap();
@@ -432,7 +450,8 @@ fn custom_doh_endpoints_accept_public_hosts_and_paths_but_reject_unsafe_targets(
         assert!(
             DohConfig {
                 enabled: true,
-                upstreams: vec![endpoint.into()]
+                upstreams: vec![endpoint.into()],
+                ..Default::default()
             }
             .validate()
             .is_err(),
@@ -441,19 +460,22 @@ fn custom_doh_endpoints_accept_public_hosts_and_paths_but_reject_unsafe_targets(
     }
     assert!(DohConfig {
         enabled: false,
-        upstreams: vec![]
+        upstreams: vec![],
+        ..Default::default()
     }
     .validate()
     .is_ok());
     assert!(DohConfig {
         enabled: true,
-        upstreams: vec![]
+        upstreams: vec![],
+        ..Default::default()
     }
     .validate()
     .is_err());
     assert!(DohConfig {
         enabled: true,
-        upstreams: vec!["https://dns.google/dns-query".into(); 2]
+        upstreams: vec!["https://dns.google/dns-query".into(); 2],
+        ..Default::default()
     }
     .validate()
     .is_err());
@@ -462,7 +484,8 @@ fn custom_doh_endpoints_accept_public_hosts_and_paths_but_reject_unsafe_targets(
         .collect();
     assert!(DohConfig {
         enabled: true,
-        upstreams: endpoints
+        upstreams: endpoints,
+        ..Default::default()
     }
     .validate()
     .is_ok());
@@ -499,6 +522,7 @@ async fn cached_doh_get_and_post_preserve_rate_limits_and_public_config_hides_up
     let application = crate::build_application(Config {
         doh: DohConfig {
             enabled: true,
+            requests_per_minute: 2,
             ..Default::default()
         },
         rate_limit: crate::config::RateLimitConfig {
@@ -577,7 +601,7 @@ async fn cached_doh_get_and_post_preserve_rate_limits_and_public_config_hides_up
     assert_eq!(body["doh"], serde_json::json!({"enabled": true}));
     let mut next = (*application.state.config()).clone();
     next.doh.enabled = false;
-    *application.state.config.write().unwrap() = std::sync::Arc::new(next);
+    application.state.runtime.write().unwrap().config = std::sync::Arc::new(next);
     let response = application
         .router
         .oneshot(
@@ -649,6 +673,7 @@ async fn doh_adds_ecs_from_trusted_transport_and_isolates_cached_subnets() {
     let application = crate::build_application(Config {
         doh: DohConfig {
             enabled: true,
+            ecs_mode: crate::config::DohEcsMode::Auto,
             ..Default::default()
         },
         trusted_proxies: vec!["127.0.0.1".into(), "10.0.0.0/8".into()],
@@ -663,7 +688,7 @@ async fn doh_adds_ecs_from_trusted_transport_and_isolates_cached_subnets() {
     // Inject only this deterministic local upstream after normal validation.
     let mut config = (*application.state.config()).clone();
     config.doh.upstreams = vec![endpoint.replace("/dns-query", "/wrong-ecs"), endpoint];
-    *application.state.config.write().unwrap() = Arc::new(config);
+    application.state.runtime.write().unwrap().config = Arc::new(config);
     for (index, (peer, forwarded, resolved, calls)) in [
         ("8.8.8.25:4000", "9.9.9.25", "8.8.8.25", 1usize),
         ("8.8.8.199:4000", "1.1.1.1", "8.8.8.199", 1),
@@ -773,4 +798,540 @@ async fn doh_adds_ecs_from_trusted_transport_and_isolates_cached_subnets() {
     assert!(ecs::response_matches(&explicit, &body));
     assert_eq!(observed.lock().unwrap().len(), 5);
     server.abort();
+}
+
+#[test]
+fn doh_new_and_missing_ecs_settings_default_to_passthrough() {
+    assert_eq!(
+        DohConfig::default().ecs_mode,
+        crate::config::DohEcsMode::Passthrough
+    );
+    let legacy: DohConfig =
+        serde_json::from_str(r#"{"enabled":true,"upstreams":["https://1.1.1.1/dns-query"]}"#)
+            .unwrap();
+    assert_eq!(legacy.ecs_mode, crate::config::DohEcsMode::Passthrough);
+    for limit in [0, 600_001] {
+        assert!(DohConfig {
+            requests_per_minute: limit,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+    }
+}
+
+#[test]
+fn doh_health_selects_two_fastest_healthy_and_demotes_failures() {
+    let runtime = runtime::Runtime::default();
+    let endpoints = vec![
+        "slow".into(),
+        "fast".into(),
+        "broken".into(),
+        "medium".into(),
+    ];
+    assert_eq!(runtime.select(&endpoints), ["slow", "fast"]);
+    runtime.checked(
+        &endpoints,
+        vec![(true, 200, 4), (true, 20, 4), (false, 1, 0), (true, 80, 4)],
+    );
+    assert_eq!(runtime.select(&endpoints), ["fast", "medium"]);
+    runtime.attempt("fast", false, true, false);
+    assert_eq!(runtime.select(&endpoints), ["medium", "slow"]);
+    assert_eq!(
+        runtime
+            .report(&DohConfig {
+                upstreams: endpoints.clone(),
+                ..Default::default()
+            })
+            .items[1]
+            .timeouts,
+        1
+    );
+    assert!(runtime.due(&["new".into()]));
+    assert_eq!(runtime.select(&["new".into()]), ["new"]);
+}
+
+#[tokio::test]
+async fn doh_has_no_quota_writes_but_preserves_ip_and_independent_rate_limits() {
+    let mut config = Config::default();
+    config.doh.enabled = true;
+    config.doh.requests_per_minute = 5;
+    config.quota.enabled = true;
+    config.quota.monthly_gb = 0;
+    config.quota.default_user_monthly_gb = Some(0);
+    config.rate_limit.enabled = true;
+    config.rate_limit.requests_per_minute = 1;
+    config.user_access.base_domain = "mirror.example".into();
+    let app = crate::build_application(config).await.unwrap();
+    let user = app
+        .state
+        .database
+        .create_user("admin", "dns@example.com", "DNS", 12)
+        .await
+        .unwrap()
+        .unwrap();
+    let group = app
+        .state
+        .database
+        .create_billing_group("admin", "DNS zero quota", Some(0))
+        .await
+        .unwrap()
+        .unwrap();
+    app.state
+        .database
+        .set_user_billing_profile("admin", user.id, Some(group.id), "custom", Some(0))
+        .await
+        .unwrap();
+    app.state
+        .database
+        .set_group_target_access("admin", group.id, &["doh".into(), "npm".into()])
+        .await
+        .unwrap();
+    let query = wire_query();
+    app.state.doh_cache.insert(
+        &app.state.config().doh.upstreams,
+        &query,
+        &Answer {
+            wire: Bytes::from(answer()),
+            cache_ttl: Some(60),
+        },
+        Instant::now(),
+    );
+    let dns_uri = format!("/dns-query?dns={}", URL_SAFE_NO_PAD.encode(&query));
+    for _ in 0..2 {
+        let response = app
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&dns_uri)
+                    .header(header::HOST, format!("{}.mirror.example", user.routing_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        to_bytes(response.into_body(), MAX_MESSAGE).await.unwrap();
+    }
+    let (_, month) = crate::quota_period(&app.state.config().quota.timezone);
+    let overview = app.state.database.traffic_overview(&month).await.unwrap();
+    assert_eq!(overview.request_count, 0);
+    assert_eq!(overview.response_bytes, 0);
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/npm/")
+                .header(header::HOST, format!("{}.mirror.example", user.routing_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE); // quota, not shared DNS rate limit
+    app.state
+        .database
+        .set_group_target_access("admin", group.id, &["npm".into()])
+        .await
+        .unwrap();
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&dns_uri)
+                .header(header::HOST, format!("{}.mirror.example", user.routing_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    *app.state.ip_access_policy.write().unwrap() =
+        crate::geoip::IpAccessPolicy::compile([("deny", "0.0.0.0/0", true)]).unwrap();
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&dns_uri)
+                .header(header::HOST, "mirror.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn doh_limits_fallback_to_three_seconds_and_never_tries_a_third() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let app = Router::new()
+        .route(
+            "/slow",
+            post(|| async {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                "late"
+            }),
+        )
+        .route(
+            "/dns",
+            post(|| async { ([(header::CONTENT_TYPE, DNS_MESSAGE)], answer()) }),
+        );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let query = wire_query();
+    let question = validate_message(&query, false).unwrap();
+    let started = Instant::now();
+    assert!(resolve(
+        &Client::new(),
+        &[format!("{base}/slow"), format!("{base}/dns")],
+        &query,
+        &question
+    )
+    .await
+    .is_some());
+    assert!(started.elapsed() >= Duration::from_secs(3));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(resolve(
+        &Client::new(),
+        &[
+            format!("{base}/bad"),
+            format!("{base}/bad"),
+            format!("{base}/dns")
+        ],
+        &query,
+        &question
+    )
+    .await
+    .is_none());
+    server.abort();
+}
+
+#[tokio::test]
+async fn doh_coalesces_zero_ttl_requests_restores_ids_and_survives_leader_cancellation() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let upstream = Router::new().route(
+        "/dns",
+        post(move |request: Request| {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                let wire = to_bytes(request.into_body(), MAX_MESSAGE).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let mut response = answer();
+                response[..2].copy_from_slice(&wire[..2]);
+                let len = response.len();
+                response[len - 10..len - 6].fill(0); // zero TTL
+                (
+                    [
+                        (header::CONTENT_TYPE, DNS_MESSAGE),
+                        (header::CACHE_CONTROL, "no-store"),
+                    ],
+                    response,
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/dns", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, upstream).await.unwrap();
+    });
+    let mut config = Config::default();
+    config.doh.enabled = true;
+    let app = crate::build_application(config).await.unwrap();
+    let mut config = (*app.state.config()).clone();
+    config.doh.upstreams = vec![endpoint];
+    app.state.runtime.write().unwrap().config = Arc::new(config);
+    let router = app.router.clone();
+    let leader = tokio::spawn(async move {
+        router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/dns-query?dns={}",
+                        URL_SAFE_NO_PAD.encode(wire_query())
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+    });
+    while calls.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    let mut followers = Vec::new();
+    for id in 1..=20u16 {
+        let router = app.router.clone();
+        followers.push(tokio::spawn(async move {
+            let mut wire = wire_query().to_vec();
+            wire[..2].copy_from_slice(&id.to_be_bytes());
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/dns-query")
+                        .header(header::CONTENT_TYPE, DNS_MESSAGE)
+                        .body(Body::from(wire))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let wire = to_bytes(response.into_body(), MAX_MESSAGE).await.unwrap();
+            assert_eq!(wire[..2], id.to_be_bytes());
+        }));
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    leader.abort();
+    for follower in followers {
+        follower.await.unwrap();
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(app
+        .state
+        .doh_cache
+        .runtime
+        .flights
+        .lock()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        app.state
+            .doh_cache
+            .runtime
+            .report(&app.state.config().doh)
+            .coalesced,
+        20
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn doh_protocol_health_checks_rank_real_responses_and_do_not_fill_cache() {
+    let upstream = Router::new()
+        .route(
+            "/dns",
+            post(|request: Request| async move {
+                let wire = to_bytes(request.into_body(), MAX_MESSAGE).await.unwrap();
+                let mut response = wire.to_vec();
+                response[2] |= 0x80;
+                if wire.windows(7).any(|w| w == b"invalid") {
+                    response[3] = 3;
+                } else {
+                    response[7] = 1;
+                    let kind = &wire[wire.len() - 4..wire.len() - 2];
+                    let data: Vec<u8> = match kind {
+                        [0, 1] => vec![1, 1, 1, 1],
+                        [0, 28] => vec![1; 16],
+                        [0, 65] => vec![0, 1, 0],
+                        _ => unreachable!(),
+                    };
+                    response.extend_from_slice(&[0xc0, 12]);
+                    response.extend_from_slice(kind);
+                    response.extend_from_slice(&[0, 1, 0, 0, 0, 60]);
+                    response.extend_from_slice(&(data.len() as u16).to_be_bytes());
+                    response.extend_from_slice(&data);
+                }
+                ([(header::CONTENT_TYPE, DNS_MESSAGE)], response)
+            }),
+        )
+        .route("/broken", post(|| async { "not DNS" }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, upstream).await.unwrap();
+    });
+    let mut config = Config::default();
+    config.doh.enabled = true;
+    let app = crate::build_application(config).await.unwrap();
+    let mut config = (*app.state.config()).clone();
+    config.doh.upstreams = vec![format!("{base}/broken"), format!("{base}/dns")];
+    app.state.runtime.write().unwrap().config = std::sync::Arc::new(config);
+    health::probe(&app.state).await.unwrap();
+    let report = app.state.doh_cache.runtime.report(&app.state.config().doh);
+    assert_eq!(report.items[0].healthy, Some(false));
+    assert_eq!(report.items[0].reachable, Some(true));
+    assert!(report.items[0]
+        .checks
+        .iter()
+        .all(|check| check.outcome == "content_type"));
+    assert_eq!(report.items[1].healthy, Some(true));
+    assert_eq!(report.items[1].checks_passed, 4);
+    assert_eq!(report.cache_hits + report.cache_misses, 0);
+    assert_eq!(
+        app.state
+            .doh_cache
+            .runtime
+            .select(&app.state.config().doh.upstreams)[0],
+        format!("{base}/dns")
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn doh_ecs_can_be_limited_to_selected_upstreams_and_policy_changes_isolate_cache() {
+    use std::sync::{Arc, Mutex};
+    let seen = Arc::new(Mutex::new(Vec::<(String, Bytes)>::new()));
+    let captured = seen.clone();
+    let upstream = Router::new().route(
+        "/{mode}",
+        post(move |request: Request| {
+            let captured = captured.clone();
+            async move {
+                let mode = request.uri().path().to_string();
+                let wire = to_bytes(request.into_body(), MAX_MESSAGE).await.unwrap();
+                captured.lock().unwrap().push((mode.clone(), wire.clone()));
+                if mode == "/auto" {
+                    return StatusCode::BAD_GATEWAY.into_response();
+                }
+                let mut response = answer();
+                response[..2].copy_from_slice(&wire[..2]);
+                response[10..12].copy_from_slice(&wire[10..12]);
+                response.extend_from_slice(&wire[wire_query().len()..]);
+                ([(header::CONTENT_TYPE, DNS_MESSAGE)], response).into_response()
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, upstream).await.unwrap();
+    });
+    let mut config = Config::default();
+    config.doh.enabled = true;
+    config.doh.ecs_mode = crate::config::DohEcsMode::Auto;
+    let app = crate::build_application(config).await.unwrap();
+    let mut config = (*app.state.config()).clone();
+    config.doh.upstreams = vec![format!("{base}/auto"), format!("{base}/plain")];
+    config.doh.ecs_auto_upstreams = vec![config.doh.upstreams[0].clone()];
+    app.state.runtime.write().unwrap().config = Arc::new(config.clone());
+    for expected_calls in [2, 2, 3] {
+        if expected_calls == 3 {
+            config.doh.ecs_auto_upstreams = vec![config.doh.upstreams[1].clone()];
+            app.state.runtime.write().unwrap().config = Arc::new(config.clone());
+        }
+        let mut request = Request::builder()
+            .uri(format!(
+                "/dns-query?dns={}",
+                URL_SAFE_NO_PAD.encode(wire_query())
+            ))
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(axum::extract::ConnectInfo(
+            "8.8.8.99:12345".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        let response = app.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), MAX_MESSAGE).await.unwrap(),
+            answer()
+        );
+        assert_eq!(seen.lock().unwrap().len(), expected_calls);
+    }
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[0].1[11], 1); // selected endpoint receives automatic ECS
+    assert_eq!(seen[1].1, wire_query()); // backup receives the original query
+    assert_eq!(seen[2].1[11], 1); // policy change re-queries and augments backup
+    let invalid = DohConfig {
+        ecs_auto_upstreams: vec!["https://not-configured.example/dns-query".into()],
+        ..Default::default()
+    };
+    assert!(invalid.validate().is_err());
+    server.abort();
+}
+
+#[tokio::test]
+async fn doh_rate_limit_is_shared_by_real_ip_across_users_and_separate_for_other_ips() {
+    use axum::extract::ConnectInfo;
+    let mut config = Config::default();
+    config.doh.enabled = true;
+    config.doh.requests_per_minute = 2;
+    config.user_access.base_domain = "mirror.example".into();
+    let app = crate::build_application(config).await.unwrap();
+    let a = app
+        .state
+        .database
+        .create_user("admin", "ip-a@example.com", "A", 12)
+        .await
+        .unwrap()
+        .unwrap();
+    let b = app
+        .state
+        .database
+        .create_user("admin", "ip-b@example.com", "B", 12)
+        .await
+        .unwrap()
+        .unwrap();
+    let query = wire_query();
+    app.state.doh_cache.insert(
+        &app.state.config().doh.upstreams,
+        &query,
+        &Answer {
+            wire: Bytes::from(answer()),
+            cache_ttl: Some(60),
+        },
+        Instant::now(),
+    );
+    for (routing_id, ip, expected) in [
+        (&a.routing_id, "8.8.8.1:12345", StatusCode::OK),
+        (&b.routing_id, "8.8.8.1:12345", StatusCode::OK),
+        (
+            &a.routing_id,
+            "8.8.8.1:12345",
+            StatusCode::TOO_MANY_REQUESTS,
+        ),
+        (&a.routing_id, "9.9.9.1:12345", StatusCode::OK),
+    ] {
+        let mut request = Request::builder()
+            .uri(format!("/dns-query?dns={}", URL_SAFE_NO_PAD.encode(&query)))
+            .header(header::HOST, format!("{routing_id}.mirror.example"))
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(ip.parse::<std::net::SocketAddr>().unwrap()));
+        let response = app.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), expected);
+        to_bytes(response.into_body(), MAX_MESSAGE).await.unwrap();
+    }
+    assert_eq!(DohConfig::default().requests_per_minute, 2000);
+}
+
+#[tokio::test]
+async fn doh_slow_body_times_out_and_releases_the_request_slot() {
+    let mut config = Config::default();
+    config.doh.enabled = true;
+    let app = crate::build_application(config).await.unwrap();
+    let body = Body::from_stream(futures_util::stream::pending::<Result<Bytes, std::io::Error>>());
+    let response = tokio::time::timeout(
+        Duration::from_secs(7),
+        app.router.oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dns-query")
+                .header(header::CONTENT_TYPE, DNS_MESSAGE)
+                .body(body)
+                .unwrap(),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(
+        app.state.doh_cache.runtime.requests.available_permits(),
+        256
+    );
 }

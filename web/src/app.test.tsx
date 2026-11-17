@@ -330,7 +330,7 @@ describe('App preferences', () => {
     expect(await screen.findByText(/ACME settings were saved securely/)).toBeTruthy()
     expect(await screen.findByLabelText(/Additional CA PEM bundle paths/)).toBeTruthy()
     expect(screen.getByLabelText(/Skip mirror-upstream TLS verification/)).toBeTruthy()
-    expect(screen.getByText(/WebPKI public roots and native system roots/)).toBeTruthy()
+    expect(document.querySelector('button[aria-description="Mirror upstream TLS trust help"]')).toBeTruthy()
     fireEvent.click(await screen.findByText('Edit upstream endpoints'))
     expect(await screen.findByText(/comma-separated/)).toBeTruthy()
     expect(await screen.findByText('Custom software repositories')).toBeTruthy()
@@ -385,6 +385,8 @@ describe('HTTP security notice', () => {
     expect(screen.getByRole('link', { name: 'HTTPS 部署指南' }).getAttribute('href')).toContain('Deployment-zh-CN')
     rerender(<HttpSecurityBanner locale="zh" protocol="https:" />)
     expect(screen.queryByRole('note')).toBeNull()
+
+
   })
 })
 

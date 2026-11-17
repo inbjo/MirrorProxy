@@ -19,7 +19,10 @@ use crate::AppState;
 
 mod cache;
 mod ecs;
+mod health;
+mod runtime;
 pub(crate) use cache::Cache;
+pub use health::{check, spawn_worker, status};
 
 struct PublicResolver;
 
@@ -67,7 +70,7 @@ fn client() -> Result<Client, reqwest::Error> {
         .no_proxy()
         .dns_resolver(Arc::new(PublicResolver))
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(3))
         .build()?;
     let _ = CLIENT.set(client.clone());
     Ok(client)
@@ -79,40 +82,129 @@ pub async fn query(State(state): State<AppState>, request: Request) -> Response 
         return StatusCode::NOT_FOUND.into_response();
     }
     let client_ip = crate::resolve_client_ip(&request, &config);
-    let wire = match decode_request(request).await {
-        Ok(wire) => wire,
-        Err(status) => return status.into_response(),
+    let Ok(_permit) = state.doh_cache.runtime.requests.try_acquire() else {
+        state.observability.observe_rejection("doh_concurrency");
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let wire = match tokio::time::timeout(Duration::from_secs(5), decode_request(request)).await {
+        Err(_) => return StatusCode::REQUEST_TIMEOUT.into_response(),
+        Ok(Ok(wire)) => wire,
+        Ok(Err(status)) => return status.into_response(),
     };
     let Ok(question) = validate_message(&wire, false) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let Ok(query) = ecs::prepare(wire, client_ip) else {
+    let ecs_ip = if config.doh.ecs_mode == crate::config::DohEcsMode::Auto {
+        client_ip
+    } else {
+        std::net::Ipv4Addr::UNSPECIFIED.into()
+    };
+    let Ok(query) = ecs::prepare(wire, ecs_ip) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    let original = query
+        .for_client(query.wire.clone())
+        .unwrap_or_else(|| query.wire.clone());
     let wire = &query.wire;
-    if let Some(answer) = state
+    let cached = state
         .doh_cache
-        .get(&config.doh.upstreams, wire, Instant::now())
-    {
-        return query
-            .for_client(answer)
-            .map(dns_response)
-            .unwrap_or_else(|| StatusCode::BAD_GATEWAY.into_response());
-    }
-    let Ok(client) = client() else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        .get(&config.doh.cache_namespace(), wire, Instant::now());
+    state.doh_cache.runtime.cache(cached.is_some());
+    state
+        .observability
+        .observe_doh_cache(if cached.is_some() { "hit" } else { "miss" });
+    let answer = if let Some(answer) = cached {
+        Some(answer)
+    } else {
+        shared_resolve(&state, &config.doh, wire, &original, &question).await
     };
-    match resolve(&client, &config.doh.upstreams, wire, &question).await {
+    match answer.and_then(|mut answer| {
+        let mut bytes = answer.to_vec();
+        bytes[..2].copy_from_slice(&wire[..2]);
+        answer = Bytes::from(bytes);
+        query.for_client(answer)
+    }) {
         Some(answer) => {
+            state.doh_cache.runtime.response(&answer);
             state
-                .doh_cache
-                .insert(&config.doh.upstreams, wire, &answer, Instant::now());
-            query
-                .for_client(answer.wire)
-                .map(dns_response)
-                .unwrap_or_else(|| StatusCode::BAD_GATEWAY.into_response())
+                .observability
+                .observe_doh_response(answer[3] & 15, answer.len());
+            dns_response(answer)
         }
         None => StatusCode::BAD_GATEWAY.into_response(),
+    }
+}
+
+async fn shared_resolve(
+    state: &AppState,
+    config: &crate::config::DohConfig,
+    wire: &Bytes,
+    original: &Bytes,
+    question: &[u8],
+) -> Option<Bytes> {
+    let namespace = config.cache_namespace();
+    let key = cache::key(&namespace, wire);
+    let mut receiver = {
+        let mut flights = state.doh_cache.runtime.flights.lock().unwrap();
+        if let Some(receiver) = flights.get(&key) {
+            state.doh_cache.runtime.coalesced();
+            state.observability.observe_doh_cache("coalesced");
+            receiver.clone()
+        } else {
+            // Detached leaders survive client cancellation, bounded independently
+            // of the number of waiting HTTP requests.
+            if flights.len() >= 128 {
+                return None;
+            }
+            let (sender, receiver) = tokio::sync::watch::channel(None);
+            flights.insert(key, receiver.clone());
+            let state = state.clone();
+            let config = config.clone();
+            let original = original.clone();
+            let wire = wire.clone();
+            let question = question.to_vec();
+            tokio::spawn(async move {
+                // Recheck cache after becoming leader: another flight may have
+                // completed between the caller's cache lookup and this lock.
+                let result =
+                    if let Some(answer) = state.doh_cache.get(&namespace, &wire, Instant::now()) {
+                        Some(answer)
+                    } else if let Ok(client) = client() {
+                        let selected = state.doh_cache.runtime.select(&config.upstreams);
+                        if let Some(answer) = resolve_selected(
+                            &client,
+                            &selected,
+                            &wire,
+                            &question,
+                            Some((&original, &config.ecs_auto_upstreams)),
+                            Some(&state),
+                        )
+                        .await
+                        {
+                            state
+                                .doh_cache
+                                .insert(&namespace, &wire, &answer, Instant::now());
+                            Some(answer.wire)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                let mut flights = state.doh_cache.runtime.flights.lock().unwrap();
+                let _ = sender.send(Some(result));
+                flights.remove(&key);
+            });
+            receiver
+        }
+    };
+    loop {
+        if let Some(result) = receiver.borrow_and_update().clone() {
+            return result;
+        }
+        if receiver.changed().await.is_err() {
+            return None;
+        }
     }
 }
 
@@ -170,64 +262,146 @@ struct Answer {
     cache_ttl: Option<u32>,
 }
 
+#[cfg(test)]
 async fn resolve(
     client: &Client,
     upstreams: &[String],
     wire: &Bytes,
     question: &[u8],
 ) -> Option<Answer> {
-    for upstream in upstreams {
-        // Normalize both incoming methods to a replayable POST for failover.
-        let Ok(mut response) = client
-            .post(upstream)
-            .header(header::CONTENT_TYPE, DNS_MESSAGE)
-            .header(header::ACCEPT, DNS_MESSAGE)
-            .body(wire.clone())
-            .send()
-            .await
-        else {
-            continue;
-        };
-        if response.status() != StatusCode::OK
-            || !response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|h| h.to_str().ok())
-                .is_some_and(|h| h.trim().eq_ignore_ascii_case(DNS_MESSAGE))
-            || response
-                .content_length()
-                .is_some_and(|len| len > MAX_MESSAGE as u64)
-        {
-            continue;
+    resolve_selected(client, upstreams, wire, question, None, None).await
+}
+
+async fn resolve_selected(
+    client: &Client,
+    upstreams: &[String],
+    wire: &Bytes,
+    question: &[u8],
+    ecs_policy: Option<(&Bytes, &[String])>,
+    state: Option<&AppState>,
+) -> Option<Answer> {
+    for (index, upstream) in upstreams.iter().take(2).enumerate() {
+        let effective_wire = ecs_policy
+            .filter(|(_, allowed)| !allowed.is_empty() && !allowed.contains(upstream))
+            .map(|(original, _)| original)
+            .unwrap_or(wire);
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            exchange(client, upstream, effective_wire, question),
+        )
+        .await;
+        let timeout = result.is_err()
+            || result
+                .as_ref()
+                .is_ok_and(|r| r.as_ref().is_err_and(|error| error.0 == "timeout"));
+        let answer = result.ok().and_then(Result::ok);
+        if let Some(state) = state {
+            state
+                .doh_cache
+                .runtime
+                .attempt(upstream, answer.is_some(), timeout, index > 0);
+            let slot = state
+                .config()
+                .doh
+                .upstreams
+                .iter()
+                .position(|e| e == upstream)
+                .unwrap_or(0);
+            state.observability.observe_doh_upstream(
+                slot,
+                if timeout {
+                    "timeout"
+                } else if answer.is_some() {
+                    "success"
+                } else {
+                    "failure"
+                },
+                started.elapsed(),
+                index > 0,
+            );
         }
-        let cache_headers = response.headers().clone();
-        let mut answer = Vec::new();
-        let mut complete = true;
-        loop {
-            match response.chunk().await {
-                Ok(Some(chunk)) if answer.len() + chunk.len() <= MAX_MESSAGE => {
-                    answer.extend_from_slice(&chunk)
-                }
-                Ok(None) => break,
-                _ => {
-                    complete = false;
-                    break;
-                }
-            }
-        }
-        if complete
-            && answer.get(..2) == wire.get(..2)
-            && validate_message(&answer, true).is_ok_and(|q| q == question)
-            && ecs::response_matches(wire, &answer)
-        {
-            let cache_ttl = cache::prepare(&mut answer, &cache_headers);
-            return Some(Answer {
-                wire: Bytes::from(answer),
-                cache_ttl,
-            });
+        if answer.is_some() {
+            return answer;
         }
     }
     None
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExchangeError(&'static str);
+impl From<reqwest::Error> for ExchangeError {
+    fn from(error: reqwest::Error) -> Self {
+        use std::error::Error;
+        if error.is_timeout() {
+            return Self("timeout");
+        }
+        let mut source = error.source();
+        while let Some(cause) = source {
+            let text = cause.to_string().to_ascii_lowercase();
+            if text.contains("certificate") || text.contains("tls") {
+                return Self("tls");
+            }
+            source = cause.source();
+        }
+        Self(if error.is_connect() {
+            "connection"
+        } else {
+            "transport"
+        })
+    }
+}
+async fn exchange(
+    client: &Client,
+    upstream: &str,
+    wire: &Bytes,
+    question: &[u8],
+) -> Result<Answer, ExchangeError> {
+    let mut response = client
+        .post(upstream)
+        .header(header::CONTENT_TYPE, DNS_MESSAGE)
+        .header(header::ACCEPT, DNS_MESSAGE)
+        .body(wire.clone())
+        .send()
+        .await?;
+    if response.status() != StatusCode::OK {
+        return Err(ExchangeError("http_status"));
+    }
+    if !response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|h| h.trim().eq_ignore_ascii_case(DNS_MESSAGE))
+    {
+        return Err(ExchangeError("content_type"));
+    }
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_MESSAGE as u64)
+    {
+        return Err(ExchangeError("oversized"));
+    }
+    let cache_headers = response.headers().clone();
+    let mut answer = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if answer.len() + chunk.len() > MAX_MESSAGE {
+            return Err(ExchangeError("oversized"));
+        }
+        answer.extend_from_slice(&chunk);
+    }
+    if answer.get(..2) != wire.get(..2)
+        || !validate_message(&answer, true).is_ok_and(|q| q == question)
+    {
+        return Err(ExchangeError("dns_message"));
+    }
+    if !ecs::response_matches(wire, &answer) {
+        return Err(ExchangeError("ecs_mismatch"));
+    }
+    let cache_ttl = cache::prepare(&mut answer, &cache_headers);
+    Ok(Answer {
+        wire: Bytes::from(answer),
+        cache_ttl,
+    })
 }
 
 // Parse names with bounded compression-pointer traversal and validate every
@@ -304,3 +478,6 @@ fn validate_message(packet: &[u8], response: bool) -> Result<Vec<u8>, ()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod workload_tests;

@@ -114,15 +114,19 @@ mod tests {
     async fn test_state(config: Config) -> AppState {
         let (database, _) = Database::open(":memory:").await.unwrap();
         AppState {
+            runtime: crate::runtime::RuntimeState::from_parts(
+                Arc::new(RwLock::new(Arc::new(config))),
+                Arc::new(RwLock::new(reqwest::Client::new())),
+                Arc::new(RwLock::new(None)),
+            ),
+            config_update: Default::default(),
+            maintenance: Default::default(),
             downloads: Arc::new(crate::download::Runtime::default()),
             doh_cache: Default::default(),
-            config: Arc::new(RwLock::new(Arc::new(config))),
             database: Arc::new(database),
-            client: Arc::new(RwLock::new(reqwest::Client::new())),
             rate_limiter: Arc::new(RateLimiter::new()),
             admin_login_limiter: Arc::new(crate::AdminLoginRateLimiter::new()),
             discoverable_challenges: Default::default(),
-            webauthn: Arc::new(RwLock::new(None)),
             observability: Arc::new(Observability::new().unwrap()),
             geoip: Arc::new(crate::geoip::GeoIpService::new(
                 false,
