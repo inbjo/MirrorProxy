@@ -143,6 +143,21 @@ jobs:
           node web/scripts/smoke-admin-browser.mjs target/debug/mirrorproxy-server
           node web/scripts/smoke-passkey-browser.mjs target/debug/mirrorproxy-server
 
+  minimum-rust:
+    name: Minimum Rust 1.94 compilation
+    needs: frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          shared-key: minimum-rust-1.94
+      - uses: ./.github/actions/download-web
+        with:
+          name: ci-web-console
+      - run: cargo check --workspace --all-targets --locked
+
   supply-chain:
     needs: frontend
     name: Supply chain and coverage

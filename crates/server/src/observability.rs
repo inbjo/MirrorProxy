@@ -183,10 +183,10 @@ impl Observability {
     ) {
         let slot = slot.min(15).to_string();
         self.doh_upstream_duration
-            .with_label_values(&[&slot, outcome])
+            .with_label_values(&[slot.as_str(), outcome])
             .observe(duration.as_secs_f64());
         if failover {
-            self.doh_failovers.with_label_values(&[&slot]).inc();
+            self.doh_failovers.with_label_values(&[slot.as_str()]).inc();
         }
     }
 
