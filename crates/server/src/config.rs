@@ -104,32 +104,36 @@ impl Default for DohConfig {
 
 impl DohConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.upstreams.is_empty() || self.upstreams.len() > 6 {
-            anyhow::bail!("doh.upstreams must contain between 1 and 6 endpoints");
+        if (self.enabled && self.upstreams.is_empty()) || self.upstreams.len() > 16 {
+            anyhow::bail!("doh.upstreams requires at least one endpoint when enabled, and at most 16 endpoints");
         }
+        let mut seen = std::collections::HashSet::new();
         for endpoint in &self.upstreams {
             let url = Url::parse(endpoint)
                 .map_err(|_| anyhow::anyhow!("doh.upstreams contains an invalid URL"))?;
-            if url.scheme() != "https"
-                || !matches!(
-                    url.host_str(),
-                    Some(
-                        "1.1.1.1"
-                            | "1.0.0.1"
-                            | "8.8.8.8"
-                            | "8.8.4.4"
-                            | "9.9.9.9"
-                            | "149.112.112.112"
-                    )
-                )
+            let public_host = match url.host() {
+                Some(url::Host::Ipv4(ip)) => crate::download::public_ip(ip.into()),
+                Some(url::Host::Ipv6(ip)) => crate::download::public_ip(ip.into()),
+                Some(url::Host::Domain(host)) => {
+                    host.contains('.')
+                        && !host.ends_with('.')
+                        && !host.ends_with(".localhost")
+                        && !host.ends_with(".local")
+                }
+                None => false,
+            };
+            if endpoint.len() > 2048
+                || url.scheme() != "https"
+                || !public_host
                 || url.port_or_known_default() != Some(443)
-                || url.path() != "/dns-query"
+                || url.path() == "/"
                 || !url.username().is_empty()
                 || url.password().is_some()
                 || url.query().is_some()
                 || url.fragment().is_some()
+                || !seen.insert(url.to_string())
             {
-                anyhow::bail!("doh.upstreams requires an approved public resolver HTTPS /dns-query endpoint on port 443");
+                anyhow::bail!("doh.upstreams requires unique public HTTPS endpoints with a path on port 443, without credentials, query or fragment");
             }
         }
         Ok(())

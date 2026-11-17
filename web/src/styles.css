@@ -495,3 +495,8 @@ html, .config-modal .ant-modal-body, .config-option code { scrollbar-width: thin
 .admin-console .settings-card-head h2 { font-size: 16px; line-height: 1.5; }
 
 .admin-console .security-subheading { font-size: 15px; margin: 8px 0; }
+
+.admin-console .doh-upstreams { width: 100%; min-width: 0; }
+
+.admin-console .doh-settings-fields { align-items: start; gap: 20px 24px; }
+.admin-console .doh-settings-field { display: grid; gap: 8px; min-width: 0; }

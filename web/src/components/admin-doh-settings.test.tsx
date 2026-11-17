@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event'
 import * as React from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -32,6 +33,12 @@ describe('DoH configuration', () => {
     fireEvent.click(toggle)
     await choose(screen.getByRole('combobox'), 'Quad9 · 9.9.9.9')
     expect(screen.getByRole('status').textContent).toBe(JSON.stringify({ enabled: true, upstreams: ['https://1.1.1.1/dns-query', 'https://9.9.9.9/dns-query'] }))
+    const control = screen.getByRole('combobox')
+    await choose(control, 'AliDNS · dns.alidns.com')
+    await userEvent.type(control, 'https://resolver.example/custom/dns')
+    expect(fireEvent.keyDown(control, { key: 'Enter', code: 'Enter', keyCode: 13, charCode: 13 })).toBe(false)
+    expect(screen.getByRole('status').textContent).toContain('https://resolver.example/custom/dns')
+    expect(screen.getByRole('status').textContent).toContain('https://dns.alidns.com/dns-query')
     const endpoint = screen.getByDisplayValue('https://mirror.example/dns-query') as HTMLInputElement
     expect(endpoint.readOnly).toBe(true)
   })

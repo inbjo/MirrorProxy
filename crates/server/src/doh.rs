@@ -1,6 +1,9 @@
 //! Bounded RFC 8484 wire-format relay. DNS queries never enter the disk cache
 //! or upstream logs, and client headers never cross the resolver boundary.
-use std::{sync::OnceLock, time::Duration};
+use std::{
+    sync::{Arc, OnceLock},
+    time::{Duration, Instant},
+};
 
 use axum::{
     body::to_bytes,
@@ -14,6 +17,41 @@ use reqwest::Client;
 
 use crate::AppState;
 
+mod cache;
+mod ecs;
+pub(crate) use cache::Cache;
+
+struct PublicResolver;
+
+impl reqwest::dns::Resolve for PublicResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let addresses = tokio::time::timeout(
+                Duration::from_secs(5),
+                tokio::net::lookup_host((name.as_str(), 443)),
+            )
+            .await??
+            .take(65)
+            .collect::<Vec<_>>();
+            if !safe_addresses(&addresses) {
+                return Err(std::io::Error::other(
+                    "DoH upstream must resolve exclusively to public addresses",
+                )
+                .into());
+            }
+            Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+fn safe_addresses(addresses: &[std::net::SocketAddr]) -> bool {
+    !addresses.is_empty()
+        && addresses.len() <= 64
+        && addresses
+            .iter()
+            .all(|address| crate::download::public_ip(address.ip()))
+}
+
 const MAX_MESSAGE: usize = 65_535;
 const DNS_MESSAGE: &str = "application/dns-message";
 static CLIENT: OnceLock<Client> = OnceLock::new();
@@ -22,10 +60,12 @@ fn client() -> Result<Client, reqwest::Error> {
     if let Some(client) = CLIENT.get() {
         return Ok(client.clone());
     }
-    // Fixed IP allowlist, verified TLS, no redirects or environment proxy.
+    // Public DNS answers are checked and used directly by the connector, avoiding
+    // a second DNS lookup and rebinding. TLS remains verified; no redirects/proxy.
     // HTTP/2 is required by resolvers such as Quad9.
     let client = Client::builder()
         .no_proxy()
+        .dns_resolver(Arc::new(PublicResolver))
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(10))
         .build()?;
@@ -38,6 +78,7 @@ pub async fn query(State(state): State<AppState>, request: Request) -> Response 
     if !config.doh.enabled {
         return StatusCode::NOT_FOUND.into_response();
     }
+    let client_ip = crate::resolve_client_ip(&request, &config);
     let wire = match decode_request(request).await {
         Ok(wire) => wire,
         Err(status) => return status.into_response(),
@@ -45,20 +86,45 @@ pub async fn query(State(state): State<AppState>, request: Request) -> Response 
     let Ok(question) = validate_message(&wire, false) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    let Ok(query) = ecs::prepare(wire, client_ip) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let wire = &query.wire;
+    if let Some(answer) = state
+        .doh_cache
+        .get(&config.doh.upstreams, wire, Instant::now())
+    {
+        return query
+            .for_client(answer)
+            .map(dns_response)
+            .unwrap_or_else(|| StatusCode::BAD_GATEWAY.into_response());
+    }
     let Ok(client) = client() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    match resolve(&client, &config.doh.upstreams, &wire, &question).await {
-        Some(answer) => (
-            [
-                (header::CONTENT_TYPE, DNS_MESSAGE),
-                (header::CACHE_CONTROL, "no-store"),
-            ],
-            answer,
-        )
-            .into_response(),
+    match resolve(&client, &config.doh.upstreams, wire, &question).await {
+        Some(answer) => {
+            state
+                .doh_cache
+                .insert(&config.doh.upstreams, wire, &answer, Instant::now());
+            query
+                .for_client(answer.wire)
+                .map(dns_response)
+                .unwrap_or_else(|| StatusCode::BAD_GATEWAY.into_response())
+        }
         None => StatusCode::BAD_GATEWAY.into_response(),
     }
+}
+
+fn dns_response(answer: Bytes) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, DNS_MESSAGE),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        answer,
+    )
+        .into_response()
 }
 
 async fn decode_request(request: Request) -> Result<Bytes, StatusCode> {
@@ -99,12 +165,17 @@ async fn decode_request(request: Request) -> Result<Bytes, StatusCode> {
     }
 }
 
+struct Answer {
+    wire: Bytes,
+    cache_ttl: Option<u32>,
+}
+
 async fn resolve(
     client: &Client,
     upstreams: &[String],
     wire: &Bytes,
     question: &[u8],
-) -> Option<Bytes> {
+) -> Option<Answer> {
     for upstream in upstreams {
         // Normalize both incoming methods to a replayable POST for failover.
         let Ok(mut response) = client
@@ -129,6 +200,7 @@ async fn resolve(
         {
             continue;
         }
+        let cache_headers = response.headers().clone();
         let mut answer = Vec::new();
         let mut complete = true;
         loop {
@@ -146,8 +218,13 @@ async fn resolve(
         if complete
             && answer.get(..2) == wire.get(..2)
             && validate_message(&answer, true).is_ok_and(|q| q == question)
+            && ecs::response_matches(wire, &answer)
         {
-            return Some(Bytes::from(answer));
+            let cache_ttl = cache::prepare(&mut answer, &cache_headers);
+            return Some(Answer {
+                wire: Bytes::from(answer),
+                cache_ttl,
+            });
         }
     }
     None

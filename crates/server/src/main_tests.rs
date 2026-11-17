@@ -691,6 +691,7 @@ async fn admin_test_state() -> (AppState, database::InitialAdminCredentials) {
     let (database, credentials) = Database::open(":memory:").await.unwrap();
     let state = AppState {
         downloads: Arc::new(crate::download::Runtime::default()),
+        doh_cache: Default::default(),
         config: Arc::new(RwLock::new(Arc::new(Config::default()))),
         database: Arc::new(database),
         client: Arc::new(RwLock::new(Client::new())),
@@ -958,6 +959,7 @@ async fn routing_test_state(mode: &str) -> (AppState, database::UserAccount) {
     };
     let state = AppState {
         downloads: Arc::new(crate::download::Runtime::default()),
+        doh_cache: Default::default(),
         config: Arc::new(RwLock::new(Arc::new(config))),
         database: Arc::new(database),
         client: Arc::new(RwLock::new(Client::new())),
@@ -2046,6 +2048,7 @@ async fn admin_config_update_persists_and_applies_runtime_values() {
         .unwrap();
     let state = AppState {
         downloads: Arc::new(crate::download::Runtime::default()),
+        doh_cache: Default::default(),
         config: Arc::new(RwLock::new(Arc::new(initial_config))),
         database: Arc::new(database.clone()),
         client: Arc::new(RwLock::new(Client::new())),
@@ -2157,6 +2160,7 @@ async fn super_admin_updates_acme_settings_without_exposing_or_erasing_secrets()
         .unwrap();
     let state = AppState {
         downloads: Arc::new(crate::download::Runtime::default()),
+        doh_cache: Default::default(),
         config: Arc::new(RwLock::new(Arc::new(Config {
             acme: acme_settings.clone(),
             ..Config::default()
@@ -2253,6 +2257,7 @@ async fn admin_stats_returns_monthly_usage_and_targets() {
         .unwrap();
     let state = AppState {
         downloads: Arc::new(crate::download::Runtime::default()),
+        doh_cache: Default::default(),
         config: Arc::new(RwLock::new(Arc::new(config))),
         database: Arc::new(database.clone()),
         client: Arc::new(RwLock::new(Client::new())),
@@ -2301,6 +2306,7 @@ async fn admin_audit_log_requires_authentication_and_returns_entries() {
         .unwrap();
     let state = AppState {
         downloads: Arc::new(crate::download::Runtime::default()),
+        doh_cache: Default::default(),
         config: Arc::new(RwLock::new(Arc::new(Config::default()))),
         database: Arc::new(database.clone()),
         client: Arc::new(RwLock::new(Client::new())),
@@ -2366,6 +2372,7 @@ async fn admin_password_change_revokes_current_session() {
     let credentials = credentials.unwrap();
     let state = AppState {
         downloads: Arc::new(crate::download::Runtime::default()),
+        doh_cache: Default::default(),
         config: Arc::new(RwLock::new(Arc::new(Config::default()))),
         database: Arc::new(database.clone()),
         client: Arc::new(RwLock::new(Client::new())),

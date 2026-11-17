@@ -466,7 +466,29 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await page.getByLabel('Enable mirror upstream proxy').check()
   await page.getByLabel('Enable DoH proxy').check()
   await expect(page.getByLabel('Client DoH URL')).toHaveValue('https://updated.example/dns-query')
-  await selectChoice(page, page.getByRole('combobox', { name: 'DoH upstreams (failover in selection order)' }), 'Google · 8.8.8.8')
+  const dohUpstreams = page.getByRole('combobox', { name: 'DoH upstreams (failover in selection order)' })
+  await selectChoice(page, dohUpstreams, 'Google · 8.8.8.8')
+  await selectChoice(page, dohUpstreams, 'AliDNS · dns.alidns.com')
+  await dohUpstreams.fill('https://resolver.example/custom/dns')
+  await dohUpstreams.press('Enter')
+  await dohUpstreams.press('Escape')
+  await page.getByRole('heading', { name: 'DNS over HTTPS (DoH)', exact: true }).click()
+  await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0)
+  const dohSettings = page.locator('.runtime-config-group').filter({ has: page.getByRole('heading', { name: 'DNS over HTTPS (DoH)', exact: true }) })
+  const upstreamBounds = await dohSettings.locator('.doh-upstreams').boundingBox()
+  const endpointBounds = await dohSettings.getByLabel('Client DoH URL').boundingBox()
+  expect(Math.abs(upstreamBounds!.y - endpointBounds!.y)).toBeLessThanOrEqual(2)
+  for (const field of await dohSettings.locator('.doh-settings-field').all()) {
+    const control = await field.locator('.ant-select, input').first().boundingBox()
+    const hint = await field.locator('small').first().boundingBox()
+    expect(hint!.y).toBeGreaterThanOrEqual(control!.y + control!.height)
+  }
+  await dohSettings.screenshot({ path: test.info().outputPath('doh-upstreams-desktop.png') })
+  expect(savedConfig?.doh.enabled).toBe(false)
+  await page.setViewportSize({ width: 320, height: 900 })
+  await expect.poll(() => dohSettings.locator('.doh-upstreams').evaluate(element => element.scrollWidth <= element.clientWidth && element.getBoundingClientRect().right <= window.innerWidth)).toBe(true)
+  await dohSettings.screenshot({ path: test.info().outputPath('doh-upstreams-mobile.png') })
+  await page.setViewportSize({ width: 1280, height: 720 })
   await page.keyboard.press('Escape')
   await page.getByLabel('Proxy URL').fill('socks5h://proxy.example:1080')
   await page.getByLabel('Username (optional)').fill('proxy-user')
@@ -482,7 +504,7 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
     has_password: false,
   })
   await expect(page.getByLabel('Password (optional)')).toHaveAttribute('placeholder', 'Saved; leave blank to keep')
-  await expect.poll(() => savedConfig?.doh).toEqual({ enabled: true, upstreams: ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'] })
+  await expect.poll(() => savedConfig?.doh).toEqual({ enabled: true, upstreams: ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query', 'https://dns.alidns.com/dns-query', 'https://resolver.example/custom/dns'] })
   await page.reload()
   await page.locator('.admin-username-field input').fill('admin')
   await page.getByLabel('Administrator password').fill('correct-password')
@@ -2339,4 +2361,39 @@ test('lets token and session records grow with the page without nested vertical 
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
     }
   }
+})
+
+test('shows the enabled DoH endpoint and setup guide across languages, themes and mobile widths', async ({ page }) => {
+  let enabled = true
+  await page.route('**/api/public-config', route => route.fulfill({ json: { ...publicConfig, doh: { enabled }, user_access: { enabled: true, mode: 'subdomain_required' } } }))
+  await page.goto('/')
+  const guide = page.getByRole('region', { name: 'Encrypted DNS · DoH enabled' })
+  await expect(guide).toBeVisible()
+  await expect(guide).toContainText('This instance forwards DNS queries to upstream resolvers over encrypted DoH. Configure DoH to help prevent DNS leaks.')
+  await expect(guide).not.toContainText('Responses are cached in memory')
+  await expect(guide.getByRole('note')).toHaveCount(0)
+  await guide.getByRole('button', { name: 'Copy URL' }).click()
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('https://mirror.example/dns-query')
+  await guide.getByText('Set up a browser or router', { exact: true }).click()
+  await expect(guide).toContainText('Chrome / Edge')
+  await expect(guide).toContainText('requires a user subdomain')
+  for (const theme of ['light', 'dark']) {
+    await setTheme(page, theme)
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
+      await guide.scrollIntoViewIfNeeded()
+      const bounds = await guide.boundingBox()
+      expect(bounds!.x).toBeGreaterThanOrEqual(24)
+      expect(bounds!.width).toBeLessThanOrEqual(width - 48)
+      await guide.screenshot({ path: test.info().outputPath(`doh-guide-${theme}-${width}.png`) })
+    }
+  }
+  await page.getByTitle('Language').click()
+  await expect(page.getByRole('region', { name: '加密 DNS · DoH 已开启' })).toBeVisible()
+  await expect(page.getByText('如何配置浏览器或路由器', { exact: true })).toBeVisible()
+  await expect(page.getByText('本站DNS解析结果通过上游DoH加密转发，配置DoH可有效避免DNS泄漏。', { exact: true })).toBeVisible()
+  enabled = false
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(page.locator('.doh-guide')).toHaveCount(0)
 })

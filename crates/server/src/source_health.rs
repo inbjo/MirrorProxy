@@ -806,6 +806,7 @@ mod tests {
             .insert("clickhouse".to_string(), format!("http://{available}"));
         let state = AppState {
             downloads: std::sync::Arc::new(crate::download::Runtime::default()),
+            doh_cache: Default::default(),
             config: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
                 config.clone(),
             ))),
@@ -887,6 +888,7 @@ mod tests {
         config.upstreams.docker_hub = format!("http://{address}");
         let state = AppState {
             downloads: std::sync::Arc::new(crate::download::Runtime::default()),
+            doh_cache: Default::default(),
             config: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
                 config.clone(),
             ))),

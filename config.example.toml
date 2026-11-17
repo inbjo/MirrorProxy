@@ -31,17 +31,26 @@ local_only = true
 # Optional RFC 8484 DNS-over-HTTPS relay at /dns-query (not DoT/port 853).
 # Initial settings; existing installations use the persisted admin configuration.
 # Configure in Administration > Advanced settings; saves apply immediately.
-# Only the six listed public resolver IPs are accepted, with verified HTTPS,
-# port 443 and /dns-query. Entries are tried in order on transport/HTTP errors
-# or invalid DNS responses. DNS error responses (e.g. NXDOMAIN) are preserved.
+# Built-in and custom public HTTPS endpoints on port 443 are supported.
+# Domain names and custom paths are allowed; credentials/query/fragment,
+# private/special IPs, redirects and DNS rebinding are rejected.
+# Select at least one upstream when enabled (maximum 16 unique endpoints).
+# Entries are tried in order on transport/HTTP errors or invalid DNS responses.
 [doh]
 enabled = false
 upstreams = ["https://1.1.1.1/dns-query"]
-# Other supported endpoints: https://1.0.0.1/dns-query,
-# https://8.8.8.8/dns-query, https://8.8.4.4/dns-query,
-# https://9.9.9.9/dns-query, https://149.112.112.112/dns-query.
-# No disk cache, client credential forwarding, custom CA, insecure TLS or
-# outbound proxy settings apply to this dedicated resolver client.
+# Examples: https://dns.google/dns-query, https://dns.quad9.net/dns-query,
+# https://dns.alidns.com/dns-query, https://doh.pub/dns-query,
+# https://doh.dns.sb/dns-query, https://unfiltered.adguard-dns.com/dns-query.
+# Queries without ECS automatically include the verified public client subnet:
+# IPv4 /24, IPv6 /56. Existing ECS (including /0 opt-out) is preserved.
+# Uses trusted_proxies for real client IPs; private/unknown IPs are not added.
+# Cache keys include ECS; automatic ECS is hidden in downstream replies.
+# Bounded in-memory DNS TTL cache (1024 entries / 16 MiB), cleared on restart.
+# Independent of the package disk-cache toggle. Cache hits retain access,
+# rate-limit and quota checks. Downstream HTTP responses remain no-store.
+# No client credential forwarding, custom CA, insecure TLS or outbound proxy
+# settings apply to this dedicated resolver client.
 
 [upstreams]
 # Every string field accepts one or more HTTP(S) endpoints separated by commas.

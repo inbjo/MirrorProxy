@@ -43,7 +43,7 @@ export function AdminPage() {
 }
 
 export function adminConfigErrorMessage(reason: string, status: number, locale: Locale, fallback: string) {
-  if (reason.includes('doh.upstreams')) return locale === 'zh' ? '请选择至少一个受支持的 DoH 上游（最多六个）。' : 'Select between one and six supported DoH upstreams.'
+  if (reason.includes('doh.upstreams')) return locale === 'zh' ? '开启 DoH 时至少选择一个上游（最多 16 个）。地址须为公网 HTTPS 443 端点，包含路径且不带凭据、查询参数或片段，请勿重复添加。' : 'When enabling DoH, select 1–16 unique public HTTPS endpoints on port 443, with a path and without credentials, query parameters or fragments.'
   if (reason === 'invalid CSRF proof') return csrfErrorMessage(reason, locale)
   if (reason.includes('super administrator access required')) {
     return locale === 'zh' ? '只有超级管理员可以修改访问、注册或 Passkey 策略。' : 'Only a super administrator can change access, registration, or passkey policies.'

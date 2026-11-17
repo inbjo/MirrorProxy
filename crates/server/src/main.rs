@@ -209,6 +209,7 @@ pub struct AppState {
     acme_environment_managed: bool,
     upstream_selector: Arc<upstream_selection::UpstreamSelector>,
     downloads: Arc<download::Runtime>,
+    doh_cache: Arc<doh::Cache>,
 }
 
 pub struct RateLimiter {
@@ -1965,6 +1966,7 @@ async fn build_application(config: Config) -> anyhow::Result<BuiltApplication> {
 
     let state = AppState {
         downloads: Arc::new(download::Runtime::default()),
+        doh_cache: Default::default(),
         rate_limiter: Arc::new(RateLimiter::new()),
         admin_login_limiter: Arc::new(AdminLoginRateLimiter::new()),
         discoverable_challenges: Default::default(),
@@ -3486,6 +3488,7 @@ async fn metrics(
 
 #[derive(Serialize)]
 struct PublicConfig {
+    doh: PublicDohConfig,
     download: download::DownloadConfig,
     public_base_url: String,
     site: config::SiteConfig,
@@ -3493,6 +3496,11 @@ struct PublicConfig {
     quota: PublicQuotaConfig,
     user_access: PublicUserAccessConfig,
     registration: PublicRegistrationConfig,
+}
+
+#[derive(Serialize)]
+struct PublicDohConfig {
+    enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -3532,6 +3540,9 @@ async fn public_config(State(state): State<AppState>, headers: HeaderMap) -> imp
         }
     };
     let public_config = PublicConfig {
+        doh: PublicDohConfig {
+            enabled: config.doh.enabled,
+        },
         download: config.download.clone(),
         public_base_url: state.public_base_url(&headers),
         site: config.site.clone(),

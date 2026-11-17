@@ -26,7 +26,9 @@ DoH; no DoT/port 853 listener or JSON DNS API is provided.
 
 Open **Administration → Advanced → DNS over HTTPS (DoH)**, enable the proxy,
 select upstreams, and save. Changes apply immediately and persist across restarts.
-Selection order controls failover. The panel also displays the client URL.
+Selection order controls failover. The panel also displays the client URL. When enabled, the home page shows a
+copyable endpoint and browser/router setup instructions. User-subdomain mode
+requires replacing the hostname with the assigned user subdomain.
 For first-time initialization, the service TOML accepts:
 
 ```toml
@@ -37,9 +39,36 @@ upstreams = ["https://1.1.1.1/dns-query"]
 
 For ordered failover, set `upstreams` to
 `["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query", "https://9.9.9.9/dns-query"]`.
-Also accepted: `1.0.0.1`, `8.8.4.4`, `149.112.112.112`, using HTTPS, port 443
-and the exact `/dns-query` path. Hostnames, private IPs, credentials, URL queries
-and redirects are rejected; clients cannot select an upstream.
+The selector includes 14 endpoints from Cloudflare, Google, Quad9,
+[AliDNS](https://www.alidns.com/), DNSPod, [DNS.SB](https://dns.sb/doh/), and
+[AdGuard DNS](https://adguard-dns.io/en/public-dns.html) (filtering and unfiltered).
+Choose a built-in endpoint or enter a custom HTTPS URL and press Enter. Remove
+and reselect to reorder. Enabling DoH requires at least one upstream; at most 16
+unique endpoints can be configured. When disabled, the list may be empty.
+
+Custom endpoints may use a hostname, public IP (including IPv6), and a custom
+path. They require HTTPS on port 443, without credentials, URL queries or
+fragments. Private, loopback and special-purpose addresses are rejected. Every
+new hostname connection validates all DNS answers and connects to those exact
+public addresses; redirects and environment proxies remain disabled. Clients
+cannot select an upstream.
+
+When a query does not contain ECS (EDNS Client Subnet), the server automatically
+adds the verified client's public IPv4 `/24` or IPv6 `/56` prefix before querying
+the upstream. IP identification follows the existing `trusted_proxies` chain;
+untrusted forwarded headers are ignored. Private, special-purpose and unknown
+client addresses are not added. Existing client ECS, including an explicit `/0`
+privacy opt-out, is preserved. Signed queries, non-final OPT records, unsupported
+EDNS versions and messages without room for the option are forwarded unchanged.
+Upstreams may ignore ECS, so geographic routing depends on resolver support.
+
+Cache keys include the augmented query, keeping different client prefixes
+separate. Returned ECS must match the query's family, source prefix and address;
+malformed or mismatched upstream replies trigger failover. Automatically added
+ECS is removed from downstream replies, while client-supplied ECS remains
+visible to its caller. This exposes only the truncated client network to the
+upstream and requires no CLI, browser or router changes. Reverse proxies must
+preserve the real client IP through correctly configured trusted proxy headers.
 
 Expose `https://xx.com/dns-query` through your existing HTTPS listener or reverse
 proxy, preserving query strings and POST bodies, then configure it as your
@@ -47,10 +76,18 @@ browser/router's custom DoH URL. Single-question standard queries, EDNS and DNSS
 records are supported. Requests and answers are limited to 65,535 bytes.
 The dedicated resolver client uses verified TLS and HTTP/2, connects directly,
 and ignores mirror outbound proxy/custom TLS settings. Each upstream attempt
-has a ten-second deadline, with at most six configured endpoints. Network/HTTP
+has a ten-second deadline, with at most 16 configured endpoints. Network/HTTP
 failures and invalid DNS responses trigger failover; valid DNS errors such as
-NXDOMAIN are returned unchanged. DNS responses bypass disk caching and use
-`Cache-Control: no-store`; client credentials and upstream cookies are not forwarded.
+NXDOMAIN are returned unchanged. Responses are cached in process memory until the smallest DNS record TTL
+expires; cache hits decrement record TTLs and restore the request transaction ID.
+SOA-backed NXDOMAIN/NODATA responses use the smaller SOA TTL/MINIMUM. Zero-TTL,
+truncated, failed and authenticated responses are not cached. HTTP Age and cache
+restrictions also bound reuse. The cache is limited to 1,024 entries / 16 MiB,
+is isolated by upstream selection/order and the full query except transaction ID,
+and clears on restart. The package disk-cache toggle does not control DoH caching.
+Downstream responses still use `Cache-Control: no-store`; client credentials and
+upstream cookies are not forwarded. Cache hits still pass through IP, quota and
+rate-limit middleware.
 
 Existing IP policy, rate limits, quotas, user-subdomain routing and traffic
 accounting apply under target `doh`; restricted teams must allow this target.

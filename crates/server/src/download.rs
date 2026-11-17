@@ -246,7 +246,7 @@ fn domain_input(input: &str) -> Option<String> {
     // Disallow inputs that smuggle a path, port, or query into a domain rule.
     (u.path() == "/" && u.query().is_none() && input.eq_ignore_ascii_case(h)).then(|| h.to_owned())
 }
-fn public_ip(ip: IpAddr) -> bool {
+pub(crate) fn public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v) => {
             let n = u32::from(v);

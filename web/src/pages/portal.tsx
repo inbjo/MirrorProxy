@@ -1,3 +1,4 @@
+import { DohGuide } from '../components/doh-guide'
 import { CommandBlock } from '../components/command-block'
 import { ConsumerTheme } from '../components/consumer-theme'
 import { isPublicQuotaBlocked, PublicQuotaNotice } from '../components/public-quota-notice'
@@ -204,6 +205,7 @@ export function AccelerationWorkbench({ baseUrl, config, catalog, health, labels
       <LinkConverter title={labels.quickGithubTitle} icon={<Github size={19} />} hint={labels.quickGithubHint} value={githubInput} onChange={setGithubInput} output={githubLink} outputLabel={labels.proxyLink} placeholder="https://github.com/owner/repo/releases/download/…" copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-github'} onCopy={() => githubLink && onCopy('quick-github', githubLink)} />
       <LinkConverter title={labels.quickDockerTitle} icon={<Container size={19} />} hint={labels.quickDockerHint} value={dockerInput} onChange={setDockerInput} output={dockerCommand} outputLabel={labels.pullCommand} placeholder="ghcr.io/owner/image:latest" copyLabel={labels.createAndCopy} copiedLabel={labels.copied} copied={copied === 'quick-docker'} onCopy={() => dockerCommand && onCopy('quick-docker', dockerCommand)} />
     </div>
+    {config.doh?.enabled ? <DohGuide locale={locale} baseUrl={baseUrl} userSubdomainRequired={config.user_access?.mode === 'subdomain_required'} copied={copied === 'doh-url'} onCopy={value => onCopy('doh-url', value)} /> : null}
     {catalog?.container_registries?.length ? <ContainerRegistryWorkbench registries={catalog.container_registries} baseUrl={baseUrl} labels={labels} copied={copied} onCopy={onCopy} /> : null}
     <InstallClientPanel baseUrl={baseUrl} labels={labels} copied={copied} onCopy={onCopy} />
     {catalog ? <div className="source-workbench">

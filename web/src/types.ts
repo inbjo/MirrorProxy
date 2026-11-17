@@ -9,6 +9,7 @@ export type AdminNotice = { tone: 'error' | 'success'; title: string; message: s
 export type SiteSettings = { title: string; description: string; keywords: string[]; icon_url: string; footer_text: string }
 
 export type PublicConfig = {
+  doh?: { enabled: boolean }
   public_base_url: string
   site?: SiteSettings
   enabled_proxies: string[]

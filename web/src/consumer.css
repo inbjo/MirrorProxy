@@ -545,3 +545,10 @@
 
 .consumer-ui .converter-input .ant-input::placeholder { color: var(--apple-muted); opacity: 1; }
 .consumer-ui .consumer-account .account-usage .ant-statistic-title { color: var(--apple-muted); }
+
+.consumer-ui .doh-guide { width: min(var(--consumer-content-width, 1360px), calc(100% - 48px)); margin: 0 auto; padding: 48px 0; border-bottom: 1px solid var(--apple-hairline); min-width: 0; }
+.consumer-ui .doh-guide h2 { font-size: 34px; line-height: 1.2; }
+.consumer-ui .doh-guide p, .consumer-ui .doh-guide li { max-width: 75ch; color: var(--apple-muted); font-size: 14px; line-height: 1.65; }
+.consumer-ui .doh-guide details { margin: 20px 0; }
+.consumer-ui .doh-guide summary { cursor: pointer; color: var(--apple-ink); }
+.consumer-ui .doh-guide ul { padding-inline-start: 24px; }

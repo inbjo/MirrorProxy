@@ -77,7 +77,7 @@ administrator-defined static operating-system repositories:
 | Developer tools and application sources | Homebrew, WinGet, TeX Live, ELPA, Nix, GNU Guix, Flatpak |
 | Linux / BSD / operating-system sources | Debian, Ubuntu, Fedora, Arch Linux, Alpine, openSUSE, Void Linux, Gentoo, FreeBSD, Kali, Rocky Linux, AlmaLinux, Manjaro, Raspberry Pi OS, Armbian, openEuler, Anolis OS, Deepin, Linux Mint, Solus, Trisquel, Linux Lite, NetBSD, OpenBSD |
 | Specialized systems and tool sources | OpenWrt, Termux, MSYS2, ROS, and administrator-defined static repositories |
-| DNS over HTTPS (DoH) | Optional `/dns-query` proxy for Cloudflare (default `1.1.1.1`), Google and Quad9; enable and configure in Administration → Advanced. [Configuration](docs/wiki/Proxy-Adapters.md#dns-over-https-doh). |
+| DNS over HTTPS (DoH) | Optional `/dns-query` proxy with common/custom HTTPS upstreams, automatic client-subnet ECS and DNS TTL caching; enable and configure in Administration → Advanced. [Configuration](docs/wiki/Proxy-Adapters.md#dns-over-https-doh). |
 
 ## Capabilities
 
