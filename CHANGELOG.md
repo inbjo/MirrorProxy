@@ -5,6 +5,22 @@ follow semantic versioning.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-18
+
+- Add an opt-in DNS-over-HTTPS relay at `/dns-query` with configurable HTTPS
+  upstreams, health-based selection, bounded TTL caching, optional ECS, and
+  independent per-client limits. Add a bilingual client setup guide and
+  administrator health and telemetry views.
+- Apply runtime configuration as a consistent snapshot. Reject stale
+  administrator saves, preserve unsaved edits, and improve cache maintenance
+  and graceful shutdown of active requests.
+- Move configuration saves below long forms and place contextual help beside
+  setting titles. Record the resolved client IP in successful administrator
+  Passkey audit entries when requests arrive through trusted proxies.
+- Update bundled SQLite to 3.54.1 and refresh Hono and QUIC dependencies.
+  Document the temporary, version- and path-scoped picomatch build-tool audit
+  exception pending an upstream fix.
+
 ## [1.7.3] - 2026-11-06
 
 - Statically link the MSVC runtime into Windows x64/ARM64 client and server
@@ -511,3 +527,4 @@ Multi-instance clustering and high availability are intentionally outside the
 [1.3.2]: https://github.com/inbjo/MirrorProxy/compare/v1.3.1...v1.3.2
 [1.7.0]: https://github.com/inbjo/MirrorProxy/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/inbjo/MirrorProxy/compare/v1.5.0...v1.6.0
+[1.8.0]: https://github.com/inbjo/MirrorProxy/compare/v1.7.3...v1.8.0
