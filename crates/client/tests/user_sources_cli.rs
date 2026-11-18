@@ -2,8 +2,10 @@ use std::{fs, path::PathBuf, process::Command};
 
 #[test]
 fn short_language_commands_use_saved_origin_and_keep_unrelated_configuration() {
-    let root =
-        std::env::temp_dir().join(format!("mirrorproxy-user-sources-{}", std::process::id()));
+    let root = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("mirrorproxy-user-sources-{}", std::process::id()));
     fs::create_dir(&root).unwrap();
     struct Cleanup(PathBuf);
     impl Drop for Cleanup {
