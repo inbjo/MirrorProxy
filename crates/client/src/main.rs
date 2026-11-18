@@ -182,7 +182,8 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
             user,
             config_root,
         } => {
-            let scope = if user || !cfg!(target_os = "linux") {
+            // An explicit root models a Linux installation on every host.
+            let scope = if user || (!cfg!(target_os = "linux") && config_root.is_none()) {
                 CliSourceScope::User
             } else {
                 CliSourceScope::System

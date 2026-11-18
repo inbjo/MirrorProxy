@@ -271,7 +271,21 @@ fn short_debian_command_uses_the_saved_instance_and_retires_the_generated_apt_en
         "https://old.example",
     ]);
     let previous_standalone = fs::read_to_string(&standalone).unwrap();
+    assert_ok(&["use", "https://user.example", "--user"]);
     assert_ok(&["use", "https://mirror.example"]);
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("etc/mirrorproxy/client-origin")).unwrap(),
+        "https://mirror.example\n"
+    );
+    assert_eq!(
+        fs::read_to_string(
+            fixture
+                .0
+                .join(".local/state/mirrorproxy/sources/client-origin")
+        )
+        .unwrap(),
+        "https://user.example\n"
+    );
     let result = assert_ok(&["set", "debian"]);
     assert!(result.contains("system sources updated"));
     assert_eq!(fs::read_to_string(&standalone).unwrap(), "");
