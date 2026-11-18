@@ -3662,6 +3662,7 @@ async fn user_subdomain_enforces_personal_quota_when_global_quota_is_disabled() 
 #[tokio::test]
 async fn exposes_source_catalog() {
     let mut config = Config::default();
+    config.upstreams.additional_os.clear();
     config.upstreams.additional_os.insert(
         "clickhouse".to_string(),
         "https://packages.clickhouse.com/deb".to_string(),
@@ -3744,6 +3745,33 @@ async fn exposes_source_catalog() {
             && target["aliases"] == serde_json::json!(["additional_os"])
             && target["supported_modes"] == serde_json::json!(["proxy"])
     }));
+    for (target_code, migration_target) in [
+        ("apt", "system"),
+        ("dnf", "system"),
+        ("pacman", "system"),
+        ("alpine", "alpine"),
+        ("rocky", "rocky"),
+        ("trisquel", "trisquel"),
+        ("linuxlite", "linuxlite"),
+        ("openwrt", "openwrt"),
+        ("docker-ce", "docker-ce"),
+        ("epel", "epel"),
+    ] {
+        assert!(value["targets"].as_array().unwrap().iter().any(|target| {
+            target["code"] == target_code && target["migration_target"] == migration_target
+        }));
+    }
+    for target_code in ["debian-security", "ubuntu-security", "ubuntu-ports"] {
+        assert!(value["targets"].as_array().unwrap().iter().any(|target| {
+            target["code"] == target_code
+                && target["category"] == "os"
+                && target.get("migration_target").is_none()
+        }));
+        let expected = format!("/os/{target_code}/");
+        assert!(value["sources"].as_array().unwrap().iter().any(|source| {
+            source["target_code"] == target_code && source["repo_url"] == expected
+        }));
+    }
     assert!(value["sources"].as_array().unwrap().iter().any(|source| {
         source["target_code"] == "clickhouse"
             && source["provider_code"] == "mirrorproxy"

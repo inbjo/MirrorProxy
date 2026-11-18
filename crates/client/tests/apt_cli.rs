@@ -52,7 +52,7 @@ fn independent_repositories_preserve_unselected_sources_and_restore() {
         let source = fixture.0.join(path);
         fs::create_dir_all(source.parent().unwrap()).unwrap();
         fs::write(&source, original).unwrap();
-        let output = fixture.run(&["set", target, "--scope", "system", "--replace-existing", "--base-url", "https://proxy.example"]);
+        let output = fixture.run(&["set", target, "https://proxy.example"]);
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         let migrated = fs::read_to_string(&source).unwrap();
         assert!(migrated.contains(expected), "{migrated}");
@@ -242,6 +242,75 @@ fn ubuntu_flavours_require_explicit_base_and_old_mint_is_rejected() {
 }
 
 #[test]
+fn short_debian_command_uses_the_saved_instance_and_retires_the_generated_apt_entry() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.0.join("etc/os-release"),
+        "ID=debian\nVERSION_ID=12\nVERSION_CODENAME=bookworm\n",
+    )
+    .unwrap();
+    let source = fixture.0.join("etc/apt/sources.list");
+    let standalone = fixture.0.join("etc/apt/sources.list.d/mirrorproxy.list");
+    let original = "deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] https://mirrors.aliyun.com/debian bookworm main contrib\ndeb https://mirrors.aliyun.com/debian-security bookworm-security main\ndeb https://download.docker.com/linux/debian bookworm stable\n";
+    fs::write(&source, original).unwrap();
+    let assert_ok = |args: &[&str]| {
+        let result = fixture.run(args);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8(result.stdout).unwrap()
+    };
+    assert_ok(&[
+        "set",
+        "apt",
+        "--scope",
+        "system",
+        "--base-url",
+        "https://old.example",
+    ]);
+    let previous_standalone = fs::read_to_string(&standalone).unwrap();
+    assert_ok(&["use", "https://mirror.example"]);
+    let result = assert_ok(&["set", "debian"]);
+    assert!(result.contains("system sources updated"));
+    assert_eq!(fs::read_to_string(&standalone).unwrap(), "");
+    assert_eq!(
+        fs::read_to_string(&source).unwrap(),
+        original
+            .replace(
+                "https://mirrors.aliyun.com/debian ",
+                "https://mirror.example/os/debian/ "
+            )
+            .replace(
+                "https://mirrors.aliyun.com/debian-security ",
+                "https://mirror.example/os/debian-security/ "
+            )
+    );
+    assert!(!fixture
+        .run(&["reset", "apt", "--scope", "system", "--force"])
+        .status
+        .success());
+    assert_ok(&["reset", "debian", "--scope", "system"]);
+    assert_eq!(fs::read_to_string(&source).unwrap(), original);
+    assert_eq!(
+        fs::read_to_string(&standalone).unwrap(),
+        previous_standalone
+    );
+
+    fs::write(
+        &standalone,
+        format!("{previous_standalone}# manually edited\n"),
+    )
+    .unwrap();
+    assert!(!fixture
+        .run(&["set", "apt", "https://other.example"])
+        .status
+        .success());
+    assert_eq!(fs::read_to_string(&source).unwrap(), original);
+}
+
+#[test]
 fn existing_sources_preview_apply_and_reset_through_real_cli() {
     let fixture = Fixture::new();
     let source = fixture.0.join("etc/apt/sources.list.d/ubuntu.sources");
@@ -382,6 +451,8 @@ fn every_system_profile_migrates_native_configuration_and_restores_exact_bytes()
         ("debian", "debian", "13", "https://deb.debian.org/debian", "debian"),
         ("ubuntu", "ubuntu", "24.04", "https://ports.ubuntu.com/ubuntu-ports", "ubuntu-ports"),
         ("kali", "kali", "2026.3", "http://http.kali.org/kali", "kali"),
+        ("trisquel", "trisquel", "11", "https://mirrors.aliyun.com/trisquel", "trisquel"),
+        ("linuxlite", "ubuntu", "24.04", "https://mirrors.cernet.edu.cn/linuxliteos", "linuxlite"),
         ("linuxmint", "linuxmint", "22", "https://packages.linuxmint.com", "linuxmint"),
         ("deepin", "deepin", "25", "https://community-packages.deepin.com/beige", "deepin-root"),
         ("zorin", "zorin", "18", "https://archive.ubuntu.com/ubuntu", "ubuntu"),
@@ -407,6 +478,7 @@ fn every_system_profile_migrates_native_configuration_and_restores_exact_bytes()
         ("gentoo", "gentoo", "2.17", "", "gentoo"),
         ("nixos", "nixos", "25.11", "", "nix-store"),
         ("void", "void", "", "https://alpha.de.repo.voidlinux.org/current", "void"),
+        ("openwrt", "openwrt", "24.10", "https://mirrors.aliyun.com/openwrt/releases/24.10.0/packages/aarch64_generic/base", "openwrt"),
     ];
     assert_eq!(
         cases.len(),
@@ -416,7 +488,14 @@ fn every_system_profile_migrates_native_configuration_and_restores_exact_bytes()
         let fixture = Fixture::new();
         fs::write(
             fixture.0.join("etc/os-release"),
-            format!("ID={id}\nNAME={code}\nVERSION_ID={version}\nVERSION_CODENAME=bookworm\n"),
+            format!(
+                "ID={id}\nNAME=\"{}\"\nVERSION_ID={version}\nVERSION_CODENAME=bookworm\n",
+                if code == "linuxlite" {
+                    "Linux Lite"
+                } else {
+                    code
+                }
+            ),
         )
         .unwrap();
         let profile = system_distribution(code).unwrap();
@@ -428,6 +507,7 @@ fn every_system_profile_migrates_native_configuration_and_restores_exact_bytes()
             SystemFormat::Gentoo => ("etc/portage/make.conf", "CFLAGS=\"-O2 -pipe\"\n".into()),
             SystemFormat::Nix => ("etc/nixos/mirrorproxy.nix", String::new()),
             SystemFormat::Xbps => ("etc/xbps.d/00-repository-main.conf", format!("repository={uri}\n")),
+            SystemFormat::Opkg => ("etc/opkg/distfeeds.conf", format!("src/gz openwrt_base {uri}\n# preserve comment\nsrc/gz vendor https://vendor.example/packages\n")),
         };
         let path = fixture.0.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -450,41 +530,44 @@ fn every_system_profile_migrates_native_configuration_and_restores_exact_bytes()
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(!fixture.0.join("var").exists());
-        let output = fixture.run(&[
-            "set",
-            "system",
-            "--scope",
-            "system",
-            "--base-url",
-            "https://proxy.example",
-            "--replace-existing",
-        ]);
-        assert!(
-            output.status.success(),
-            "{code}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let configured = fs::read_to_string(&path).unwrap();
-        assert!(
-            configured.contains(&format!("https://proxy.example/os/{repository}")),
-            "{code}: {configured}"
-        );
-        if original.contains("Signed-By") {
-            assert!(configured.contains("Signed-By: /usr/share/keyrings/vendor.gpg"));
-        }
-        if original.contains("gpgcheck") {
-            assert!(configured.contains("gpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/VENDOR"));
-        }
-        let output = fixture.run(&["reset", code, "--scope", "system"]);
-        assert!(
-            output.status.success(),
-            "{code}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        if profile.format == SystemFormat::Nix {
-            assert!(!path.exists());
-        } else {
-            assert_eq!(fs::read_to_string(path).unwrap(), original, "{code}");
+        assert!(fixture
+            .run(&["use", "https://proxy.example"])
+            .status
+            .success());
+        for target in [code, "system"] {
+            let output = fixture.run(&["set", target]);
+            assert!(
+                output.status.success(),
+                "{code}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let configured = fs::read_to_string(&path).unwrap();
+            assert!(
+                configured.contains(&format!("https://proxy.example/os/{repository}")),
+                "{code}: {configured}"
+            );
+            if original.contains("Signed-By") {
+                assert!(configured.contains("Signed-By: /usr/share/keyrings/vendor.gpg"));
+            }
+            if original.contains("gpgcheck") {
+                assert!(configured.contains("gpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/VENDOR"));
+            }
+            if profile.format == SystemFormat::Opkg {
+                assert!(configured
+                    .contains("/os/openwrt/releases/24.10.0/packages/aarch64_generic/base"));
+                assert!(configured.contains("src/gz vendor https://vendor.example/packages"));
+            }
+            let output = fixture.run(&["reset", code, "--scope", "system"]);
+            assert!(
+                output.status.success(),
+                "{code}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if profile.format == SystemFormat::Nix {
+                assert!(!path.exists());
+            } else {
+                assert_eq!(fs::read_to_string(&path).unwrap(), original, "{code}");
+            }
         }
     }
 }

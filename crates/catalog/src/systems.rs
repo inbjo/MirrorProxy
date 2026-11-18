@@ -14,6 +14,7 @@ pub enum SystemFormat {
     Gentoo,
     Nix,
     Xbps,
+    Opkg,
 }
 
 impl SystemFormat {
@@ -26,6 +27,7 @@ impl SystemFormat {
             Self::Gentoo => "gentoo",
             Self::Nix => "nix",
             Self::Xbps => "xbps",
+            Self::Opkg => "opkg",
         }
     }
 }
@@ -70,6 +72,28 @@ pub const SYSTEM_DISTRIBUTIONS: &[SystemDistribution] = &[
         ["ubuntu", "ubuntu-security", "ubuntu-ports", "ubuntu-old"]
     ),
     distro!("kali", "Kali Linux", ["kali"], "rolling", Apt, ["kali"]),
+    distro!(
+        "trisquel",
+        "Trisquel",
+        ["trisquel"],
+        "existing APT feeds",
+        Apt,
+        ["trisquel"]
+    ),
+    distro!(
+        "linuxlite",
+        "Linux Lite",
+        ["linuxlite", "linux-lite"],
+        "existing APT feeds",
+        Apt,
+        [
+            "linuxlite",
+            "ubuntu",
+            "ubuntu-security",
+            "ubuntu-ports",
+            "ubuntu-old"
+        ]
+    ),
     distro!(
         "linuxmint",
         "Linux Mint / LMDE",
@@ -281,6 +305,14 @@ pub const SYSTEM_DISTRIBUTIONS: &[SystemDistribution] = &[
         ["nix-store", "nix-channels"]
     ),
     distro!("void", "Void Linux", ["void"], "rolling", Xbps, ["void"]),
+    distro!(
+        "openwrt",
+        "OpenWrt",
+        ["openwrt"],
+        "opkg releases",
+        Opkg,
+        ["openwrt"]
+    ),
 ];
 
 pub fn system_distribution(code: &str) -> Option<&'static SystemDistribution> {
@@ -435,6 +467,25 @@ pub const SYSTEM_REPOSITORIES: &[SystemRepository] = &[
         "kali",
         ["https://http.kali.org/kali", "https://http.kali.org"]
     ),
+    repo!(
+        "trisquel",
+        "https://archive.trisquel.info/trisquel",
+        "trisquel",
+        [
+            "https://mirrors.cernet.edu.cn/trisquel",
+            "https://mirror.nju.edu.cn/trisquel"
+        ]
+    ),
+    repo!(
+        "linuxlite",
+        "https://repo.linuxliteos.com/linuxlite",
+        "linuxliteos",
+        [
+            "https://mirrors.cernet.edu.cn/linuxliteos",
+            "https://mirror.nju.edu.cn/linuxliteos"
+        ]
+    ),
+    repo!("openwrt", "https://downloads.openwrt.org", "openwrt", []),
     repo!(
         "linuxmint",
         "https://packages.linuxmint.com",
@@ -620,7 +671,7 @@ mod tests {
                 assert!(system_repository(key).is_some(), "{key}");
             }
         }
-        assert_eq!(SYSTEM_DISTRIBUTIONS.len(), 28);
+        assert_eq!(SYSTEM_DISTRIBUTIONS.len(), 31);
     }
     #[test]
     fn version_boundaries_and_variant_ranges_are_explicit() {

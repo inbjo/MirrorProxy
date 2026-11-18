@@ -181,9 +181,9 @@ sudo apt install mirrorproxy
 
 See [Client distribution](https://github.com/inbjo/MirrorProxy/wiki/Distribution) for details.
 
-The Linux client also provides `mirrorproxy systems` and a unified native source
-migration for 28 distribution profiles. See the [OS/version matrix and rollback
-guide](https://github.com/inbjo/MirrorProxy/wiki/System-Sources).
+After installing from your MirrorProxy site, run `sudo mirrorproxy set debian`
+or `sudo mirrorproxy set system` to detect the distribution automatically.
+See the [OS/version matrix and rollback guide](https://github.com/inbjo/MirrorProxy/wiki/System-Sources).
 
 ## AI agents: Skill and MCP
 

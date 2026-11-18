@@ -159,9 +159,9 @@ describe('App preferences', () => {
     fireEvent.click(screen.getByText('clickhouse'))
     expect(await screen.findByText('https://mirror.example/os/clickhouse/')).toBeTruthy()
     expect(screen.getByText('Proxy repository URL')).toBeTruthy()
-    expect(screen.getByText(/provides a proxy URL only/)).toBeTruthy()
+    expect(screen.getByText(/Replace only the upstream repository root/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Copy address' })).toBeTruthy()
-    expect(screen.queryByText(/enable this source locally/)).toBeNull()
+    expect(screen.queryByText('MirrorProxy CLI setup')).toBeNull()
     expect(screen.queryByText(/mirrorproxy set clickhouse/)).toBeNull()
   })
 
@@ -252,8 +252,10 @@ describe('App preferences', () => {
     expect(sourceManualCommand('go', 'https://sina.dev/goproxy/', 'go env -w GOPROXY={repo_url},direct')).toBe('go env -w GOPROXY=https://sina.dev/goproxy/,direct')
   })
 
-  it('generates a Bash setup command for the ROS APT proxy', () => {
-    expect(sourceManualCommand('ros', 'https://sina.dev/os/ros/')).toContain('deb https://sina.dev/os/ros $UBUNTU_CODENAME main')
+  it('keeps the existing signed ROS APT entry and generates valid Cargo and Docker examples', () => {
+    expect(sourceManualCommand('ros', 'https://sina.dev/os/ros/', 'deb {repo_url} noble main')).toBeUndefined()
+    expect(sourceManualCommand('cargo', 'https://sina.dev/crates-index/', 'registry = "{repo_url}"')).toBe('registry = "sparse+https://sina.dev/crates-index/"')
+    expect(sourceManualCommand('docker', 'https://sina.dev:8443/v2/', 'docker pull {repo_url}/nginx')).toBe('docker pull sina.dev:8443/nginx')
   })
 
   it('generates an eopkg command for the Solus proxy', () => {
@@ -333,7 +335,7 @@ describe('App preferences', () => {
     expect(document.querySelector('button[aria-description="Mirror upstream TLS trust help"]')).toBeTruthy()
     fireEvent.click(await screen.findByText('Edit upstream endpoints'))
     expect(await screen.findByText(/comma-separated/)).toBeTruthy()
-    expect(await screen.findByText('Custom software repositories')).toBeTruthy()
+    expect(await screen.findByText('Built-in and custom software repositories')).toBeTruthy()
     expect(screen.getByText(/APT repositories such as ClickHouse and Docker CE/)).toBeTruthy()
     expect(screen.getByText('http://selfhost.com/os/kali')).toBeTruthy()
     expect(await screen.findByDisplayValue('https://one.example/maven, https://two.example/maven')).toBeTruthy()

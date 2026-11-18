@@ -104,6 +104,7 @@ pub(super) async fn update_admin_config_inner(
             }
         }
     }
+    next_config.upstreams.fill_system_repository_defaults();
     if let Err(error) = next_config.validate() {
         return (
             StatusCode::BAD_REQUEST,
@@ -213,6 +214,10 @@ pub(super) fn admin_config_value(mut config: Config) -> serde_json::Value {
     config.outbound_proxy.password = None;
     config.alerts.webhook_url.clear();
     let mut value = serde_json::to_value(config).expect("configuration is serializable");
+    value["built_in_os_repositories"] =
+        serde_json::json!(crate::config::additional_system_repositories()
+            .map(|repository| repository.code)
+            .collect::<Vec<_>>());
     if let Some(outbound_proxy) = value
         .get_mut("outbound_proxy")
         .and_then(serde_json::Value::as_object_mut)

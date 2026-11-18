@@ -36,6 +36,10 @@ Equivalent environment variables are `MIRRORPROXY_VERSION`,
 `MIRRORPROXY_GITHUB_REPO`. The Windows script accepts `-Version`, `-InstallDir`,
 `-Mirror`, and `-Repository`.
 
+Current installers and clients save the instance supplied with `--mirror` (or
+`-Mirror` in PowerShell), so commands such as `mirrorproxy set go` and
+`mirrorproxy set pip` can use it directly.
+
 ## Homebrew (macOS/Linux)
 
 Add the official tap once, then install and upgrade normally:

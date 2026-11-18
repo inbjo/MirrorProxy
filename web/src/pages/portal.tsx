@@ -280,7 +280,7 @@ export function ContainerRegistryWorkbench({ registries, baseUrl, labels, copied
   const output = mode === 'image'
     ? (normalized ? `docker pull ${new URL(baseUrl).host}/${normalized}` : '')
     : mode === 'engine'
-      ? `mirrorproxy set docker --mirror mirrorproxy --base-url ${baseUrl} --scope system --dry-run\nsudo mirrorproxy set docker --mirror mirrorproxy --base-url ${baseUrl} --scope system\n# Review running containers, then apply during a maintenance window:\nsudo systemctl restart docker`
+      ? 'sudo mirrorproxy set docker'
       : mode === 'k3s'
         ? `mirrors:\n  docker.io:\n    endpoint:\n      - "${baseUrl}"`
         : rewriteContainerConfig(input, mode, baseUrl, registries)
@@ -306,7 +306,7 @@ export function ContainerRegistryWorkbench({ registries, baseUrl, labels, copied
     <div className="registry-rail">{registries.map((registry) => <Action type="button" className={registry.code === selectedRegistryCode ? 'registry-chip active' : 'registry-chip'} aria-pressed={registry.code === selectedRegistryCode} onClick={() => selectRegistry(registry)} key={registry.code}><span>{registry.name}</span><code>{registry.host}</code>{registry.legacy ? <em>{labels.legacyRegistry}</em> : null}</Action>)}</div>
     <div className="registry-editor">
       <div className="registry-modes"><Action className={mode === 'image' ? 'active' : ''} onClick={() => setMode('image')}>{labels.singleImage}</Action><Action className={mode === 'compose' ? 'active' : ''} onClick={() => setMode('compose')}>{labels.composeFile}</Action><Action className={mode === 'dockerfile' ? 'active' : ''} onClick={() => setMode('dockerfile')}>{labels.dockerfile}</Action><Action className={mode === 'engine' ? 'active' : ''} onClick={() => setMode('engine')}>{labels.dockerEngine}</Action><Action className={mode === 'k3s' ? 'active' : ''} onClick={() => setMode('k3s')}>{labels.k3sConfig}</Action></div>
-      {mode === 'engine' || mode === 'k3s' ? <p className="registry-platform-hint"><ShieldCheck size={16} />{labels.platformConfigHint}</p> : <label><span>{labels.registryInputHint}</span><TextArea rows={mode === 'image' ? 3 : 9} value={input} onChange={(event) => updateInput(event.target.value)} placeholder={mode === 'compose' ? 'services:\n  app:\n    image: ghcr.io/owner/app:latest' : mode === 'dockerfile' ? 'FROM mcr.microsoft.com/dotnet/runtime:8.0' : 'mcr.microsoft.com/dotnet/runtime:8.0'} /></label>}
+      {mode === 'engine' || mode === 'k3s' ? <p className="registry-platform-hint"><ShieldCheck size={16} />{mode === 'engine' ? `${labels.platformConfigHint} ${labels.dockerRestartHint}` : labels.platformConfigHint}</p> : <label><span>{labels.registryInputHint}</span><TextArea rows={mode === 'image' ? 3 : 9} value={input} onChange={(event) => updateInput(event.target.value)} placeholder={mode === 'compose' ? 'services:\n  app:\n    image: ghcr.io/owner/app:latest' : mode === 'dockerfile' ? 'FROM mcr.microsoft.com/dotnet/runtime:8.0' : 'mcr.microsoft.com/dotnet/runtime:8.0'} /></label>}
       {unsupported ? <p className="registry-error"><CircleAlert size={16} />{labels.unsupportedRegistry}</p> : null}
       {output ? <CommandBlock className="registry-output" title={outputLabel} language={mode === 'compose' || mode === 'k3s' ? 'YAML' : mode === 'engine' ? 'JSON' : 'Shell'} value={output} onCopy={() => onCopy('registry-output', output)} copied={copied === 'registry-output'} copyLabel={labels.copy} copiedLabel={labels.copied} /> : null}
     </div>
@@ -379,17 +379,22 @@ export function SourceConfigModal({ target, health, baseUrl, catalog, labels, co
   const customRepository = target.aliases.includes('additional_os')
   const template = catalog.templates.find((item) => item.target_code === target.code)
   const proxyUrl = source ? `${baseUrl}${source.repo_url.startsWith('/') ? source.repo_url : `/${source.repo_url}`}` : ''
-  const mirrorproxyCommand = `mirrorproxy set ${target.code} --mirror mirrorproxy --base-url ${baseUrl} --scope ${target.default_scope}`
-  const manualCommand = source ? sourceManualCommand(target.code, proxyUrl, template?.template) : `mirrorproxy get ${target.code}`
+  const migrationCommand = source && target.migration_target
+    ? `${target.migration_target === 'openwrt' ? '' : 'sudo '}mirrorproxy set ${target.migration_target}`
+    : undefined
+  const mirrorproxyCommand = migrationCommand ?? (source && target.supported_modes.includes('local-config')
+    ? `${target.default_scope === 'system' ? 'sudo ' : ''}mirrorproxy set ${target.code}`
+    : undefined)
+  const manualCommand = source && !customRepository && !migrationCommand ? sourceManualCommand(target.code, proxyUrl, template?.template) : undefined
 
   return <Modal open centered title={target.name} onCancel={onClose} footer={null} width={800} closable={{ 'aria-label': labels.closeConfig }} className="config-modal consumer-modal" styles={{ body: { maxHeight: 'min(72vh, 760px)', overflowY: 'auto', paddingRight: 8 } }} closeIcon={<X size={18} />} aria-label={`${target.name} ${labels.sourceCatalogHeading}`}>
-      <p>{source ? (customRepository ? labels.customRepositoryAvailable : labels.sourceAvailable) : labels.sourceUnavailable}</p>
+      {!source ? <p>{labels.sourceUnavailable}</p> : null}
       {target.code === 'huggingface' ? <p>{labels.huggingfaceHint}</p> : null}
       <SourceCapabilityDetails capabilities={target.capabilities} locale={locale} />
       {health?.endpoints.length ? <section className="public-upstream-health"><div><strong>{labels.upstreamStatus ?? 'Upstream status'}</strong><span className={`source-health-badge source-health-${health.status}`}><i />{labels[`source${health.status[0].toUpperCase()}${health.status.slice(1)}`]}</span></div><div className="public-upstream-list">{health.endpoints.map((endpoint) => <div className={`public-upstream-row ${endpoint.status}`} key={`${endpoint.position}-${endpoint.endpoint}`}><i /><code>{endpoint.endpoint}</code><span>HTTP {endpoint.http_status ?? '—'} · {endpoint.latency_ms === null ? '—' : `${endpoint.latency_ms} ms`}</span></div>)}</div></section> : null}
-      {source ? <ConfigOption title={customRepository ? labels.customRepositoryAddress : labels.mirrorproxyAddress} description={customRepository ? labels.customRepositoryAddressHint : labels.mirrorproxyAddressHint} value={proxyUrl} copyLabel={customRepository ? labels.copyAddress : labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-url'} onCopy={() => onCopy('source-url', proxyUrl)} /> : null}
-      {source && !customRepository && target.code !== 'huggingface' ? <ConfigOption title={labels.mirrorproxyCli} description={labels.mirrorproxyCliHint} value={mirrorproxyCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-cli'} onCopy={() => onCopy('source-cli', mirrorproxyCommand)} /> : null}
-      {!customRepository ? <ConfigOption title={labels.manualSetup} description={target.code === 'huggingface' ? `${labels.huggingfaceHint} (POSIX shell)` : target.category === 'os' ? labels.manualSystemSetupHint : labels.manualSetupHint} value={manualCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-manual'} onCopy={() => onCopy('source-manual', manualCommand)} /> : null}
+      {source ? <ConfigOption title={customRepository ? labels.customRepositoryAddress : labels.mirrorproxyAddress} description={customRepository || (target.category === 'os' && !migrationCommand && !manualCommand) ? labels.customRepositoryAddressHint : labels.mirrorproxyAddressHint} value={proxyUrl} copyLabel={labels.copyAddress} copiedLabel={labels.copied} copied={copied === 'source-url'} onCopy={() => onCopy('source-url', proxyUrl)} /> : null}
+      {mirrorproxyCommand ? <ConfigOption title={migrationCommand ? labels.sourceMigrationApply : labels.mirrorproxyCli} description={target.migration_target === 'openwrt' ? labels.sourceMigrationRootHint : target.default_scope === 'system' ? labels.sourceMigrationApplyHint : labels.mirrorproxyCliHint} value={mirrorproxyCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-cli'} onCopy={() => onCopy('source-cli', mirrorproxyCommand)} /> : null}
+      {manualCommand ? <ConfigOption title={labels.manualSetup} description={target.code === 'huggingface' ? `${labels.huggingfaceHint} (POSIX shell)` : target.category === 'os' ? labels.manualSystemSetupHint : labels.manualSetupHint} value={manualCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-manual'} onCopy={() => onCopy('source-manual', manualCommand)} /> : null}
       {source && target.code === 'huggingface' ? <ConfigOption title="PowerShell" description={labels.huggingfaceHint} value={`$env:HF_ENDPOINT='${proxyUrl.replaceAll("'", "''")}'; $env:HF_HUB_DISABLE_XET='1'; hf download gpt2 config.json`} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-powershell'} onCopy={() => onCopy('source-powershell', `$env:HF_ENDPOINT='${proxyUrl.replaceAll("'", "''")}'; $env:HF_HUB_DISABLE_XET='1'; hf download gpt2 config.json`)} /> : null}
   </Modal>
 }
@@ -411,18 +416,11 @@ export function sourceManualCommand(targetCode: string, repoUrl: string, templat
   const shellBase = base.replaceAll("'", "'\"'\"'")
   const commands: Record<string, string> = {
     huggingface: `HF_ENDPOINT='${shellBase}' HF_HUB_DISABLE_XET=1 hf download gpt2 config.json`,
-    apt: `set -eu\n. /etc/os-release\ncase "$ID" in\n  ubuntu) components='main restricted universe multiverse' ;;\n  debian) components='main' ;;\n  *) echo "仅支持 Debian/Ubuntu，当前为: $ID" >&2; exit 1 ;;\nesac\nsudo tee /etc/apt/sources.list.d/mirrorproxy.list >/dev/null <<EOF\ndeb ${base}/$ID/ $VERSION_CODENAME $components\nEOF\nsudo apt update`,
-    trisquel: `set -eu\n. /etc/os-release\nsudo tee /etc/apt/sources.list.d/mirrorproxy-trisquel.list >/dev/null <<EOF\ndeb ${base} $VERSION_CODENAME main\nEOF\nsudo apt update`,
-    linuxlite: `set -eu\n. /etc/os-release\nsudo tee /etc/apt/sources.list.d/mirrorproxy-linuxlite.list >/dev/null <<EOF\ndeb ${base} $VERSION_CODENAME main\nEOF\nsudo apt update`,
-    ros: `set -eu\n. /etc/os-release\n: "\${UBUNTU_CODENAME:=\${VERSION_CODENAME:?This command requires an Ubuntu codename}}"\nsudo tee /etc/apt/sources.list.d/mirrorproxy-ros2.list >/dev/null <<EOF\ndeb ${base} $UBUNTU_CODENAME main\nEOF\nsudo apt update`,
     solus: `sudo eopkg add-repo mirrorproxy ${base}/polaris/eopkg-index.xml.xz\nsudo eopkg update-repo mirrorproxy`,
-    alpine: `set -eu\n. /etc/os-release\nrelease="v\${VERSION_ID%.*}"\nprintf '%s\\n%s\\n' '${base}/'$release'/main' '${base}/'$release'/community' | sudo tee /etc/apk/repositories >/dev/null\nsudo apk update`,
-    dnf: `sudo tee /etc/yum.repos.d/mirrorproxy.repo >/dev/null <<'EOF'\n[mirrorproxy]\nname=MirrorProxy Fedora\nbaseurl=${base}/fedora/releases/$releasever/Everything/$basearch/os/\nenabled=1\ngpgcheck=1\nEOF\nsudo dnf makecache`,
-    pacman: `printf 'Server = ${base}/archlinux/$repo/os/$arch\\n' | sudo tee /etc/pacman.d/mirrorproxy >/dev/null\nsudo pacman -Syy`,
-    xbps: `printf 'repository=${base}/current\\n' | sudo tee /etc/xbps.d/00-mirrorproxy.conf >/dev/null\nsudo xbps-install -S`,
-    gentoo: `printf '\\n# MirrorProxy\\nGENTOO_MIRRORS="${base}"\\n' | sudo tee -a /etc/portage/make.conf >/dev/null\nsudo emerge --sync`,
-    zypper: `sudo zypper ar -f '${base}/distribution/leap/15.6/repo/oss/' mirrorproxy-oss\nsudo zypper refresh`,
     freebsd: `sudo mkdir -p /usr/local/etc/pkg/repos\nsudo tee /usr/local/etc/pkg/repos/FreeBSD.conf >/dev/null <<'EOF'\nFreeBSD: {\n  url: "${base}/\${ABI}/quarterly",\n  mirror_type: "none",\n  signature_type: "fingerprints",\n  fingerprints: "/usr/share/keys/pkg",\n  enabled: yes\n}\nEOF\nsudo pkg update -f`,
   }
-  return commands[targetCode] ?? template?.replaceAll('{repo_url}', repoUrl) ?? `mirrorproxy get ${targetCode}`
+  if (Object.hasOwn(commands, targetCode)) return commands[targetCode]
+  if (!template || ['apt', 'dnf', 'pacman', 'alpine', 'zypper', 'xbps', 'gentoo', 'trisquel', 'linuxlite', 'ros'].includes(targetCode)) return undefined
+  const templateUrl = targetCode === 'cargo' ? `sparse+${repoUrl}` : targetCode === 'docker' ? new URL(repoUrl).host : repoUrl
+  return template.replaceAll('{repo_url}', templateUrl)
 }

@@ -31,6 +31,7 @@ export type PublicConfig = {
 }
 
 export type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access' | 'site'> & {
+  built_in_os_repositories?: string[]
   doh: { enabled: boolean; upstreams: string[]; ecs_mode?: 'auto' | 'passthrough'; ecs_auto_upstreams?: string[]; requests_per_minute?: number }
   site: SiteSettings
   quota: PublicConfig['quota'] & { request_event_retention_days: number; default_user_monthly_gb: number | null }
@@ -152,6 +153,7 @@ export type SourceTarget = {
   aliases: string[]
   supported_modes: string[]
   default_scope: string
+  migration_target?: string
 }
 
 export type TargetSource = {

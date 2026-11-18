@@ -77,6 +77,9 @@ pub(super) fn detect(root: &Path) -> anyhow::Result<&'static SystemDistribution>
     if mint_info.is_some() {
         id = "linuxmint".into();
     }
+    if id == "ubuntu" && name == "Linux Lite" {
+        id = "linuxlite".into();
+    }
     let profile = systems::system_distribution(&id).ok_or_else(|| {
         anyhow::anyhow!("unsupported system ID '{id}'; run `mirrorproxy systems`")
     })?;
@@ -140,6 +143,7 @@ fn paths(root: &Path, profile: &SystemDistribution) -> anyhow::Result<Vec<PathBu
             paths
         }
         SystemFormat::Apk => vec![PathBuf::from("etc/apk/repositories")],
+        SystemFormat::Opkg => vec![PathBuf::from("etc/opkg/distfeeds.conf")],
         SystemFormat::Gentoo => vec![PathBuf::from("etc/portage/make.conf")],
         SystemFormat::Nix => vec![
             PathBuf::from("etc/nixos/mirrorproxy.nix"),
@@ -192,6 +196,7 @@ pub(super) fn validate_profile_path(code: &str, path: &Path) -> anyhow::Result<(
                     && path == Path::new("etc/pacman.d/endeavouros-mirrorlist"))
         }
         SystemFormat::Apk => path == Path::new("etc/apk/repositories"),
+        SystemFormat::Opkg => path == Path::new("etc/opkg/distfeeds.conf"),
         SystemFormat::Gentoo => {
             path == Path::new("etc/portage/make.conf")
                 || direct_child("etc/portage/repos.conf", "conf")
@@ -212,14 +217,76 @@ pub(super) fn validate_profile_path(code: &str, path: &Path) -> anyhow::Result<(
 }
 
 pub(super) fn ensure_unmanaged(root: &Path) -> anyhow::Result<()> {
+    ensure_no_other_rollbacks(root, None)
+}
+
+fn ensure_no_other_rollbacks(root: &Path, except: Option<&Path>) -> anyhow::Result<()> {
     if let Some(path) = scan(root, "var/lib/mirrorproxy/sources", "json")?
         .into_iter()
-        .next()
+        .find(|path| Some(root.join(path).as_path()) != except)
     {
         anyhow::bail!(
             "existing system rollback at {}; reset that target before system migration",
             root.join(path).display()
         );
+    }
+    Ok(())
+}
+
+fn legacy_apt_source(root: &Path, rollback: &Path) -> anyhow::Result<Option<SourceRollback>> {
+    let path = source_config_path("apt", CliSourceScope::System, root)?;
+    reject_symlink(rollback)?;
+    let Some(raw) = read_optional_file(rollback)? else {
+        return Ok(None);
+    };
+    let record: SourceRollback = serde_json::from_str(&raw)
+        .context("existing APT migration must be reset before changing system sources")?;
+    anyhow::ensure!(
+        record.target_code == "apt" && record.config_path == path,
+        "invalid legacy APT rollback record"
+    );
+    reject_symlink(&path)?;
+    anyhow::ensure!(
+        read_optional_file(&path)?.as_deref() == Some(&record.expected_content),
+        "the generated APT source was edited; review it before changing system sources"
+    );
+    Ok(Some(record))
+}
+
+fn index_commands(
+    profile: &SystemDistribution,
+) -> &'static [(&'static str, &'static [&'static str])] {
+    match profile.format {
+        SystemFormat::Apt => &[("apt-get", &["-o", "APT::Update::Error-Mode=any", "update"])],
+        SystemFormat::Rpm if profile.code == "opensuse" => {
+            &[("zypper", &["--non-interactive", "refresh"])]
+        }
+        SystemFormat::Rpm => &[
+            ("dnf", &["makecache", "--refresh"]),
+            ("yum", &["makecache"]),
+        ],
+        SystemFormat::Pacman => &[("pacman", &["-Syy"])],
+        SystemFormat::Apk => &[("apk", &["update"])],
+        SystemFormat::Xbps => &[("xbps-install", &["-S"])],
+        SystemFormat::Opkg => &[("opkg", &["update"])],
+        SystemFormat::Gentoo | SystemFormat::Nix => &[],
+    }
+}
+
+pub(super) fn refresh_indexes(profile: &SystemDistribution) -> anyhow::Result<()> {
+    let commands = index_commands(profile);
+    for (program, args) in commands {
+        match std::process::Command::new(program).args(*args).status() {
+            Ok(status) => {
+                anyhow::ensure!(status.success(), "{program} exited with {status}");
+                return Ok(());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).with_context(|| format!("could not run {program}")),
+        }
+    }
+    if let Some((program, _)) = commands.first() {
+        anyhow::bail!("package manager missing: {program}");
     }
     Ok(())
 }
@@ -247,9 +314,19 @@ pub(super) fn prepare(
     root: &Path,
     requested: &str,
     base: Option<&str>,
+    simple: bool,
 ) -> anyhow::Result<apt::AptPlan> {
-    ensure_unmanaged(root)?;
     let profile = detect(root)?;
+    let legacy_path = source_rollback_path("apt", CliSourceScope::System, root);
+    let legacy_apt = if simple
+        && profile.format == SystemFormat::Apt
+        && !matches!(requested, "epel" | "docker-ce" | "gentoo-sync")
+    {
+        legacy_apt_source(root, &legacy_path)?
+    } else {
+        None
+    };
+    ensure_no_other_rollbacks(root, legacy_apt.as_ref().map(|_| legacy_path.as_path()))?;
     anyhow::ensure!(
         requested == "system"
             || matches!(requested, "epel" | "docker-ce" | "gentoo-sync")
@@ -283,6 +360,12 @@ pub(super) fn prepare(
         validate_profile_path(profile.code, &path)?;
         reject_symlink(&root.join(&path))?;
         let mut original = read_optional_file(&root.join(&path))?;
+        if legacy_apt
+            .as_ref()
+            .is_some_and(|record| root.join(&path) == record.config_path)
+        {
+            continue;
+        }
         // Void's stock repository definitions live under /usr/share; create an
         // /etc override and restore absence on reset rather than editing vendor files.
         if original.is_none() && profile.format == SystemFormat::Xbps {
@@ -318,6 +401,10 @@ pub(super) fn prepare(
                 .as_deref()
                 .map(|s| rewrite_lines(s, profile, base, "", None))
                 .transpose()?,
+            SystemFormat::Opkg => original
+                .as_deref()
+                .map(|s| rewrite_lines(s, profile, base, "", None))
+                .transpose()?,
             SystemFormat::Xbps => original
                 .as_deref()
                 .map(|s| rewrite_lines(s, profile, base, "repository", None))
@@ -346,6 +433,12 @@ pub(super) fn prepare(
             files.push((path, expected));
         }
     }
+    if profile.format == SystemFormat::Opkg {
+        anyhow::ensure!(
+            !files.is_empty(),
+            "OpenWrt requires an existing opkg distfeeds.conf"
+        );
+    }
     if profile.code == "rhel" {
         println!("RHEL requires a compatible customer mirror configured as upstreams.additional_os.rhel; subscription credentials are never forwarded.");
     }
@@ -365,6 +458,26 @@ pub(super) fn prepare(
             "unrecognized Docker source exists; review it before creating another repository"
         );
         files.push(docker_ce_source(root, profile, &release, base)?);
+    }
+    if let Some(record) = legacy_apt {
+        let original = record.original_content.as_deref().unwrap_or_default();
+        let expected = rewrite_apt(original, false, profile, base)?;
+        anyhow::ensure!(
+            expected != original
+                || files.iter().any(|(path, expected)| {
+                    read_optional_file(&root.join(path))
+                        .ok()
+                        .flatten()
+                        .as_deref()
+                        != Some(expected)
+                }),
+            "no recognized system repositories to migrate; the existing APT source was kept"
+        );
+        let path = record.config_path.strip_prefix(root)?.to_path_buf();
+        files.push((path.clone(), expected));
+        let plan = apt::AptPlan::system(profile.code, root, files)?;
+        plan.verify_legacy_apt_input(&path, &record.expected_content)?;
+        return Ok(plan);
     }
     apt::AptPlan::system(profile.code, root, files)
 }
@@ -429,12 +542,21 @@ fn rewrite_apt(
 ) -> anyhow::Result<String> {
     let convert = |part: &str| -> anyhow::Result<String> {
         let suites: Vec<&str> = if deb822 {
+            let mut in_suites = false;
             part.lines()
                 .filter_map(|line| {
-                    line.split_once(':')
-                        .filter(|(key, _)| key.eq_ignore_ascii_case("Suites"))
+                    if line.trim_start().starts_with('#') {
+                        return None;
+                    }
+                    if line.starts_with([' ', '\t']) {
+                        return in_suites.then_some(line);
+                    }
+                    in_suites = false;
+                    let (key, value) = line.split_once(':')?;
+                    in_suites = key.eq_ignore_ascii_case("Suites");
+                    in_suites.then_some(value)
                 })
-                .flat_map(|(_, value)| value.split_whitespace())
+                .flat_map(str::split_whitespace)
                 .collect()
         } else {
             part.split_whitespace()
@@ -444,6 +566,9 @@ fn rewrite_apt(
                 .collect()
         };
         let mut context = mapping_context(profile);
+        if !suites.is_empty() && suites.iter().all(|suite| suite.ends_with("-security")) {
+            context.push_str("|security-suite");
+        }
         let is_suite = |names: &[&str]| {
             suites.iter().any(|suite| {
                 names.iter().any(|name| {
@@ -552,6 +677,14 @@ pub(super) fn map_uri(uri: &str, code: &str, base: &str) -> anyhow::Result<Optio
             }
         }
         // Explicit mirror providers are recognized only for the declared layout.
+        // Shared Ubuntu mirror roots serve several suites. Map only a stanza
+        // dedicated to security to the security-only upstream.
+        if repositories.contains(&"ubuntu")
+            && ((*key == "ubuntu-security" && !code.contains("|security-suite"))
+                || (*key == "ubuntu" && code.contains("|security-suite")))
+        {
+            continue;
+        }
         for host in systems::SYSTEM_MIRROR_ROOTS {
             let alternate = match *key {
                 "linuxmint" => Some("linuxmint"),
@@ -631,7 +764,17 @@ fn rewrite_lines(
             result.push_str(line);
             continue;
         }
-        let start = if field.is_empty() {
+        let start = if profile.format == SystemFormat::Opkg {
+            let mut fields = active.split_whitespace();
+            let source = fields.next();
+            let uri = fields.nth(1);
+            if let (Some("src" | "src/gz"), Some(uri)) = (source, uri) {
+                line.find(uri).unwrap()
+            } else {
+                result.push_str(line);
+                continue;
+            }
+        } else if field.is_empty() {
             line.len() - active.len()
         } else if let Some((key, value)) = line.split_once('=') {
             if key.trim() != field {
@@ -1263,6 +1406,29 @@ mod tests {
         let archived = archive_rpm(output, profile, "30");
         assert!(archived.contains("/os/fedora-archive/releases/$releasever/"));
         assert!(archived.contains("/os/fedora-archive/updates/$releasever/"));
+    }
+
+    #[test]
+    fn shared_ubuntu_mirror_keeps_normal_and_security_suites_on_their_own_roots() {
+        let input = "Types: deb\nURIs: https://mirrors.aliyun.com/ubuntu\nSuites: noble\n noble-updates noble-security\nSigned-By: /keys/ubuntu.gpg\n\nTypes: deb\nURIs: https://mirrors.aliyun.com/ubuntu\nSuites:\n noble-security\nSigned-By: /keys/ubuntu.gpg\n";
+        let output = rewrite_apt(
+            input,
+            true,
+            systems::system_distribution("ubuntu").unwrap(),
+            "https://proxy.example",
+        )
+        .unwrap();
+        let expected = input
+            .replacen(
+                "https://mirrors.aliyun.com/ubuntu",
+                "https://proxy.example/os/ubuntu/",
+                1,
+            )
+            .replace(
+                "https://mirrors.aliyun.com/ubuntu",
+                "https://proxy.example/os/ubuntu-security/",
+            );
+        assert_eq!(output, expected);
     }
 
     #[test]

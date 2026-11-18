@@ -1,8 +1,10 @@
 # Linux system sources
 
-The standalone client has native configuration adapters for the following 28
-distribution profiles, inspired by [LinuxMirrors](https://github.com/SuperManito/LinuxMirrors).
-The implementation is Rust; it does not download or execute that project's scripts.
+The standalone client has native configuration adapters for the following 31
+distribution profiles. The command and package-manager workflows follow
+[chsrc](https://github.com/RubyMetric/chsrc) and the mirror catalog draws on
+[LinuxMirrors](https://github.com/SuperManito/LinuxMirrors). MirrorProxy implements
+the migrations in Rust.
 `mirrorproxy systems` lists the same catalog used by the client and server.
 
 These ranges describe **configuration compatibility**, including archived releases.
@@ -16,6 +18,8 @@ cover all profiles; real package downloads must also be verified on Linux.
 | --- | --- | --- | --- |
 | `debian` | Debian | 8–14, testing/sid | APT |
 | `ubuntu` | Ubuntu | 14–26 | APT |
+| `trisquel` | Trisquel | Existing APT feeds | APT |
+| `linuxlite` | Linux Lite | Existing APT feeds | APT |
 | `kali` | Kali Linux | Rolling | APT |
 | `linuxmint` | Linux Mint / LMDE | Mint 19–22; LMDE 6–7 | APT |
 | `deepin` | Deepin | Existing release layouts, including 25/beige | APT |
@@ -42,30 +46,26 @@ cover all profiles; real package downloads must also be verified on Linux.
 | `gentoo` | Gentoo | Existing Portage configurations | Distfile mirrors |
 | `nixos` | NixOS | 19–26 | Nix module and existing root channels |
 | `void` | Void Linux | Rolling, including existing musl paths | XBPS |
+| `openwrt` | OpenWrt | Releases that use opkg | opkg |
 
-## Preview, apply and restore
+## Switch system sources
 
-An existing MirrorProxy server with the `os` adapter enabled is required.
-Use a matching server build containing the repository roots from this catalog.
-The unified migration currently uses the `mirrorproxy` provider.
+The Linux installer from a MirrorProxy site remembers that instance for system
+source changes. The server must have the `os` adapter enabled.
 
 ```bash
-mirrorproxy systems
-sudo mirrorproxy set system --scope system --replace-existing --base-url https://mirror.example.com --dry-run
-sudo mirrorproxy set system --scope system --replace-existing --base-url https://mirror.example.com
-
-# A named profile verifies that it matches the detected system.
-sudo mirrorproxy set rocky --scope system --replace-existing --base-url https://mirror.example.com --dry-run
-
-sudo mirrorproxy reset system --scope system --dry-run
-sudo mirrorproxy reset system --scope system
+sudo mirrorproxy set debian     # Checks the named distribution
+sudo mirrorproxy set system     # Detects the distribution automatically
 ```
 
-Run only one `set` at a time. A system rollback already present blocks another
-migration. `reset <profile> --scope system` also restores a matching profile's
-system migration. Existing per-target commands and their rollback records retain
-their previous behavior. `set apt --replace-existing` remains the narrower
-Debian/Ubuntu base-only migration documented on the [client page](Client).
+Run either command. APT, DNF/YUM, zypper, pacman, apk, XBPS, and opkg refresh package indexes
+after switching and restore the previous configuration if the refresh fails.
+Gentoo's distfile mirror takes effect after writing. The NixOS module still requires an import
+and administrator activation. On OpenWrt, run `mirrorproxy set openwrt` as root. If installed by a
+package manager, run `sudo mirrorproxy set debian https://mirror.example.com`
+directly, or save an instance with `sudo mirrorproxy use https://mirror.example.com`.
+Use `sudo mirrorproxy reset system --scope system` to undo the migration.
+The explicit configuration flags remain available.
 
 Detection reads `os-release` without evaluating shell code. Armbian, Raspberry Pi
 and Proxmox markers identify systems which otherwise report their parent OS.
@@ -139,11 +139,12 @@ Keep this client version until reset; older clients cannot read the new
 multi-file manifest. Refresh the native package index after applying or restoring
 sources. No database migration or server deployment is performed by the client.
 
-New public roots are included in the server defaults. If your TOML explicitly
-sets `upstreams.additional_os`, merge the new keys from `config.example.toml`
-while preserving custom overrides; an explicit map replaces the defaults.
-Fixed roots such as `upstreams.debian` and `upstreams.fedora` keep their existing
-configuration fields. A successful preview does not test remote connectivity.
+At startup and when saving runtime settings, the server fills in missing public
+system repositories from the catalog, including Debian and Ubuntu security,
+ports, distribution archives, and EPEL. Existing overrides take precedence.
+Set an override in the administration console or use `upstreams.additional_os`
+for a new instance. RHEL still requires an explicitly configured authorized
+upstream. The home page's system source cards provide a single in-place migration command.
 
 For isolated fixtures, add `--config-root <directory>`; identification, native
 configuration and rollback state are all read/written below that root. The native
@@ -166,11 +167,11 @@ not assert that each mirror carries every repository. Server settings determine
 the final upstream.
 
 ```bash
-sudo mirrorproxy set epel --scope system --replace-existing --base-url https://mirror.example.com
+sudo mirrorproxy set epel
 sudo mirrorproxy reset epel --scope system
-sudo mirrorproxy set docker-ce --scope system --replace-existing --base-url https://mirror.example.com
+sudo mirrorproxy set docker-ce
 sudo mirrorproxy reset docker-ce --scope system
-sudo mirrorproxy set gentoo-sync --scope system --replace-existing --base-url https://mirror.example.com
+sudo mirrorproxy set gentoo-sync
 sudo mirrorproxy reset gentoo-sync --scope system
 ```
 
@@ -194,9 +195,6 @@ OpenPGP key settings. Run `emerge --sync` afterward. It requires an existing
 official repository definition and valid key. A single-file `repos.conf` or
 multiple Gentoo definitions require manual organization first. Ordinary
 `set system` continues to change only `GENTOO_MIRRORS`; rsync is not tunneled.
-
-At startup, missing EPEL, Next, Archive, Alma Vault and Docker CE keys are added
-to old persisted `upstreams.additional_os` maps; existing custom values win.
 
 ## Verify on Linux
 
@@ -236,7 +234,7 @@ architecture on ARM hosts. Optional smoke targets include `rocky`, `alma` and
 `MIRRORPROXY_OS_SMOKE_DEBIAN_IMAGE=debian:trixie-slim` or
 `MIRRORPROXY_OS_SMOKE_FEDORA_IMAGE=fedora:43` to test another version.
 
-`scripts/smoke-os-matrix.sh` runs all 28 profiles independently, writing per-target
+`scripts/smoke-os-matrix.sh` runs all 31 profiles independently, writing per-target
 logs and `results.tsv`. Missing authentic images are `BLOCKED`, never substituted
 with a parent distribution. Supply `MIRRORPROXY_OS_SMOKE_<UPPERCASE_CODE>_IMAGE`
 for Mint, Zorin, Armbian, Proxmox, Raspberry Pi OS, RHEL, EndeavourOS and NixOS;

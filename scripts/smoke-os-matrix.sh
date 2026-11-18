@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Full profile matrix: report missing authentic images as BLOCKED, never PASS.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-targets="${MIRRORPROXY_OS_SMOKE_TARGETS:-debian ubuntu kali linuxmint deepin zorin armbian proxmox raspios rhel fedora centos centos-stream rocky alma oraclelinux openeuler opencloudos openkylin anolis opensuse archlinux manjaro endeavouros alpine gentoo nixos void}"
+targets="${MIRRORPROXY_OS_SMOKE_TARGETS:-debian ubuntu kali trisquel linuxlite linuxmint deepin zorin armbian proxmox raspios rhel fedora centos centos-stream rocky alma oraclelinux openeuler opencloudos openkylin anolis opensuse archlinux manjaro endeavouros alpine gentoo nixos void openwrt}"
 report="${MIRRORPROXY_OS_SMOKE_REPORT_DIR:-$(mktemp -d /tmp/mirrorproxy-os-matrix.XXXXXX)}"
 mkdir -p "${report}"
 failed=0

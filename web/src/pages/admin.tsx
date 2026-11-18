@@ -85,11 +85,12 @@ export function validHttpUrl(value: string): boolean {
   }
 }
 
-export function AdditionalOsSourceRow({ locale, publicBaseUrl, name, url, onRename, onUrlChange, onRemove }: {
+export function AdditionalOsSourceRow({ locale, publicBaseUrl, name, url, builtIn, onRename, onUrlChange, onRemove }: {
   locale: Locale
   publicBaseUrl: string
   name: string
   url: string
+  builtIn: boolean
   onRename: (nextName: string) => boolean
   onUrlChange: (url: string) => void
   onRemove: () => void
@@ -109,17 +110,18 @@ export function AdditionalOsSourceRow({ locale, publicBaseUrl, name, url, onRena
   }
 
   return <div className="custom-source-row">
-    <label><span>{locale === 'zh' ? '源名称' : 'Source name'}</span><Field aria-label={locale === 'zh' ? `${name} 的源名称` : `Source name for ${name}`} autoCapitalize="none" autoCorrect="off" spellCheck={false} value={nameDraft} onBlur={commitName} onChange={(event) => setNameDraft(event.target.value)} /></label>
+    <label><span>{locale === 'zh' ? '源名称' : 'Source name'}</span><Field aria-label={locale === 'zh' ? `${name} 的源名称` : `Source name for ${name}`} readOnly={builtIn} autoCapitalize="none" autoCorrect="off" spellCheck={false} value={nameDraft} onBlur={commitName} onChange={(event) => setNameDraft(event.target.value)} /></label>
     <label><span>{locale === 'zh' ? '上游 URL' : 'Upstream URL'}</span><Field aria-label={locale === 'zh' ? `${name} 的上游 URL` : `Upstream URL for ${name}`} type="url" value={url} onChange={(event) => onUrlChange(event.target.value)} /></label>
     <div className="custom-source-path"><span>{locale === 'zh' ? '代理根地址' : 'Proxy base URL'}</span><code>{proxyUrl}</code></div>
-    <Action aria-haspopup="dialog" aria-label={locale === 'zh' ? `删除自定义源 ${name}` : `Delete custom source ${name}`} className="custom-source-delete" type="button" onClick={onRemove}><span className="custom-source-delete-face"><Trash2 size={15} /></span></Action>
+    {!builtIn && <Action aria-haspopup="dialog" aria-label={locale === 'zh' ? `删除自定义源 ${name}` : `Delete custom source ${name}`} className="custom-source-delete" type="button" onClick={onRemove}><span className="custom-source-delete-face"><Trash2 size={15} aria-hidden="true" /></span></Action>}
   </div>
 }
 
-export function AdditionalOsEditor({ locale, publicBaseUrl, sources, onChange }: {
+export function AdditionalOsEditor({ locale, publicBaseUrl, sources, builtInRepositories, onChange }: {
   locale: Locale
   publicBaseUrl: string
   sources: Record<string, string>
+  builtInRepositories?: string[]
   onChange: (sources: Record<string, string>) => void
 }) {
   const confirmAction = useConfirmDialog()
@@ -191,10 +193,10 @@ export function AdditionalOsEditor({ locale, publicBaseUrl, sources, onChange }:
   }
 
   return <section className="custom-source-editor" aria-labelledby="custom-source-title">
-    <div className="custom-source-heading"><div><span className="console-kicker">ADDITIONAL_OS</span><h5 id="custom-source-title">{locale === 'zh' ? '自定义软件仓库' : 'Custom software repositories'}</h5></div><small>{locale === 'zh' ? `${Object.keys(sources).length} 个仓库` : `${Object.keys(sources).length} repositories`}</small></div>
+    <div className="custom-source-heading"><h5 id="custom-source-title">{locale === 'zh' ? '内置与自定义软件仓库' : 'Built-in and custom software repositories'}</h5><small>{locale === 'zh' ? `${Object.keys(sources).length} 个仓库` : `${Object.keys(sources).length} repositories`}</small></div>
     <p className="custom-source-help">{locale === 'zh' ? '用于添加 ClickHouse、Docker CE 等 APT 仓库，或公开二进制文件仓库。填写上游仓库根地址；保存后，请用下方代理根地址替换原仓库地址。' : 'Add APT repositories such as ClickHouse and Docker CE, or public binary file repositories. Enter the upstream repository root, then replace the original repository URL with the proxy base URL below.'}</p>
     <div className="custom-source-list">
-      {Object.entries(sources).map(([name, url]) => <AdditionalOsSourceRow key={name} locale={locale} publicBaseUrl={publicBaseUrl} name={name} url={url} onRename={(nextName) => renameSource(name, nextName)} onUrlChange={(nextUrl) => onChange({ ...sources, [name]: nextUrl })} onRemove={() => removeSource(name)} />)}
+      {Object.entries(sources).map(([name, url]) => <AdditionalOsSourceRow key={name} locale={locale} publicBaseUrl={publicBaseUrl} name={name} url={url} builtIn={builtInRepositories?.includes(name) ?? false} onRename={(nextName) => renameSource(name, nextName)} onUrlChange={(nextUrl) => onChange({ ...sources, [name]: nextUrl })} onRemove={() => removeSource(name)} />)}
       {Object.keys(sources).length === 0 ? <p className="custom-source-empty">{locale === 'zh' ? '尚未添加自定义软件仓库。' : 'No custom software repositories have been added.'}</p> : null}
     </div>
     <OperationToast locale={locale} notice={removedSource ? { tone: 'success', message: locale === 'zh' ? `已移除“${removedSource.name}”` : `Removed “${removedSource.name}”`, action: { label: locale === 'zh' ? '撤销' : 'Undo', run: restoreSource } } : null} />
@@ -697,7 +699,7 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
               </section>
             </div>
           </Panel>
-          <Panel className="settings-card"><h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><Field type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div><details className="advanced-details"><summary>{text.showUpstreams}</summary><p className="field-hint">{text.upstreamHint}</p><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><Field value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : [])}</div><AdditionalOsEditor locale={locale} publicBaseUrl={draft.public_base_url} sources={typeof draft.upstreams.additional_os === 'object' ? draft.upstreams.additional_os : {}} onChange={updateAdditionalOsUpstreams} /></details></Panel>
+          <Panel className="settings-card"><h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><Field type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div><details className="advanced-details"><summary>{text.showUpstreams}</summary><p className="field-hint">{text.upstreamHint}</p><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><Field value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : [])}</div><AdditionalOsEditor locale={locale} publicBaseUrl={draft.public_base_url} sources={typeof draft.upstreams.additional_os === 'object' ? draft.upstreams.additional_os : {}} builtInRepositories={draft.built_in_os_repositories} onChange={updateAdditionalOsUpstreams} /></details></Panel>
         </section> : null}
         {activeTab === 'users' ? <React.Suspense fallback={<p role="status">{locale === 'zh' ? '加载中…' : 'Loading…'}</p>}><AdminBillingManagement locale={locale} targets={[...PROXY_ADAPTERS, 'doh']} /></React.Suspense> : null}
         {activeTab === 'providers' ? <AdminAuthProviders locale={locale} /> : null}

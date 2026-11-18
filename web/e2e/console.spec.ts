@@ -51,7 +51,7 @@ const publicConfig = {
 
 const sources = {
   providers: [{ code: 'mirrorproxy', name: 'MirrorProxy', kind: 'builtin', homepage: 'https://mirror.example', speed_test_url: null }],
-  targets: [{ code: 'npm', name: 'npm', category: 'lang', aliases: [], supported_modes: ['proxy'], default_scope: 'user', capabilities: { cache: 'conditional', cache_enabled: false, authentication: 'operator_controlled', client_authorization_forwarding: false, clients: ['npm', 'Yarn', 'pnpm'], limitations: [] } }],
+  targets: [{ code: 'npm', name: 'npm', category: 'lang', aliases: [], supported_modes: ['proxy', 'local-config'], default_scope: 'user', capabilities: { cache: 'conditional', cache_enabled: false, authentication: 'operator_controlled', client_authorization_forwarding: false, clients: ['npm', 'Yarn', 'pnpm'], limitations: [] } }],
   sources: [{ target_code: 'npm', provider_code: 'mirrorproxy', repo_url: '/npm/', speed_url: null, capability: 'proxy' }],
   templates: [{ target_code: 'npm', os_family: 'any', scope: 'user', template: 'npm config set registry {repo_url}', requires_sudo: false }],
   container_registries: [
@@ -399,7 +399,8 @@ test('validates and rewrites container registry references', async ({ page }) =>
   await expect(workbench.getByRole('textbox')).toHaveValue('FROM mcr.microsoft.com/dotnet/runtime:8.0')
   await expect(workbench).toContainText('FROM mirror.example/mcr.microsoft.com/dotnet/runtime:8.0')
   await workbench.getByRole('button', { name: 'Docker Engine' }).click()
-  await expect(workbench).toContainText('mirrorproxy set docker --mirror mirrorproxy --base-url https://mirror.example --scope system --dry-run')
+  await expect(workbench).toContainText('sudo mirrorproxy set docker')
+  await expect(workbench).not.toContainText('--dry-run')
   await expect(workbench).toContainText('Generated configuration applies to Docker Hub only')
   await workbench.getByRole('button', { name: 'K3s' }).click()
   await expect(workbench).toContainText('docker.io:\n    endpoint:\n      - "https://mirror.example"')
@@ -455,10 +456,17 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await page.getByText('Edit upstream endpoints').click()
   const deleteSource = page.getByRole('button', { name: 'Delete custom source clickhouse' })
   await expect(deleteSource).toBeVisible()
-  expect(await deleteSource.evaluate((button) => ({
+  const deleteDimensions = () => deleteSource.evaluate((button) => ({
     hitArea: button.getBoundingClientRect().height,
+    width: button.getBoundingClientRect().width,
     face: button.querySelector('.custom-source-delete-face')?.getBoundingClientRect().height,
-  }))).toEqual({ hitArea: 44, face: 32 })
+    onRight: Math.abs(button.getBoundingClientRect().right - button.closest('.custom-source-row')!.getBoundingClientRect().right) < 20,
+  }))
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    expect(await deleteDimensions()).toEqual({ hitArea: 44, width: 44, face: 32, onRight: true })
+  }
+  await page.setViewportSize({ width: 1280, height: 720 })
   await deleteSource.click()
   const deleteDialog = page.getByRole('dialog')
   await expect(deleteDialog).toBeVisible()
@@ -1721,18 +1729,18 @@ test('uses the new brand assets and aligned accessible homepage controls', async
 })
 
 test('polishes source cards, highlighted commands and single-column installation', async ({ page }) => {
-  const names = ['npm / yarn / pnpm', 'Python pip', 'Rust Cargo', 'Go modules', 'Composer / Packagist', 'Docker / OCI', 'GitHub', 'APT']
-  const codes = ['npm', 'pip', 'cargo', 'go', 'composer', 'docker', 'github', 'apt']
+  const names = ['npm / yarn / pnpm', 'Python pip', 'Rust Cargo', 'Go modules', 'Composer / Packagist', 'Docker / OCI', 'GitHub', 'APT', 'OpenWrt opkg']
+  const codes = ['npm', 'pip', 'cargo', 'go', 'composer', 'docker', 'github', 'apt', 'openwrt']
   const catalog = {
     ...sources,
-    targets: names.map((name, index) => ({ ...sources.targets[0], name, code: codes[index], category: index === 7 ? 'os' : index > 4 ? 'repo' : 'lang', capabilities: { ...sources.targets[0].capabilities, clients: [name], cache: index === 5 ? 'bypass' : 'conditional' } })),
+    targets: names.map((name, index) => ({ ...sources.targets[0], name, code: codes[index], category: index >= 7 ? 'os' : index > 4 ? 'repo' : 'lang', default_scope: index >= 7 ? 'system' : 'user', migration_target: index === 7 ? 'system' : index === 8 ? 'openwrt' : undefined, capabilities: { ...sources.targets[0].capabilities, clients: [name], cache: index === 5 ? 'bypass' : 'conditional' } })),
     sources: codes.map((code, index) => ({ target_code: code, provider_code: 'mirrorproxy', repo_url: index === 0 ? '/npm/' : `/${code}/`, speed_url: null, capability: 'proxy' })),
   }
   await page.route('**/api/sources', r => r.fulfill({ json: catalog }))
   await page.route('**/api/source-health', r => r.fulfill({ json: { running: false, total: codes.length, healthy: codes.length, unhealthy: 0, degraded: 0, disabled: 0, unknown: 0, last_checked_at: 1792972800, items: codes.map(code => ({ target_code: code, adapter: code, status: 'healthy', http_status: 200, latency_ms: 80, checked_at: 1792972800, error: null, endpoints: code === 'npm' ? [{ position: 0, endpoint: 'https://registry.npmjs.org', status: 'healthy', http_status: 200, latency_ms: 80, checked_at: 1792972800, error: null }] : [] })) } }))
   await page.goto('/')
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await expect(page.locator('.source-tile')).toHaveCount(8)
+  await expect(page.locator('.source-tile')).toHaveCount(codes.length)
   const cards = await page.locator('.source-tile').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()))
   expect(cards.slice(0, 4).every(card => Math.abs(card.top - cards[0].top) < 1)).toBe(true)
   expect(cards[4].top).toBeGreaterThan(cards[0].bottom)
@@ -1760,6 +1768,7 @@ test('polishes source cards, highlighted commands and single-column installation
   await expect(modal.locator('.config-option').last().getByRole('button', { name: 'Copied' })).toHaveClass(/copied/)
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('npm config set registry https://mirror.example/npm/')
   await expect(modal.locator('.command-token-keyword').first()).toHaveText('mirrorproxy')
+  await expect(modal.locator('.config-option').filter({ hasText: 'MirrorProxy CLI setup' }).locator('code')).toHaveText('mirrorproxy set npm')
   for (const theme of ['light', 'dark']) {
     await setTheme(page, theme)
     for (const width of [1920, 1440, 768, 375, 320]) {
@@ -1794,6 +1803,22 @@ test('polishes source cards, highlighted commands and single-column installation
   }
   await modal.getByRole('button', { name: 'Close configuration' }).click()
   await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.getByRole('button', { name: /APT/ }).click()
+  await waitForDialogReady(modal)
+  const migration = 'sudo mirrorproxy set system'
+  await expect(modal.locator('.config-option')).toHaveCount(2)
+  await modal.locator('.config-option').filter({ hasText: 'Switch system sources' }).getByRole('button', { name: 'Copy command' }).click()
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(migration)
+  await expect(modal).not.toContainText('mirrorproxy.list')
+  await modal.getByRole('button', { name: 'Close configuration' }).click()
+  for (const [name, code] of [['Python pip', 'pip'], ['Go modules', 'go'], ['Rust Cargo', 'cargo']]) {
+    await page.getByRole('button', { name: new RegExp(name) }).click()
+    await expect(modal.locator('.config-option').filter({ hasText: 'MirrorProxy CLI setup' }).locator('code')).toHaveText(`mirrorproxy set ${code}`)
+    await modal.getByRole('button', { name: 'Close configuration' }).click()
+  }
+  await page.getByRole('button', { name: /OpenWrt/ }).click()
+  await expect(modal.locator('.config-option').filter({ hasText: 'Switch system sources' }).locator('code')).toHaveText('mirrorproxy set openwrt')
+  await modal.getByRole('button', { name: 'Close configuration' }).click()
   await setTheme(page, 'light')
   await page.locator('.source-workbench').screenshot({ path: test.info().outputPath('polished-source-cards.png') })
   await page.locator('#install').screenshot({ path: test.info().outputPath('polished-installation.png') })

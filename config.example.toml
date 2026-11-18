@@ -108,7 +108,7 @@ void = "https://repo-default.voidlinux.org"
 gentoo = "https://distfiles.gentoo.org"
 freebsd = "https://pkg.freebsd.org"
 
-# An explicit additional_os map replaces the defaults; merge new keys on upgrade.
+# Explicit entries override built-in system repository URLs. Missing system keys are filled in at startup.
 # RHEL has no public default: add rhel = "https://your-authorized-mirror.example"
 # inside this map only when that mirror serves the compatible /content hierarchy.
 
