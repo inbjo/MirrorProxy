@@ -4132,6 +4132,7 @@ struct FinishAdminPasskeyLoginRequest {
 async fn finish_admin_passkey_login(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(request): Json<FinishAdminPasskeyLoginRequest>,
 ) -> Response {
     let webauthn = match webauthn_instance(&state) {
@@ -4213,9 +4214,10 @@ async fn finish_admin_passkey_login(
             return internal_error_response();
         }
     }
+    let source = resolve_client_ip_from(peer.ip(), &headers, &state.config()).to_string();
     let session = match state
         .database
-        .create_passkey_session(&username, &peer.ip().to_string())
+        .create_passkey_session(&username, &source)
         .await
     {
         Ok(Some(session)) => session,
