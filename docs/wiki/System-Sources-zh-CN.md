@@ -148,7 +148,7 @@ sudo mirrorproxy reset gentoo-sync --scope system
 服务启动及后台保存运行配置时，会自动填充目录中缺失的公开系统仓库，包括 Debian 和
 Ubuntu 安全源、ports、发行版归档和 EPEL。已有同名上游保留。可在后台修改上游，
 或通过 `upstreams.additional_os` 配置新实例。仅供授权客户使用的 RHEL 仓库仍须显式配置。
-首页系统源卡片提供一条命令，直接在原有配置中换源。
+首页的 APT、DNF 和 pacman 卡片可选择发行版，并复制对应的一键换源命令。
 预览成功不代表已经验证远程连接。
 
 隔离测试可增加 `--config-root <目录>`，系统识别、原生配置和回滚状态均位于该目录下。

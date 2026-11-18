@@ -4,7 +4,7 @@ import { ConsumerTheme } from '../components/consumer-theme'
 import { isPublicQuotaBlocked, PublicQuotaNotice } from '../components/public-quota-notice'
 import { Modal } from 'antd'
 import { request } from '../services/request'
-import { Action, Field, TextArea } from '../components/controls'
+import { Action, Choice, Field, TextArea } from '../components/controls'
 import { useConfirmDialog } from '../confirm-dialog'
 import { SourceCapabilityBadges, SourceCapabilityDetails } from '../source-details'
 import * as React from 'react'
@@ -222,7 +222,7 @@ export function AccelerationWorkbench({ baseUrl, config, catalog, health, labels
         return <Action type="button" className={`${item.code === selectedTarget?.code ? 'source-tile selected' : 'source-tile'}${sourceState?.status === 'unhealthy' ? ' source-tile-unhealthy' : ''}${sourceState?.status === 'degraded' ? ' source-tile-degraded' : ''}`} onClick={() => setSelectedTarget(item)} key={item.code} title={item.name}><span className="source-tile-header"><span className="source-tile-icon">{sourceCategoryIcon(item.category)}</span><span className="source-tile-title"><strong>{item.name}</strong><small>{sourceCategoryLabel(item.category, labels)}</small></span><span className="source-tile-meta"><em>{item.supported_modes.includes('proxy') ? labels.proxyReady : labels.configOnly}</em>{sourceState ? <small className={`source-health-badge source-health-${sourceState.status}`}><i />{sourceState.label}</small> : null}</span></span><SourceCapabilityBadges capabilities={item.capabilities} locale={locale} /></Action>
       })}</div> : <p className="source-no-results">{labels.sourceNoResults}</p>}
     </div> : null}
-    {selectedTarget && catalog ? <SourceConfigModal locale={locale} target={selectedTarget} health={healthByTarget.get(selectedTarget.code)} baseUrl={baseUrl} catalog={catalog} labels={labels} copied={copied} onCopy={onCopy} onClose={() => setSelectedTarget(null)} /> : null}
+    {selectedTarget && catalog ? <SourceConfigModal key={selectedTarget.code} locale={locale} target={selectedTarget} health={healthByTarget.get(selectedTarget.code)} baseUrl={baseUrl} catalog={catalog} labels={labels} copied={copied} onCopy={onCopy} onClose={() => setSelectedTarget(null)} /> : null}
   </section>
 }
 
@@ -379,12 +379,19 @@ export function SourceConfigModal({ target, health, baseUrl, catalog, labels, co
   const customRepository = target.aliases.includes('additional_os')
   const template = catalog.templates.find((item) => item.target_code === target.code)
   const proxyUrl = source ? `${baseUrl}${source.repo_url.startsWith('/') ? source.repo_url : `/${source.repo_url}`}` : ''
-  const migrationCommand = source && target.migration_target
-    ? `${target.migration_target === 'openwrt' ? '' : 'sudo '}mirrorproxy set ${target.migration_target}`
+  const [selectedProfile, setSelectedProfile] = React.useState('')
+  const profileFormat = { apt: 'apt', dnf: 'rpm', pacman: 'pacman' }[target.code]
+  const profiles = profileFormat ? (catalog.system_profiles ?? []).filter(profile =>
+    profile.format === profileFormat && profile.code !== 'opensuse' && !profile.requires_customer_mirror
+  ) : []
+  const migrationTarget = profiles.find(profile => profile.code === selectedProfile)?.code ?? target.migration_target
+  const migrationCommand = source && migrationTarget
+    ? `${migrationTarget === 'openwrt' ? '' : 'sudo '}mirrorproxy set ${migrationTarget}`
     : undefined
   const mirrorproxyCommand = migrationCommand ?? (source && target.supported_modes.includes('local-config')
     ? `${target.default_scope === 'system' ? 'sudo ' : ''}mirrorproxy set ${target.code}`
     : undefined)
+  const cliCopyId = migrationTarget ? `source-cli-${migrationTarget}` : 'source-cli'
   const manualCommand = source && !customRepository && !migrationCommand ? sourceManualCommand(target.code, proxyUrl, template?.template) : undefined
 
   return <Modal open centered title={target.name} onCancel={onClose} footer={null} width={800} closable={{ 'aria-label': labels.closeConfig }} className="config-modal consumer-modal" styles={{ body: { maxHeight: 'min(72vh, 760px)', overflowY: 'auto', paddingRight: 8 } }} closeIcon={<X size={18} />} aria-label={`${target.name} ${labels.sourceCatalogHeading}`}>
@@ -393,7 +400,13 @@ export function SourceConfigModal({ target, health, baseUrl, catalog, labels, co
       <SourceCapabilityDetails capabilities={target.capabilities} locale={locale} />
       {health?.endpoints.length ? <section className="public-upstream-health"><div><strong>{labels.upstreamStatus ?? 'Upstream status'}</strong><span className={`source-health-badge source-health-${health.status}`}><i />{labels[`source${health.status[0].toUpperCase()}${health.status.slice(1)}`]}</span></div><div className="public-upstream-list">{health.endpoints.map((endpoint) => <div className={`public-upstream-row ${endpoint.status}`} key={`${endpoint.position}-${endpoint.endpoint}`}><i /><code>{endpoint.endpoint}</code><span>HTTP {endpoint.http_status ?? '—'} · {endpoint.latency_ms === null ? '—' : `${endpoint.latency_ms} ms`}</span></div>)}</div></section> : null}
       {source ? <ConfigOption title={customRepository ? labels.customRepositoryAddress : labels.mirrorproxyAddress} description={customRepository || (target.category === 'os' && !migrationCommand && !manualCommand) ? labels.customRepositoryAddressHint : labels.mirrorproxyAddressHint} value={proxyUrl} copyLabel={labels.copyAddress} copiedLabel={labels.copied} copied={copied === 'source-url'} onCopy={() => onCopy('source-url', proxyUrl)} /> : null}
-      {mirrorproxyCommand ? <ConfigOption title={migrationCommand ? labels.sourceMigrationApply : labels.mirrorproxyCli} description={target.migration_target === 'openwrt' ? labels.sourceMigrationRootHint : target.default_scope === 'system' ? labels.sourceMigrationApplyHint : labels.mirrorproxyCliHint} value={mirrorproxyCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-cli'} onCopy={() => onCopy('source-cli', mirrorproxyCommand)} /> : null}
+      {migrationCommand && profiles.length > 1 ? <label className="source-distribution">
+        <span>{labels.sourceDistribution}</span>
+        <Choice aria-label={labels.sourceDistribution} value={migrationTarget} onChange={event => setSelectedProfile(event.target.value)}>
+          {profiles.map(profile => <option key={profile.code} value={profile.code}>{profile.name}</option>)}
+        </Choice>
+      </label> : null}
+      {mirrorproxyCommand ? <ConfigOption title={migrationCommand ? labels.sourceMigrationApply : labels.mirrorproxyCli} description={target.migration_target === 'openwrt' ? labels.sourceMigrationRootHint : target.default_scope === 'system' ? labels.sourceMigrationApplyHint : labels.mirrorproxyCliHint} value={mirrorproxyCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === cliCopyId} onCopy={() => onCopy(cliCopyId, mirrorproxyCommand)} /> : null}
       {manualCommand ? <ConfigOption title={labels.manualSetup} description={target.code === 'huggingface' ? `${labels.huggingfaceHint} (POSIX shell)` : target.category === 'os' ? labels.manualSystemSetupHint : labels.manualSetupHint} value={manualCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-manual'} onCopy={() => onCopy('source-manual', manualCommand)} /> : null}
       {source && target.code === 'huggingface' ? <ConfigOption title="PowerShell" description={labels.huggingfaceHint} value={`$env:HF_ENDPOINT='${proxyUrl.replaceAll("'", "''")}'; $env:HF_HUB_DISABLE_XET='1'; hf download gpt2 config.json`} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-powershell'} onCopy={() => onCopy('source-powershell', `$env:HF_ENDPOINT='${proxyUrl.replaceAll("'", "''")}'; $env:HF_HUB_DISABLE_XET='1'; hf download gpt2 config.json`)} /> : null}
   </Modal>

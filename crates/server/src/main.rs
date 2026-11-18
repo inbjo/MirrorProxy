@@ -5999,7 +5999,9 @@ struct SourceTemplateSummary {
 
 fn source_migration_target(code: &str) -> Option<&'static str> {
     match code {
-        "apt" | "dnf" | "pacman" => Some("system"),
+        "apt" => Some("debian"),
+        "dnf" => Some("fedora"),
+        "pacman" => Some("archlinux"),
         "zypper" => Some("opensuse"),
         "xbps" => Some("void"),
         "epel" => Some("epel"),

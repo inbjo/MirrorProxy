@@ -125,6 +125,7 @@ export type SourceCatalog = {
   targets: SourceTarget[]
   sources: TargetSource[]
   templates: SourceTemplate[]
+  system_profiles?: Array<{ code: string; name: string; format: string; requires_customer_mirror: boolean }>
   container_registries?: ContainerRegistryTarget[]
 }
 

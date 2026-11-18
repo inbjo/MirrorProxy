@@ -1729,11 +1729,20 @@ test('uses the new brand assets and aligned accessible homepage controls', async
 })
 
 test('polishes source cards, highlighted commands and single-column installation', async ({ page }) => {
-  const names = ['npm / yarn / pnpm', 'Python pip', 'Rust Cargo', 'Go modules', 'Composer / Packagist', 'Docker / OCI', 'GitHub', 'APT', 'OpenWrt opkg']
-  const codes = ['npm', 'pip', 'cargo', 'go', 'composer', 'docker', 'github', 'apt', 'openwrt']
+  const names = ['npm / yarn / pnpm', 'Python pip', 'Rust Cargo', 'Go modules', 'Composer / Packagist', 'Docker / OCI', 'GitHub', 'APT', 'OpenWrt opkg', 'YUM / DNF', 'pacman']
+  const codes = ['npm', 'pip', 'cargo', 'go', 'composer', 'docker', 'github', 'apt', 'openwrt', 'dnf', 'pacman']
+  const migrationTargets: Record<string, string> = { apt: 'debian', openwrt: 'openwrt', dnf: 'fedora', pacman: 'archlinux' }
   const catalog = {
     ...sources,
-    targets: names.map((name, index) => ({ ...sources.targets[0], name, code: codes[index], category: index >= 7 ? 'os' : index > 4 ? 'repo' : 'lang', default_scope: index >= 7 ? 'system' : 'user', migration_target: index === 7 ? 'system' : index === 8 ? 'openwrt' : undefined, capabilities: { ...sources.targets[0].capabilities, clients: [name], cache: index === 5 ? 'bypass' : 'conditional' } })),
+    system_profiles: [
+      { code: 'debian', name: 'Debian', format: 'apt' },
+      { code: 'ubuntu', name: 'Ubuntu', format: 'apt' },
+      { code: 'fedora', name: 'Fedora', format: 'rpm' },
+      { code: 'rocky', name: 'Rocky Linux', format: 'rpm' },
+      { code: 'archlinux', name: 'Arch Linux', format: 'pacman' },
+      { code: 'manjaro', name: 'Manjaro', format: 'pacman' },
+    ],
+    targets: names.map((name, index) => ({ ...sources.targets[0], name, code: codes[index], category: index >= 7 ? 'os' : index > 4 ? 'repo' : 'lang', default_scope: index >= 7 ? 'system' : 'user', migration_target: migrationTargets[codes[index]], capabilities: { ...sources.targets[0].capabilities, clients: [name], cache: index === 5 ? 'bypass' : 'conditional' } })),
     sources: codes.map((code, index) => ({ target_code: code, provider_code: 'mirrorproxy', repo_url: index === 0 ? '/npm/' : `/${code}/`, speed_url: null, capability: 'proxy' })),
   }
   await page.route('**/api/sources', r => r.fulfill({ json: catalog }))
@@ -1803,14 +1812,23 @@ test('polishes source cards, highlighted commands and single-column installation
   }
   await modal.getByRole('button', { name: 'Close configuration' }).click()
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.getByRole('button', { name: /APT/ }).click()
-  await waitForDialogReady(modal)
-  const migration = 'sudo mirrorproxy set system'
-  await expect(modal.locator('.config-option')).toHaveCount(2)
-  await modal.locator('.config-option').filter({ hasText: 'Switch system sources' }).getByRole('button', { name: 'Copy command' }).click()
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(migration)
-  await expect(modal).not.toContainText('mirrorproxy.list')
-  await modal.getByRole('button', { name: 'Close configuration' }).click()
+  for (const [card, defaultTarget, distro, target] of [
+    [/APT/, 'debian', 'Ubuntu', 'ubuntu'],
+    [/YUM \/ DNF/, 'fedora', 'Rocky Linux', 'rocky'],
+    [/pacman/, 'archlinux', 'Manjaro', 'manjaro'],
+  ] as const) {
+    await page.getByRole('button', { name: card }).click()
+    await waitForDialogReady(modal)
+    const command = modal.locator('.config-option').filter({ hasText: 'Switch system sources' })
+    await expect(command.locator('code')).toHaveText(`sudo mirrorproxy set ${defaultTarget}`)
+    await selectChoice(page, modal.getByRole('combobox', { name: 'Linux distribution' }), distro)
+    const expected = `sudo mirrorproxy set ${target}`
+    await expect(command.locator('code')).toHaveText(expected)
+    await command.getByRole('button', { name: 'Copy command' }).click()
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expected)
+    await expect(modal).not.toContainText('mirrorproxy.list')
+    await modal.getByRole('button', { name: 'Close configuration' }).click()
+  }
   for (const [name, code] of [['Python pip', 'pip'], ['Go modules', 'go'], ['Rust Cargo', 'cargo']]) {
     await page.getByRole('button', { name: new RegExp(name) }).click()
     await expect(modal.locator('.config-option').filter({ hasText: 'MirrorProxy CLI setup' }).locator('code')).toHaveText(`mirrorproxy set ${code}`)

@@ -3746,9 +3746,9 @@ async fn exposes_source_catalog() {
             && target["supported_modes"] == serde_json::json!(["proxy"])
     }));
     for (target_code, migration_target) in [
-        ("apt", "system"),
-        ("dnf", "system"),
-        ("pacman", "system"),
+        ("apt", "debian"),
+        ("dnf", "fedora"),
+        ("pacman", "archlinux"),
         ("alpine", "alpine"),
         ("rocky", "rocky"),
         ("trisquel", "trisquel"),

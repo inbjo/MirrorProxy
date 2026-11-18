@@ -144,7 +144,7 @@ system repositories from the catalog, including Debian and Ubuntu security,
 ports, distribution archives, and EPEL. Existing overrides take precedence.
 Set an override in the administration console or use `upstreams.additional_os`
 for a new instance. RHEL still requires an explicitly configured authorized
-upstream. The home page's system source cards provide a single in-place migration command.
+upstream. The APT, DNF, and pacman cards let you select a distribution and copy its in-place migration command.
 
 For isolated fixtures, add `--config-root <directory>`; identification, native
 configuration and rollback state are all read/written below that root. The native
