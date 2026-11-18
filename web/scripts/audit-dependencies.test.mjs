@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { deepmergeAdvisory, minimatchAdvisory, unexceptedFindings } from './audit-policy.mjs'
+import { readFileSync } from 'node:fs'
+import { deepmergeAdvisory, minimatchAdvisory, picomatchAdvisory, unexceptedFindings } from './audit-policy.mjs'
 
 function fixture() {
   return {
@@ -53,4 +54,49 @@ test('rejects unrelated vulnerabilities and cycles', () => {
   findings.cycle = { via: ['cycle'] }
   findings.missing = { via: ['absent'] }
   assert.deepEqual(unexceptedFindings(findings, lock), ['other', 'cycle', 'missing'])
+})
+
+function picomatchFixture() {
+  const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'))
+  const nodes = [
+    'node_modules/anymatch/node_modules/picomatch',
+    'node_modules/jest-util/node_modules/picomatch',
+    'node_modules/micromatch/node_modules/picomatch',
+    'node_modules/picomatch',
+    'node_modules/readdirp/node_modules/picomatch',
+  ]
+  const findings = {
+    picomatch: { severity: 'high', nodes, via: [{ name: 'picomatch', url: picomatchAdvisory, severity: 'high' }] },
+    micromatch: { severity: 'high', via: ['picomatch'] },
+    vite: { severity: 'high', via: ['micromatch', 'picomatch'] },
+  }
+  return { lock, findings }
+}
+
+test('permits the reviewed picomatch paths and findings propagated solely from them', () => {
+  const { lock, findings } = picomatchFixture()
+  assert.deepEqual(unexceptedFindings(findings, lock), [])
+})
+
+for (const [name, change] of [
+  ['another high advisory', f => { f.findings.picomatch.via.push({ name: 'picomatch', url: 'OTHER', severity: 'high' }) }],
+  ['critical severity', f => { f.findings.picomatch.severity = 'critical' }],
+  ['a missing affected path', f => { f.findings.picomatch.nodes.pop() }],
+  ['a duplicate affected path', f => { f.findings.picomatch.nodes[0] = f.findings.picomatch.nodes[1] }],
+  ['an extra locked path', f => { f.lock.packages['node_modules/other/node_modules/picomatch'] = { version: '2.3.2' } }],
+  ['a changed locked version', f => { f.lock.packages['node_modules/picomatch'].version = '4.0.8' }],
+]) {
+  test(`rejects picomatch with ${name}`, () => {
+    const f = picomatchFixture()
+    change(f)
+    assert.deepEqual(unexceptedFindings(f.findings, f.lock), ['picomatch', 'micromatch', 'vite'])
+  })
+}
+
+test('rejects mixed and unrelated high findings', () => {
+  const { lock, findings } = picomatchFixture()
+  findings.vite.via.push({ name: 'vite', url: 'OTHER', severity: 'high' })
+  findings.deepmerge = { severity: 'low', via: [{ name: 'deepmerge', url: deepmergeAdvisory, severity: 'low' }] }
+  findings.other = { severity: 'high', via: ['deepmerge'] }
+  assert.deepEqual(unexceptedFindings(findings, lock), ['vite', 'other'])
 })

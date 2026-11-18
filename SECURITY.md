@@ -111,6 +111,26 @@ migration. The existing low-severity deepmerge exception is unchanged.
 及其传播项设置例外。其他公告、版本、安装路径或更高严重等级仍会失败。这是接受构建工具风险，
 并非依赖已修复；上游提供兼容迁移后须移除例外。原有 deepmerge 低危例外保持不变。
 
+### Temporary picomatch exception / picomatch 临时例外
+
+Approved on 2026-11-18 for [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf).
+The CI audit accepts this high-severity advisory only for the five reviewed
+lockfile entries: picomatch 4.0.7 at the root and picomatch 2.3.2 under
+anymatch, jest-util, micromatch, and readdirp. Findings propagated from
+approved causes may pass. A new advisory, critical severity, or a different
+picomatch version or install path fails the audit. The reviewed copies are
+used by frontend build and test tooling. Production serves the built browser
+assets from Rust, and the final Docker image excludes the Node toolchain.
+Unfiltered npm audit continues to report the vulnerability. Remove the
+exception after upgrading all affected paths to compatible fixed versions.
+
+2026-11-18 经批准，为 GHSA-fc5q-39xc-vjpf 添加临时例外。仅允许五处锁定依赖：
+顶层 picomatch 4.0.7，以及 anymatch、jest-util、micromatch、readdirp
+下的 picomatch 2.3.2。仅由已批准原因传播的告警可通过。新公告、危急等级、
+不同的 picomatch 版本或安装路径仍会导致审计失败。这些副本用于前端构建和测试。
+生产由 Rust 提供构建后的浏览器资源，最终 Docker 镜像不包含 Node 构建工具。
+原始 npm 审计仍会报告漏洞。所有受影响路径升级到兼容修复版本后移除此例外。
+
 ## Dependabot resolution status / Dependabot 依赖解析状态
 
 Rechecked on 2026-11-02 after Dependabot update #1673348505 reported

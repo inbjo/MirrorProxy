@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { deepmergeAdvisory, minimatchAdvisory, unexceptedFindings } from './audit-policy.mjs'
+import { deepmergeAdvisory, minimatchAdvisory, picomatchAdvisory, unexceptedFindings } from './audit-policy.mjs'
 
 // Remove each temporary build-tool exception when a compatible upstream fix exists.
 const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'))
@@ -19,5 +19,5 @@ if (remaining.length) {
   console.error(JSON.stringify(report, null, 2))
   process.exit(1)
 }
-if (Object.keys(vulnerabilities).length) console.warn(`Temporary build-tool exceptions: ${deepmergeAdvisory}, ${minimatchAdvisory}; review when upstream fixes them.`)
+if (Object.keys(vulnerabilities).length) console.warn(`Temporary build-tool exceptions: ${deepmergeAdvisory}, ${minimatchAdvisory}, ${picomatchAdvisory}; review when upstream fixes them.`)
 else console.log('npm audit: no vulnerabilities; review removal of the temporary exceptions.')
