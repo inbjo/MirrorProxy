@@ -600,6 +600,12 @@ test('localizes the administrator tabs and primary settings in Chinese', async (
   await expect(page.getByRole('heading', { name: '服务准入' })).toBeVisible()
   await expect(page.getByLabel('注册模式').locator('xpath=ancestor::*[contains(@class, "ant-select")][1]')).toContainText('仅邀请用户')
   await expect(page.getByText('Runtime configuration')).toHaveCount(0)
+  await page.getByRole('link', { name: '管理员与安全' }).click()
+  const credentialsHint = '这里只管理当前管理员。修改账号或密码后会退出全部登录会话。'
+  const credentialsHelp = page.getByRole('tooltip', { name: credentialsHint })
+  await expect(credentialsHelp).toBeHidden()
+  await page.locator('button[aria-description="管理员账号与密码说明"]').focus()
+  await expect(credentialsHelp).toBeVisible()
   await page.getByRole('link', { name: '高级设置', exact: true }).click()
   await page.getByRole('combobox', { name: '策略', exact: true }).click()
   await expect(page.getByRole('option')).toHaveText(['顺序优先', '自适应'])
@@ -819,8 +825,15 @@ test('signs in by email and rotates the dedicated routing address', async ({ pag
         await expect(page.locator('.account-usage .empty-stat')).toHaveCount(2)
         await expect(page.locator('.account-usage h2')).toHaveCSS('font-size', '21px')
         await expect(page.locator('.account-usage .ant-statistic-content').first()).toHaveCSS('font-size', '24px')
-        const wrappedMetrics = await page.locator('.account-usage .ant-statistic-content').evaluateAll(elements => elements.filter(element => { const range = document.createRange(); range.selectNodeContents(element); return range.getBoundingClientRect().height > parseFloat(getComputedStyle(element).lineHeight) + 1 }).length)
-        expect(wrappedMetrics).toBe(0)
+        // Text range bounds can exceed the line height even for a single line.
+        const metrics = await page.locator('.account-usage .ant-statistic-content').evaluateAll(elements => elements.map(element => ({
+          value: element.textContent,
+          height: element.getBoundingClientRect().height,
+          lineHeight: parseFloat(getComputedStyle(element).lineHeight),
+          overflows: element.scrollWidth > element.clientWidth,
+        })))
+        expect(metrics).toHaveLength(4)
+        expect(metrics.filter(({ height, lineHeight, overflows }) => height > lineHeight + 1 || overflows)).toEqual([])
 
         const tokenTable = page.locator('.account-token-table')
         expect(await tokenTable.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
@@ -1823,6 +1836,17 @@ test('keeps settings actions compact and security and advanced forms readable', 
     }
     if (route === 'providers') await expect(page.locator('.provider-registration-policy')).toHaveClass(/ant-alert-info/)
     if (route === 'security') {
+      for (const [label, hint] of [
+        ['Administrators & security help', 'Manage administrator accounts, passkeys, sessions, and passwords.'],
+        ['Administrator account and password help', 'Changing either value signs out every session.'],
+        ['Passkeys help', 'Passkeys require HTTPS or a secure localhost context.'],
+        ['Administrator sessions help', 'revoking the current session signs you out.'],
+      ] as const) {
+        await page.locator(`button[aria-description="${label}"]`).focus()
+        await expect(page.getByRole('tooltip', { name: hint })).toBeVisible()
+        await page.keyboard.press('Tab')
+      }
+      await expect(page.locator('.security-settings .settings-card-head > p')).toHaveCount(0)
       const cards = await page.locator('.security-settings > .settings-card').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()))
       expect(cards[1].top - cards[0].bottom).toBeGreaterThanOrEqual(24)
       const form = page.locator('.security-account-form').first()
@@ -1861,6 +1885,24 @@ test('keeps settings actions compact and security and advanced forms readable', 
       for (const width of [1920, 768, 414, 375, 320]) {
         await page.setViewportSize({ width, height: 1100 })
         await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
+        if (['access', 'advanced', 'security'].includes(route)) {
+          const save = page.getByRole('button', { name: 'Save configuration', exact: true })
+          await expect.poll(() => save.evaluate(button => {
+            const panel = document.querySelector('.admin-tab-panel')!.getBoundingClientRect()
+            const bounds = button.getBoundingClientRect()
+            return { belowForm: bounds.top > panel.bottom, fitsViewport: bounds.left >= 0 && bounds.right <= window.innerWidth }
+          }), { message: `Save position on ${route} at ${width}px` }).toEqual({ belowForm: true, fitsViewport: true })
+        }
+        if (route === 'advanced') {
+          const helpIcons = page.locator('.advanced-settings .admin-help:visible')
+          await expect(helpIcons.first()).toBeVisible()
+          const offsets = await helpIcons.evaluateAll(buttons => buttons.map(button => {
+            const text = button.previousElementSibling!.getBoundingClientRect()
+            const icon = button.querySelector('svg')!.getBoundingClientRect()
+            return { label: button.getAttribute('aria-description'), offset: (icon.top + icon.height / 2) - (text.top + text.height / 2) }
+          }))
+          expect(offsets.filter(({ offset }) => Math.abs(offset) >= 1)).toEqual([])
+        }
         await page.screenshot({ path: test.info().outputPath(`settings-${route}-${theme}-${width}.png`), fullPage: true, animations: 'disabled' })
       }
     }

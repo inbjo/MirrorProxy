@@ -254,6 +254,8 @@ html, .config-modal .ant-modal-body, .config-option code { scrollbar-width: thin
 .pro-card-description { color: var(--muted); margin-bottom: 20px; }
 .pro-card-description p { margin: 0; font-size: 14px; line-height: 1.6; }
 .admin-console .settings-stack { gap: 24px; }
+.admin-console .config-save-footer { display: grid; gap: 12px; margin-block-start: 24px; }
+.admin-console .config-save-footer .form-actions { justify-content: flex-end; }
 .admin-console .config-fields, .admin-console .compact-form { gap: 24px; }
 @media (max-width: 600px) {
   .admin-login-header { padding: 16px; }
@@ -334,7 +336,8 @@ html, .config-modal .ant-modal-body, .config-option code { scrollbar-width: thin
 .admin-console .acme-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 20px; }
 .admin-console .advanced-settings :is(.field-hint, small, .runtime-config-group-head p, .native-tls-copy p) { font-size: 14px; line-height: 1.65; color: var(--muted); }
 .admin-console .advanced-settings label:not(.ant-checkbox-wrapper) { font-size: 14px; }
-.admin-console .advanced-settings .runtime-config-group-head h5 { font-size: 15px; line-height: 1.5; margin: 0 0 8px; }
+.admin-console .advanced-settings .runtime-config-group-head { margin-bottom: 8px; }
+.admin-console .advanced-settings .runtime-config-group-head h5 { font-size: 15px; line-height: 1.5; }
 .admin-console .advanced-settings .runtime-config-group-head p { margin: 0 0 20px; }
 .admin-console .advanced-settings .runtime-config-fields { margin: 0; }
 .admin-console .native-tls-copy { display: grid; gap: 8px; }

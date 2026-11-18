@@ -600,6 +600,15 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
     { id: 'audit', label: text.tabAudit, hint: text.auditHint },
   ] as Array<{ id: typeof activeTab; label: string; hint: string }>
   const activeTabCopy = tabs.find((tab) => tab.id === activeTab) ?? tabs[0]
+  const showConfigActions = activeTab === 'access' || activeTab === 'advanced' || activeTab === 'security'
+  const configStatus = <>
+    {restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
+    {dirty ? <Alert className="config-change-summary" type="info" showIcon title={locale === 'zh' ? `有 ${changedSections.length} 组未保存修改` : `${changedSections.length} unsaved setting groups`} description={<>
+      <span>{locale === 'zh' ? '保存后立即生效；GeoIP 变更需重启。修改分组：' : 'Applies after saving; GeoIP changes require restart. Changed groups: '}{changedSections.map(key => configSectionLabel(key, locale === 'zh')).join('、')}</span>
+      {!showConfigActions ? <Button onClick={() => { void reloadConfig() }}>{locale === 'zh' ? '放弃修改' : 'Discard changes'}</Button> : null}
+    </>} /> : null}
+    {configConflict ? <Alert type="warning" showIcon title={locale === 'zh' ? '配置已被其他页面修改' : 'Configuration changed elsewhere'} description={locale === 'zh' ? '当前草稿已保留。请记录需要的修改，重新加载最新配置后再保存。' : 'Your draft is preserved. Keep the changes you need, reload the latest configuration, then save again.'} action={<Button onClick={() => { void reloadConfig() }}>{locale === 'zh' ? '重新加载' : 'Reload configuration'}</Button>} /> : null}
+  </>
 
   return (
     <section className={`admin-console${token ? '' : ' admin-login-screen'}`} aria-label={text.title}>
@@ -617,15 +626,10 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
         actionsRender={() => [<Button className="admin-header-control" key="home" type="text" href="/" target="_blank" rel="noopener noreferrer" aria-label={locale === 'zh' ? '镜像首页' : 'Mirror home'} title={locale === 'zh' ? '镜像首页' : 'Mirror home'} icon={<HomeOutlined />} />, ...React.Children.toArray(tools)]}
         avatarProps={{ icon: <UserOutlined />, title: <span className="pro-header-username">{identity?.username ?? 'admin'}</span>, size: 'small', render: (_, avatar) => <Dropdown menu={{ items: [{ key: 'change-password', label: text.changePassword, icon: <KeyRound size={14} /> }, { type: 'divider' }, { key: 'sign-out', label: text.signOut, icon: <LogOut size={14} /> }], onClick: ({ key }) => { if (key === 'change-password') setActiveTab('security'); else if (key === 'sign-out') void signOut() } }} trigger={['click']}><Button className="admin-header-account" type="text" aria-label={locale === 'zh' ? '账户菜单' : 'Account menu'}>{avatar}</Button></Dropdown> }}
         footerRender={() => <SiteFooter footerText={draft.site.footer_text} />}>
-        <PageContainer title={activeTabCopy.label} content={activeTabCopy.hint} breadcrumb={{ items: [{ title: locale === 'zh' ? '管理后台' : 'Administration' }, { title: activeTabCopy.label }] }} extra={<div className="console-actions">{activeTab === 'overview' || activeTab === 'audit' ? <Action onClick={() => (activeTab === 'audit' ? loadAudit(auditPage) : refreshStats()).catch(() => setError(text.saveError))}>{text.refresh}</Action> : null}{activeTab === 'health' ? <Action onClick={() => loadSourceHealth().catch(() => setError(text.saveError))}>{locale === 'zh' ? '刷新状态' : 'Refresh status'}</Action> : null}{activeTab === 'health' ? <Action className="primary-button" disabled={sourceHealthBusy || sourceHealth?.running} onClick={runSourceHealth}><RefreshCw className={sourceHealthBusy || sourceHealth?.running ? 'spin' : ''} size={16} /> {locale === 'zh' ? (sourceHealthBusy || sourceHealth?.running ? '检测中…' : '立即检测') : (sourceHealthBusy || sourceHealth?.running ? 'Checking…' : 'Run check')}</Action> : null}{activeTab === 'access' || activeTab === 'advanced' || activeTab === 'security' ? <Action className="primary-button" disabled={saving} onClick={save}><Save size={16} /> {saving ? text.saving : text.save}</Action> : null}</div>}>
+        <PageContainer title={activeTab === 'security' ? <span className="admin-heading-help">{activeTabCopy.label}<AdminHelp label={locale === 'zh' ? '管理员与安全说明' : 'Administrators & security help'}>{activeTabCopy.hint}</AdminHelp></span> : activeTabCopy.label} content={activeTab === 'security' ? undefined : activeTabCopy.hint} breadcrumb={{ items: [{ title: locale === 'zh' ? '管理后台' : 'Administration' }, { title: activeTabCopy.label }] }} extra={!showConfigActions ? <div className="console-actions">{activeTab === 'overview' || activeTab === 'audit' ? <Action onClick={() => (activeTab === 'audit' ? loadAudit(auditPage) : refreshStats()).catch(() => setError(text.saveError))}>{text.refresh}</Action> : null}{activeTab === 'health' ? <Action onClick={() => loadSourceHealth().catch(() => setError(text.saveError))}>{locale === 'zh' ? '刷新状态' : 'Refresh status'}</Action> : null}{activeTab === 'health' ? <Action className="primary-button" disabled={sourceHealthBusy || sourceHealth?.running} onClick={runSourceHealth}><RefreshCw className={sourceHealthBusy || sourceHealth?.running ? 'spin' : ''} size={16} /> {locale === 'zh' ? (sourceHealthBusy || sourceHealth?.running ? '检测中…' : '立即检测') : (sourceHealthBusy || sourceHealth?.running ? 'Checking…' : 'Run check')}</Action> : null}</div> : undefined}>
           <HttpSecurityBanner locale={locale} />
-          {dirty ? <Alert className="config-change-summary" type="info" showIcon title={locale === 'zh' ? `有 ${changedSections.length} 组未保存修改` : `${changedSections.length} unsaved setting groups`} description={<>
-            <span>{locale === 'zh' ? '保存后立即生效；GeoIP 变更需重启。修改分组：' : 'Applies after saving; GeoIP changes require restart. Changed groups: '}{changedSections.map(key => configSectionLabel(key, locale === 'zh')).join('、')}</span>
-            <Button onClick={() => { void reloadConfig() }}>{locale === 'zh' ? '放弃修改' : 'Discard changes'}</Button>
-          </>} /> : null}
-          {configConflict ? <Alert type="warning" showIcon title={locale === 'zh' ? '配置已被其他页面修改' : 'Configuration changed elsewhere'} description={locale === 'zh' ? '当前草稿已保留。请记录需要的修改，重新加载最新配置后再保存。' : 'Your draft is preserved. Keep the changes you need, reload the latest configuration, then save again.'} action={<Button onClick={() => { void reloadConfig() }}>{locale === 'zh' ? '重新加载' : 'Reload configuration'}</Button>} /> : null}
+          {!showConfigActions ? configStatus : null}
           <AdminConnectionNotice locale={locale} onConfigure={() => { setActiveTab('advanced'); requestAnimationFrame(() => document.getElementById('trusted-proxies')?.focus()) }} />
-        {restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
         {activeTab === 'overview' ? <section className="admin-tab-panel console-overview"><div className="console-section-head"><div><h3>{text.overview}</h3><p>{stats.month} · {stats.quota.timezone}</p></div></div>
           {stats.quota.exceeded ? <div className="quota-alert"><ChartNoAxesCombined size={18} /> {text.quotaStopped}</div> : null}
           <div className="console-metrics"><ConsoleMetric label={draft.quota.bidirectional_accounting ? text.billed : text.sent} value={byteLabel(stats.response_bytes)} /><ConsoleMetric label={text.remaining} value={stats.quota.enabled ? byteLabel(stats.quota.remaining_bytes) : '∞'} /><ConsoleMetric label={text.requests} value={stats.request_count.toLocaleString()} /><ConsoleMetric label={text.errors} value={stats.error_count.toLocaleString()} /></div>
@@ -699,14 +703,14 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
         {activeTab === 'providers' ? <AdminAuthProviders locale={locale} /> : null}
         {activeTab === 'email' ? <AdminEmailSettings locale={locale} /> : null}
         {activeTab === 'security' ? <section className="admin-tab-panel settings-stack security-settings"><Panel className="settings-card security-credentials-card">
-          <div className="settings-card-head"><h2>{locale === 'zh' ? '管理员账号与密码' : 'Administrator account and password'}</h2><p>{locale === 'zh' ? '这里只管理当前管理员。修改账号或密码后会退出全部登录会话。' : 'Only the current administrator is managed here. Changing either value signs out every session.'}</p></div>
+          <div className="settings-card-head"><div className="admin-heading-help"><h2>{locale === 'zh' ? '管理员账号与密码' : 'Administrator account and password'}</h2><AdminHelp label={locale === 'zh' ? '管理员账号与密码说明' : 'Administrator account and password help'}>{locale === 'zh' ? '这里只管理当前管理员。修改账号或密码后会退出全部登录会话。' : 'Only the current administrator is managed here. Changing either value signs out every session.'}</AdminHelp></div></div>
           <div className="security-credentials-grid">
             <SettingsForm className="security-account-form" onSubmit={changeUsername}><h3 className="security-subheading">{text.changeUsername}</h3><label>{text.newUsername}<Field required minLength={3} maxLength={64} autoComplete="username" value={newUsername} onChange={(event) => setNewUsername(event.target.value)} /></label><label>{text.currentPassword}<Field required autoComplete="current-password" type="password" value={usernamePassword} onChange={(event) => setUsernamePassword(event.target.value)} /></label><Action className="primary-button" disabled={usernameBusy} type="submit">{text.changeUsername}</Action></SettingsForm>
             <SettingsForm className="security-account-form" onSubmit={changePassword}><h3 className="security-subheading">{text.changePassword}</h3><label>{text.currentPassword}<Field required autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>{text.newPassword}<Field required minLength={12} autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label><Action className="danger-button" disabled={passwordBusy} type="submit"><KeyRound size={16} /> {text.changePassword}</Action></SettingsForm>
           </div>
         </Panel>
           <Panel className="settings-card passkey-settings-card">
-            <div className="settings-card-head"><h2>{text.passkeys}</h2><p>{window.location.protocol === 'https:' ? (locale === 'zh' ? '已根据当前 HTTPS 地址自动填写 RP 信息。' : 'RP information was filled from the current HTTPS address.') : (locale === 'zh' ? 'Passkey 只能在 HTTPS 或本机安全上下文中使用。' : 'Passkeys require HTTPS or a secure localhost context.')}</p></div>
+            <div className="settings-card-head"><div className="admin-heading-help"><h2>{text.passkeys}</h2><AdminHelp label={locale === 'zh' ? 'Passkey 说明' : 'Passkeys help'}>{window.location.protocol === 'https:' ? (locale === 'zh' ? '已根据当前 HTTPS 地址自动填写 RP 信息。' : 'RP information was filled from the current HTTPS address.') : (locale === 'zh' ? 'Passkey 只能在 HTTPS 或本机安全上下文中使用。' : 'Passkeys require HTTPS or a secure localhost context.')}</AdminHelp></div></div>
             <div className="config-fields">
               <label className="toggle-field"><Field type="checkbox" checked={draft.webauthn.enabled} onChange={(event) => update('webauthn', { ...draft.webauthn, enabled: event.target.checked })} />{text.webauthnEnabled}</label>
               <label className="toggle-field"><Field type="checkbox" checked={draft.webauthn.require_passkey} onChange={(event) => update('webauthn', { ...draft.webauthn, require_passkey: event.target.checked })} />{locale === 'zh' ? '登录时强制使用 Passkey' : 'Require a passkey for sign-in'}</label>
@@ -723,6 +727,13 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
           { title: locale === 'zh' ? '操作' : 'Action', dataIndex: 'action', width: 210, render: (_, entry) => auditActionLabel(entry.action, locale) },
           { title: locale === 'zh' ? '详情' : 'Details', dataIndex: 'detail' },
         ]} /></section> : null}
+        {showConfigActions ? <div className="config-save-footer">
+          {configStatus}
+          <div className="form-actions">
+            {dirty && !configConflict ? <Button disabled={saving} onClick={() => { void reloadConfig() }}>{locale === 'zh' ? '放弃修改' : 'Discard changes'}</Button> : null}
+            <Action className="primary-button" disabled={saving} onClick={save}><Save size={16} /> {saving ? text.saving : text.save}</Action>
+          </div>
+        </div> : null}
       </PageContainer></ProLayout> : null}
     </section>
   )

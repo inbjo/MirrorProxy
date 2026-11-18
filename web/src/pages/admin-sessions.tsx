@@ -1,3 +1,4 @@
+import { AdminHelp } from '../components/admin-help'
 import * as React from 'react'
 import { Table, Tag } from 'antd'
 import { Panel, Action } from '../components/controls'
@@ -54,8 +55,10 @@ export function AdminSessionManagement({ locale, onCurrentRevoked }: { locale: L
   const dateCell = (timestamp: number) => <time dateTime={new Date(timestamp * 1000).toISOString()}><span>{new Date(timestamp * 1000).toLocaleDateString(locale === 'zh' ? 'zh-CN' : 'en-US')}</span><span>{new Date(timestamp * 1000).toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US')}</span></time>
   return <Panel className="settings-card session-card">
     <div className="settings-card-head">
-      <h2>{locale === 'zh' ? '登录会话' : 'Administrator sessions'}</h2>
-      <p>{locale === 'zh' ? '查看登录方式及会话时间。如果发现陌生会话，可立即撤销；撤销当前会话会退出登录。' : 'Review sign-in methods and session times. Revoke sessions you do not recognize; revoking the current session signs you out.'}</p>
+      <div className="admin-heading-help">
+        <h2>{locale === 'zh' ? '登录会话' : 'Administrator sessions'}</h2>
+        <AdminHelp label={locale === 'zh' ? '登录会话说明' : 'Administrator sessions help'}>{locale === 'zh' ? '查看登录方式及会话时间。如果发现陌生会话，可立即撤销；撤销当前会话会退出登录。' : 'Review sign-in methods and session times. Revoke sessions you do not recognize; revoking the current session signs you out.'}</AdminHelp>
+      </div>
     </div>
     <OperationToast locale={locale} notice={notice} />
     <ResourceStatus {...resource} hasData={resource.data !== null} retry={resource.reload} locale={locale} message={locale === 'zh' ? '无法加载登录会话。' : 'Unable to load administrator sessions.'} />
