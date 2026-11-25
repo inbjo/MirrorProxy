@@ -53,7 +53,7 @@ const sources = {
   providers: [{ code: 'mirrorproxy', name: 'MirrorProxy', kind: 'builtin', homepage: 'https://mirror.example', speed_test_url: null }],
   targets: [{ code: 'npm', name: 'npm', category: 'lang', aliases: [], supported_modes: ['proxy', 'local-config'], default_scope: 'user', capabilities: { cache: 'conditional', cache_enabled: false, authentication: 'operator_controlled', client_authorization_forwarding: false, clients: ['npm', 'Yarn', 'pnpm'], limitations: [] } }],
   sources: [{ target_code: 'npm', provider_code: 'mirrorproxy', repo_url: '/npm/', speed_url: null, capability: 'proxy' }],
-  templates: [{ target_code: 'npm', os_family: 'any', scope: 'user', template: 'npm config set registry {repo_url}', requires_sudo: false }],
+  templates: [{ target_code: 'npm', os_family: 'any', scope: 'system', template: 'npm config set registry {repo_url} --location=global', requires_sudo: false }],
   container_registries: [
     { code: 'docker-hub', name: 'Docker Hub', host: 'docker.io', aliases: ['registry-1.docker.io'], example_image: 'nginx:latest', legacy: false },
     { code: 'mcr', name: 'Microsoft Container Registry', host: 'mcr.microsoft.com', aliases: [], example_image: 'mcr.microsoft.com/dotnet/runtime:8.0', legacy: false },
@@ -248,12 +248,12 @@ test('offers public Hugging Face HTTP downloads with POSIX and PowerShell comman
   await expect(modal).toBeVisible()
   await expect(modal.getByText('Client Authorization and cookies are blocked; server upstream credentials are not used.')).toBeVisible()
   await expect(modal.getByText(/Public model and dataset files over HTTP/).first()).toBeVisible()
-  await expect(modal.locator('code').filter({ hasText: /^HF_ENDPOINT=/ })).toHaveText("HF_ENDPOINT='https://mirror.example/huggingface' HF_HUB_DISABLE_XET=1 hf download gpt2 config.json")
-  await expect(modal.locator('code').filter({ hasText: /^\$env:HF_ENDPOINT=/ })).toHaveText("$env:HF_ENDPOINT='https://mirror.example/huggingface'; $env:HF_HUB_DISABLE_XET='1'; hf download gpt2 config.json")
+  await expect(modal.locator('code').filter({ hasText: /^export HF_ENDPOINT=/ })).toHaveText("export HF_ENDPOINT='https://mirror.example/huggingface'\nexport HF_HUB_DISABLE_XET=1")
+  await expect(modal.locator('code').filter({ hasText: /^\[Environment\]/ })).toHaveText("[Environment]::SetEnvironmentVariable('HF_ENDPOINT', 'https://mirror.example/huggingface', 'User')\n[Environment]::SetEnvironmentVariable('HF_HUB_DISABLE_XET', '1', 'User')")
   await expect(modal.locator('code').filter({ hasText: 'mirrorproxy set' })).toHaveCount(0)
   const option = modal.locator('.config-option').filter({ hasText: /^PowerShell/ })
   await option.getByRole('button').click()
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("$env:HF_HUB_DISABLE_XET='1'")
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("SetEnvironmentVariable('HF_HUB_DISABLE_XET', '1', 'User')")
   await modal.getByRole('button', { name: 'Close' }).click()
   await page.getByTitle('Language').click()
   await expect(page.getByRole('button', { name: /Hugging Face/ })).toContainText('仅公开资源')
@@ -1769,13 +1769,13 @@ test('polishes source cards, highlighted commands and single-column installation
   await page.getByRole('button', { name: /npm \/ yarn \/ pnpm/ }).click()
   const modal = page.getByRole('dialog')
   const code = modal.locator('.config-option').last().locator('code')
-  await expect(code).toHaveText('npm config set registry https://mirror.example/npm/')
+  await expect(code).toHaveText('npm config set registry https://mirror.example/npm/ --location=global')
   // The modal's entrance motion can outlive its content becoming visible.
   // Wait for it to settle before clicking, then observe handler completion.
   await waitForDialogReady(modal)
   await modal.locator('.config-option').last().getByRole('button', { name: 'Copy command' }).click()
   await expect(modal.locator('.config-option').last().getByRole('button', { name: 'Copied' })).toHaveClass(/copied/)
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('npm config set registry https://mirror.example/npm/')
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('npm config set registry https://mirror.example/npm/ --location=global')
   await expect(modal.locator('.command-token-keyword').first()).toHaveText('mirrorproxy')
   await expect(modal.locator('.config-option').filter({ hasText: 'MirrorProxy CLI setup' }).locator('code')).toHaveText('mirrorproxy set npm')
   for (const theme of ['light', 'dark']) {

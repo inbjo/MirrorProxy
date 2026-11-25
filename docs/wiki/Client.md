@@ -66,9 +66,9 @@ The short commands for pip, Go, Cargo, npm, Bun, PDM, and Homebrew merge source
 settings into existing configuration. Other targets retain their own overwrite
 protections. Rustup download settings have a separate configuration example.
 
-Hugging Face is guidance-only: `mirrorproxy get hf --base-url
-https://mirror.example.com` shows a platform-specific HTTP download command.
-It does not write shell profiles or tokens. See [Hugging Face downloads](Proxy-Adapters#hugging-face-public-http-downloads)
+For Hugging Face, `mirrorproxy get hf --base-url https://mirror.example.com`
+prints the platform-specific environment settings without writing shell profiles
+or tokens. See [Hugging Face downloads](Proxy-Adapters#hugging-face-public-http-downloads)
 for the required `HF_HUB_DISABLE_XET=1` setting and supported scope.
 
 ## Advanced: scope and safety
@@ -82,6 +82,11 @@ System scope is directly supported on Linux and changes APT, DNF, pacman, apk,
 zypper, xbps, Portage, and related system configurations. System source changes
 require administrator privileges. The client never uploads credentials or original
 configuration.
+
+Manual setup in the source catalog configures defaults across projects.
+For example, npm uses `npm config set registry https://mirror.example.com/npm/ --location=global`.
+Tools with per-user global configuration use their user files or environment.
+Poetry configures download sources per project in `pyproject.toml`.
 
 ## Debian and Ubuntu system sources
 

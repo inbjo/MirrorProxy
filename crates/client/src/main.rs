@@ -309,7 +309,7 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
 
             if !commands.is_empty() {
                 println!();
-                println!("commands:");
+                println!("manual setup commands and snippets:");
                 for (provider_code, command) in commands {
                     print_source_command(provider_code, &command);
                 }
@@ -1588,16 +1588,16 @@ fn mirrorproxy_source_url(base_url: Option<&str>, source_path: &str) -> String {
 
 fn source_config_command(target_code: &str, repo_url: &str) -> Option<String> {
     if target_code == "huggingface" {
-        // Guidance only: never persist shell environment variables or tokens.
+        // Emit setup guidance without editing the user's environment.
         let url = repo_url.trim_end_matches('/');
         return Some(if cfg!(windows) {
             format!(
-                "$env:HF_ENDPOINT='{}'; $env:HF_HUB_DISABLE_XET='1'; hf download gpt2 config.json",
+                "[Environment]::SetEnvironmentVariable('HF_ENDPOINT', '{}', 'User')\n[Environment]::SetEnvironmentVariable('HF_HUB_DISABLE_XET', '1', 'User')",
                 url.replace('\'', "''")
             )
         } else {
             format!(
-                "HF_ENDPOINT='{}' HF_HUB_DISABLE_XET=1 hf download gpt2 config.json",
+                "export HF_ENDPOINT='{}'\nexport HF_HUB_DISABLE_XET=1",
                 url.replace('\'', "'\"'\"'")
             )
         });
@@ -1611,9 +1611,9 @@ fn source_config_command(target_code: &str, repo_url: &str) -> Option<String> {
 
 fn source_reset_command(target_code: &str) -> Option<String> {
     let command = match target_code {
-        "npm" => "npm config delete registry",
+        "npm" => "npm config delete registry --location=global",
         "bun" => "Restore the previous Bun ~/.bunfig.toml registry setting",
-        "pip" => "pip config unset global.index-url",
+        "pip" => "pip config --global unset global.index-url",
         "pdm" => "Restore the previous PDM repository configuration",
         "uv" => "Restore the previous uv index-url configuration",
         "cargo" => {
@@ -1632,7 +1632,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         "lua" => "Restore the previous LuaRocks rocks_servers configuration",
         "homebrew" => "Restore the previous Homebrew user environment file",
         "nix" => "Restore the previous Nix user configuration",
-        "composer" => "composer config --unset repos.packagist",
+        "composer" => "composer config --global --unset repos.packagist",
         "docker" => {
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
         }
@@ -1647,7 +1647,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
 fn template_repo_url(target_code: &str, repo_url: &str) -> Option<String> {
     match target_code {
         "cargo" => Some(cargo_registry_url(repo_url)),
-        "docker" => Some(docker_registry_host(repo_url)?),
+        "docker" => docker_registry_mirror_url(repo_url).ok(),
         _ => Some(repo_url.to_string()),
     }
 }
@@ -1714,18 +1714,6 @@ fn cargo_registry_url(repo_url: &str) -> String {
     } else {
         format!("sparse+{repo_url}")
     }
-}
-
-fn docker_registry_host(repo_url: &str) -> Option<String> {
-    let without_scheme = repo_url
-        .strip_prefix("https://")
-        .or_else(|| repo_url.strip_prefix("http://"))?;
-    Some(
-        without_scheme
-            .trim_end_matches('/')
-            .trim_end_matches("/v2")
-            .to_string(),
-    )
 }
 
 #[cfg(test)]
@@ -1859,11 +1847,11 @@ mod tests {
     fn source_config_command_generates_copyable_commands() {
         assert_eq!(
             source_config_command("npm", "https://mirror.example/npm/").unwrap(),
-            "npm config set registry https://mirror.example/npm/"
+            "npm config set registry https://mirror.example/npm/ --location=global"
         );
         assert_eq!(
             source_config_command("pip", "https://mirror.example/pypi/simple/").unwrap(),
-            "pip config set global.index-url https://mirror.example/pypi/simple/"
+            "pip config --global set global.index-url https://mirror.example/pypi/simple/"
         );
         assert_eq!(
             source_config_command("go", "https://mirror.example/goproxy/").unwrap(),
@@ -1885,11 +1873,11 @@ mod tests {
         );
         assert_eq!(
             source_config_command("cpan", "https://mirror.example/cpan/").unwrap(),
-            "cpanm --mirror https://mirror.example/cpan/ --mirror-only <module>"
+            "export PERL_CPANM_OPT='--mirror https://mirror.example/cpan/ --mirror-only'"
         );
         assert_eq!(
             source_config_command("composer", "https://mirror.example/composer/").unwrap(),
-            "composer config repo.packagist composer https://mirror.example/composer/"
+            "composer config --global repo.packagist composer https://mirror.example/composer/"
         );
         assert_eq!(
             source_config_command("github", "https://mirror.example/https://github.com/").unwrap(),
@@ -1917,20 +1905,16 @@ mod tests {
                 .contains("\nregistry = \"sparse+https://mirror.example/crates-index/\"")
         );
         assert_eq!(
-            docker_registry_host("https://mirror.example/v2/").unwrap(),
-            "mirror.example"
-        );
-        assert_eq!(
             source_config_command("docker", "https://mirror.example/v2/").unwrap(),
-            "docker pull mirror.example/nginx"
+            "{\n  \"registry-mirrors\": [\"https://mirror.example\"]\n}"
         );
         assert_eq!(
             source_config_command("homebrew", "https://mirror.example/homebrew").unwrap(),
-            "export HOMEBREW_BOTTLE_DOMAIN=https://mirror.example/homebrew"
+            "HOMEBREW_BOTTLE_DOMAIN=https://mirror.example/homebrew"
         );
         assert_eq!(
             source_config_command("guix", "https://mirror.example/guix/").unwrap(),
-            "guix build --substitute-urls=https://mirror.example/guix/ <package>"
+            "(substitute-urls (cons \"https://mirror.example/guix/\" %default-substitute-urls))"
         );
     }
 
@@ -1941,11 +1925,10 @@ mod tests {
         assert_eq!(planned.target_code, "huggingface");
         assert_eq!(planned.repo_url, "https://mirror.example/huggingface");
         assert!(planned.command.contains("HF_HUB_DISABLE_XET"));
-        assert!(planned.command.contains("hf download gpt2 config.json"));
         assert!(planned.command.starts_with(if cfg!(windows) {
-            "$env:HF_ENDPOINT="
+            "[Environment]::SetEnvironmentVariable('HF_ENDPOINT'"
         } else {
-            "HF_ENDPOINT="
+            "export HF_ENDPOINT="
         }));
         let target = catalog::find_target("hf").unwrap();
         assert!(!target.supported_modes.contains(&SourceMode::LocalConfig));
@@ -1991,14 +1974,14 @@ mod tests {
         assert_eq!(npm.repo_url, "https://mirror.example/npm/");
         assert_eq!(
             npm.command,
-            "npm config set registry https://mirror.example/npm/"
+            "npm config set registry https://mirror.example/npm/ --location=global"
         );
 
         let pip = plan_source_set_command("pip", "tuna", None).unwrap();
         assert_eq!(pip.provider_code, "tuna");
         assert_eq!(
             pip.command,
-            "pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple"
+            "pip config --global set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple"
         );
 
         for target_code in ["lua", "homebrew", "nix"] {
@@ -2016,7 +1999,7 @@ mod tests {
     fn plan_source_reset_command_builds_dry_run_commands() {
         let npm = plan_source_reset_command("npm").unwrap();
         assert_eq!(npm.target_code, "npm");
-        assert_eq!(npm.command, "npm config delete registry");
+        assert_eq!(npm.command, "npm config delete registry --location=global");
 
         let bun = plan_source_reset_command("bun").unwrap();
         assert_eq!(bun.target_code, "bun");

@@ -63,8 +63,8 @@ POSIX 安装器的 `--mirror` 和 PowerShell 安装器的 `-Mirror` 会记住该
 pip、Go、Cargo、npm、Bun、PDM 和 Homebrew 会合并源设置与现有配置。
 其他目标沿用各自的配置写入与覆盖保护。Rustup 下载地址仍使用独立配置示例。
 
-Hugging Face 仅提供使用示例：`mirrorproxy get hf --base-url https://mirror.example.com`
-会显示适合当前平台的 HTTP 下载命令，不写入 shell 配置或 Token。
+Hugging Face 的 `mirrorproxy get hf --base-url https://mirror.example.com`
+会显示适合当前平台的环境变量设置，不写入 Shell 配置或 Token。
 必须设置 `HF_HUB_DISABLE_XET=1`，支持范围见[Hugging Face 下载](Proxy-Adapters-zh-CN#hugging-face-公开-http-下载)。
 
 ## 进阶：用户与系统范围
@@ -78,6 +78,11 @@ Hugging Face 仅提供使用示例：`mirrorproxy get hf --base-url https://mirr
 等系统配置。使用系统换源命令时需要管理员权限。
 
 客户端不会替你安装 MirrorProxy 服务，也不会上传账号、令牌或原始配置。
+
+镜像目录中的手动配置用于设置跨项目的默认源。例如 npm 使用
+`npm config set registry https://mirror.example.com/npm/ --location=global`。
+提供用户级全局配置的工具使用当前用户的配置文件或环境变量。
+Poetry 的下载源需在各项目的 `pyproject.toml` 中设置。
 
 ## Debian 和 Ubuntu 系统源
 

@@ -14,7 +14,7 @@ const containerRegistries = [
 describe('Hugging Face HTTP download commands', () => {
   it('requires HTTP mode and safely quotes the current instance URL', () => {
     expect(sourceManualCommand('huggingface', 'https://mirror.example/huggingface/'))
-      .toBe("HF_ENDPOINT='https://mirror.example/huggingface' HF_HUB_DISABLE_XET=1 hf download gpt2 config.json")
+      .toBe("export HF_ENDPOINT='https://mirror.example/huggingface'\nexport HF_HUB_DISABLE_XET=1")
     expect(sourceManualCommand('huggingface', "https://mirror.example/it's/huggingface"))
       .toContain("it'\"'\"'s")
   })
@@ -255,7 +255,7 @@ describe('App preferences', () => {
   it('keeps the existing signed ROS APT entry and generates valid Cargo and Docker examples', () => {
     expect(sourceManualCommand('ros', 'https://sina.dev/os/ros/', 'deb {repo_url} noble main')).toBeUndefined()
     expect(sourceManualCommand('cargo', 'https://sina.dev/crates-index/', 'registry = "{repo_url}"')).toBe('registry = "sparse+https://sina.dev/crates-index/"')
-    expect(sourceManualCommand('docker', 'https://sina.dev:8443/v2/', 'docker pull {repo_url}/nginx')).toBe('docker pull sina.dev:8443/nginx')
+    expect(sourceManualCommand('docker', 'https://sina.dev:8443/v2/', '{"registry-mirrors":["{repo_url}"]}')).toBe('{"registry-mirrors":["https://sina.dev:8443"]}')
   })
 
   it('generates an eopkg command for the Solus proxy', () => {

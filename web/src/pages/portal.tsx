@@ -393,6 +393,9 @@ export function SourceConfigModal({ target, health, baseUrl, catalog, labels, co
     : undefined)
   const cliCopyId = migrationTarget ? `source-cli-${migrationTarget}` : 'source-cli'
   const manualCommand = source && !customRepository && !migrationCommand ? sourceManualCommand(target.code, proxyUrl, template?.template) : undefined
+  const powershell = source && target.code === 'huggingface'
+    ? `[Environment]::SetEnvironmentVariable('HF_ENDPOINT', '${proxyUrl.replace(/\/+$/, '').replaceAll("'", "''")}', 'User')\n[Environment]::SetEnvironmentVariable('HF_HUB_DISABLE_XET', '1', 'User')`
+    : undefined
 
   return <Modal open centered title={target.name} onCancel={onClose} footer={null} width={800} closable={{ 'aria-label': labels.closeConfig }} className="config-modal consumer-modal" styles={{ body: { maxHeight: 'min(72vh, 760px)', overflowY: 'auto', paddingRight: 8 } }} closeIcon={<X size={18} />} aria-label={`${target.name} ${labels.sourceCatalogHeading}`}>
       {!source ? <p>{labels.sourceUnavailable}</p> : null}
@@ -407,9 +410,41 @@ export function SourceConfigModal({ target, health, baseUrl, catalog, labels, co
         </Choice>
       </label> : null}
       {mirrorproxyCommand ? <ConfigOption title={migrationCommand ? labels.sourceMigrationApply : labels.mirrorproxyCli} description={target.migration_target === 'openwrt' ? labels.sourceMigrationRootHint : target.default_scope === 'system' ? labels.sourceMigrationApplyHint : labels.mirrorproxyCliHint} value={mirrorproxyCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === cliCopyId} onCopy={() => onCopy(cliCopyId, mirrorproxyCommand)} /> : null}
-      {manualCommand ? <ConfigOption title={labels.manualSetup} description={target.code === 'huggingface' ? `${labels.huggingfaceHint} (POSIX shell)` : target.category === 'os' ? labels.manualSystemSetupHint : labels.manualSetupHint} value={manualCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-manual'} onCopy={() => onCopy('source-manual', manualCommand)} /> : null}
-      {source && target.code === 'huggingface' ? <ConfigOption title="PowerShell" description={labels.huggingfaceHint} value={`$env:HF_ENDPOINT='${proxyUrl.replaceAll("'", "''")}'; $env:HF_HUB_DISABLE_XET='1'; hf download gpt2 config.json`} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-powershell'} onCopy={() => onCopy('source-powershell', `$env:HF_ENDPOINT='${proxyUrl.replaceAll("'", "''")}'; $env:HF_HUB_DISABLE_XET='1'; hf download gpt2 config.json`)} /> : null}
+      {manualCommand ? <ConfigOption title={labels.manualSetup} description={manualSetupDescription(target, locale, labels)} value={manualCommand} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-manual'} onCopy={() => onCopy('source-manual', manualCommand)} /> : null}
+      {powershell ? <ConfigOption title="PowerShell" description={labels.manualWindowsEnvironmentHint} value={powershell} copyLabel={labels.copyCommand} copiedLabel={labels.copied} copied={copied === 'source-powershell'} onCopy={() => onCopy('source-powershell', powershell)} /> : null}
+      {source && target.code === 'poetry' ? <p>{labels.poetryScopeHint}</p> : null}
   </Modal>
+}
+
+const userConfigurationFiles: Record<string, string> = {
+  bun: '~/.bunfig.toml, $XDG_CONFIG_HOME/.bunfig.toml',
+  uv: '~/.config/uv/uv.toml, %APPDATA%/uv/uv.toml (Windows)',
+  cargo: '${CARGO_HOME:-~/.cargo}/config.toml',
+  maven: '~/.m2/settings.xml',
+  rubygems: '~/.gemrc',
+  nuget: '~/.nuget/NuGet/NuGet.Config, %APPDATA%/NuGet/NuGet.Config (Windows)',
+  cran: '~/.Rprofile',
+  hackage: '~/.cabal/config, %APPDATA%/cabal/config (Windows)',
+  lua: '~/.config/luarocks/config.lua, ~/.luarocks/config.lua',
+  clojars: '~/.clojure/deps.edn',
+  anaconda: '~/.condarc',
+  homebrew: '~/.homebrew/brew.env',
+  nix: '${XDG_CONFIG_HOME:-~/.config}/nix/nix.conf',
+}
+
+function manualSetupDescription(target: SourceTarget, locale: Locale, labels: Record<string, string>) {
+  const zh = locale === 'zh'
+  if (['cpan', 'julia', 'nvm', 'rustup', 'pub', 'huggingface'].includes(target.code)) return labels.manualShellEnvironmentHint
+  if (target.code === 'docker') return zh
+    ? '把此设置合入 Docker Engine 的 daemon.json（Docker Desktop 中为 Docker Engine 设置），然后重启 Docker。此设置仅用于 Docker Hub。'
+    : 'Merge into Docker Engine’s daemon.json or Docker Desktop’s Docker Engine settings, then restart Docker. This setting applies to Docker Hub.'
+  if (target.code === 'guix') return zh
+    ? '合入 Guix System 的 guix-configuration 后重新配置系统，并保留已有的签名信任设置。'
+    : 'Merge into guix-configuration on Guix System, then reconfigure the system and retain existing signature trust settings.'
+  if (['npm', 'pip'].includes(target.code)) return labels.manualGlobalCommandHint
+  const file = userConfigurationFiles[target.code]
+  if (file) return zh ? `合入当前用户的配置文件（使用平台对应的路径） ${file}` : `Merge into your user configuration file using the path for your platform. ${file}`
+  return target.category === 'os' ? labels.manualSystemSetupHint : labels.manualSetupHint
 }
 
 export function ConfigOption({ title, description, value, copyLabel, copiedLabel, copied, onCopy }: { title: string; description: string; value: string; copyLabel: string; copiedLabel: string; copied: boolean; onCopy: () => void }) {
@@ -428,12 +463,12 @@ export function sourceManualCommand(targetCode: string, repoUrl: string, templat
   const base = repoUrl.replace(/\/+$/, '')
   const shellBase = base.replaceAll("'", "'\"'\"'")
   const commands: Record<string, string> = {
-    huggingface: `HF_ENDPOINT='${shellBase}' HF_HUB_DISABLE_XET=1 hf download gpt2 config.json`,
+    huggingface: `export HF_ENDPOINT='${shellBase}'\nexport HF_HUB_DISABLE_XET=1`,
     solus: `sudo eopkg add-repo mirrorproxy ${base}/polaris/eopkg-index.xml.xz\nsudo eopkg update-repo mirrorproxy`,
     freebsd: `sudo mkdir -p /usr/local/etc/pkg/repos\nsudo tee /usr/local/etc/pkg/repos/FreeBSD.conf >/dev/null <<'EOF'\nFreeBSD: {\n  url: "${base}/\${ABI}/quarterly",\n  mirror_type: "none",\n  signature_type: "fingerprints",\n  fingerprints: "/usr/share/keys/pkg",\n  enabled: yes\n}\nEOF\nsudo pkg update -f`,
   }
   if (Object.hasOwn(commands, targetCode)) return commands[targetCode]
-  if (!template || ['apt', 'dnf', 'pacman', 'alpine', 'zypper', 'xbps', 'gentoo', 'trisquel', 'linuxlite', 'ros'].includes(targetCode)) return undefined
-  const templateUrl = targetCode === 'cargo' ? `sparse+${repoUrl}` : targetCode === 'docker' ? new URL(repoUrl).host : repoUrl
+  if (!template || ['apt', 'dnf', 'pacman', 'alpine', 'zypper', 'xbps', 'gentoo', 'trisquel', 'linuxlite', 'ros', 'poetry'].includes(targetCode)) return undefined
+  const templateUrl = targetCode === 'cargo' ? `sparse+${repoUrl}` : targetCode === 'docker' ? new URL(repoUrl).origin : repoUrl
   return template.replaceAll('{repo_url}', templateUrl)
 }

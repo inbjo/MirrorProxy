@@ -30,7 +30,7 @@ test('keeps multiline source commands fully visible with occupying scrollbars', 
   const entries = [
     { code: 'rustup', name: 'Rustup', category: 'lang', template: 'export RUSTUP_DIST_SERVER={repo_url}\nexport RUSTUP_UPDATE_ROOT={repo_url}/rustup' },
     { code: 'dnf', name: 'YUM / DNF', category: 'os', template: '' },
-    { code: 'homebrew', name: 'Homebrew', category: 'repo', template: 'export HOMEBREW_BOTTLE_DOMAIN={repo_url}' },
+    { code: 'homebrew', name: 'Homebrew', category: 'repo', template: 'HOMEBREW_BOTTLE_DOMAIN={repo_url}' },
   ]
   await page.route('**/api/sources', route => route.fulfill({ json: {
     ...sources,
