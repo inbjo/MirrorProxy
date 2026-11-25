@@ -5,6 +5,19 @@ follow semantic versioning.
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-11-25
+
+- Organize advanced settings into independently saved tabs and preserve drafts
+  when switching tabs. Show source types and copyable client proxy addresses in
+  one table, with ordered multiline upstream editing and custom repositories.
+- Persist the administration page theme and navigation layout in the browser.
+- Simplify native source switching and add stable client update checks. Generate
+  persistent manual mirror setup instructions where supported.
+- Upgrade the Rust URL parser to address RUSTSEC-2026-0592 and update the SMTP
+  dependency.
+- Reuse Linux binaries across server and public client protocol smoke tests and
+  reuse workspace test artifacts for filtered Rust checks.
+
 ## [1.8.0] - 2026-11-18
 
 - Add an opt-in DNS-over-HTTPS relay at `/dns-query` with configurable HTTPS
@@ -528,3 +541,4 @@ Multi-instance clustering and high availability are intentionally outside the
 [1.7.0]: https://github.com/inbjo/MirrorProxy/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/inbjo/MirrorProxy/compare/v1.5.0...v1.6.0
 [1.8.0]: https://github.com/inbjo/MirrorProxy/compare/v1.7.3...v1.8.0
+[1.8.1]: https://github.com/inbjo/MirrorProxy/compare/v1.8.0...v1.8.1

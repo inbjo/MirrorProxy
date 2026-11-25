@@ -1,6 +1,6 @@
 [package]
 name = "mirrorproxy-server"
-version = "1.8.0"
+version = "1.8.1"
 rust-version = "1.94"
 edition.workspace = true
 license.workspace = true
