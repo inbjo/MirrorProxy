@@ -96,6 +96,62 @@ jobs:
           prefix-key: mirrorproxy-rust-v1
           shared-key: ${{ runner.os }}-${{ runner.arch }}-checks
           env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
+      - uses: ./.github/actions/download-web
+        with:
+          name: ci-web-console
+      - name: Rust format
+        run: cargo fmt --check
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust tests
+        run: cargo test --workspace --locked
+      - name: Deterministic DoH protocol acceptance
+        run: cargo test --workspace --locked local_doh_protocol_smoke -- --ignored --nocapture
+      - name: DNS cache and multi-IP capacity baseline
+        env:
+          MIRRORPROXY_BASELINE_PATH: ${{ github.workspace }}/target/doh-baseline.json
+        run: cargo test --workspace --locked doh_capacity_baseline -- --ignored --nocapture
+      - name: Archive capacity baseline
+        uses: actions/upload-artifact@v6
+        with:
+          name: doh-capacity-baseline
+          path: target/doh-baseline.json
+          if-no-files-found: error
+      - name: Controlled download public artifact smoke
+        run: cargo test --workspace --locked public_artifact_download_checks_payload_quota_stats_and_domain_block -- --ignored --nocapture
+
+  linux-server:
+    name: Linux server (ubuntu-24.04 x64)
+    needs: frontend
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, Node 24
+        with:
+          prefix-key: mirrorproxy-rust-v1
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-linux-binaries
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
+      - uses: ./.github/actions/download-web
+        with:
+          name: ci-web-console
+      - name: Build and stage Linux smoke binaries
+        run: |
+          cargo build --workspace --locked
+          install -D -m 0755 target/debug/mirrorproxy-server target/ci-linux/mirrorproxy-server
+          install -D -m 0755 target/debug/mirrorproxy target/ci-linux/mirrorproxy
+          cd target/ci-linux
+          printf '%s\n' "$GITHUB_SHA" > commit
+          sha256sum mirrorproxy-server mirrorproxy > SHA256SUMS
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ci-linux-smoke-binaries
+          path: target/ci-linux/
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -111,37 +167,13 @@ jobs:
       - name: Ensure Chromium and required system libraries for real browser smoke
         working-directory: web
         run: npx playwright install --with-deps chromium
-      - uses: ./.github/actions/download-web
-        with:
-          name: ci-web-console
-      - name: Rust format
-        run: cargo fmt --check
-      - name: Rust clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: Rust tests
-        run: cargo test --workspace --locked
-      - name: Deterministic DoH protocol acceptance
-        run: cargo test --locked -p mirrorproxy-server local_doh_protocol_smoke -- --ignored --nocapture
-      - name: DNS cache and multi-IP capacity baseline
-        env:
-          MIRRORPROXY_BASELINE_PATH: ${{ github.workspace }}/target/doh-baseline.json
-        run: cargo test --locked -p mirrorproxy-server doh_capacity_baseline -- --ignored --nocapture
-      - name: Archive capacity baseline
-        uses: actions/upload-artifact@v6
-        with:
-          name: doh-capacity-baseline
-          path: target/doh-baseline.json
-          if-no-files-found: error
-      - name: Controlled download public artifact smoke
-        run: cargo test --locked -p mirrorproxy-server public_artifact_download_checks_payload_quota_stats_and_domain_block -- --ignored --nocapture
       - name: Real server and administration smoke
         run: |
-          cargo build --locked -p mirrorproxy-server
-          ./scripts/smoke-admin-api.sh target/debug/mirrorproxy-server
-          python3 scripts/smoke-shutdown.py target/debug/mirrorproxy-server
-          python3 scripts/smoke-source-details.py target/debug/mirrorproxy-server
-          node web/scripts/smoke-admin-browser.mjs target/debug/mirrorproxy-server
-          node web/scripts/smoke-passkey-browser.mjs target/debug/mirrorproxy-server
+          ./scripts/smoke-admin-api.sh target/ci-linux/mirrorproxy-server
+          python3 scripts/smoke-shutdown.py target/ci-linux/mirrorproxy-server
+          python3 scripts/smoke-source-details.py target/ci-linux/mirrorproxy-server
+          node web/scripts/smoke-admin-browser.mjs target/ci-linux/mirrorproxy-server
+          node web/scripts/smoke-passkey-browser.mjs target/ci-linux/mirrorproxy-server
 
   minimum-rust:
     name: Minimum Rust 1.94 compilation
@@ -326,16 +358,11 @@ jobs:
         run: python scripts/smoke-source-details.py target/${{ matrix.target }}/debug/mirrorproxy-server.exe
 
   client-smoke:
-    needs: frontend
+    needs: linux-server
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, Node 24
-        with:
-          prefix-key: mirrorproxy-rust-v1
-          shared-key: ${{ runner.os }}-${{ runner.arch }}-client-smoke
-          env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENSSL PKG_CONFIG AR
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -365,11 +392,20 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - name: Install repository clients
         run: sudo apt-get update && sudo apt-get install -y cabal-install cpanminus luarocks maven r-base
-      - uses: ./.github/actions/download-web
+      - uses: actions/download-artifact@v8
         with:
-          name: ci-web-console
+          name: ci-linux-smoke-binaries
+          path: target/ci-linux
+      - name: Verify Linux smoke binaries
+        working-directory: target/ci-linux
+        run: |
+          test "$(cat commit)" = "$GITHUB_SHA"
+          sha256sum --check --strict SHA256SUMS
+          chmod +x mirrorproxy-server mirrorproxy
       - name: Run public client protocol smoke
         env:
+          MIRRORPROXY_SMOKE_SERVER_BINARY: ${{ github.workspace }}/target/ci-linux/mirrorproxy-server
+          MIRRORPROXY_SMOKE_CLIENT_BINARY: ${{ github.workspace }}/target/ci-linux/mirrorproxy
           MIRRORPROXY_SMOKE_DOCKER: "1"
           MIRRORPROXY_SMOKE_OCI_PUBLIC: "1"
           MIRRORPROXY_SMOKE_EXTENDED: "1"

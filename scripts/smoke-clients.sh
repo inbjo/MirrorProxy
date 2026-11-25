@@ -168,8 +168,12 @@ luarocks = "https://luarocks.org"
 EOF
 
 cd "${root}"
-cargo run --quiet --package mirrorproxy-server --bin mirrorproxy-server -- \
-  --config "${config}" >"${server_log}" 2>&1 &
+if [[ -n "${MIRRORPROXY_SMOKE_SERVER_BINARY:-}" ]]; then
+  "${MIRRORPROXY_SMOKE_SERVER_BINARY}" --config "${config}" >"${server_log}" 2>&1 &
+else
+  cargo run --locked --quiet --package mirrorproxy-server --bin mirrorproxy-server -- \
+    --config "${config}" >"${server_log}" 2>&1 &
+fi
 pid=$!
 wait_for_server
 
@@ -275,8 +279,10 @@ if [[ "${MIRRORPROXY_SMOKE_NATIVE_EXTENDED:-0}" == "1" ]]; then
   command -v nix >/dev/null
   command -v rustup >/dev/null
 
-  cargo build --quiet --package mirrorproxy-cli --bin mirrorproxy
-  client="${root}/target/debug/mirrorproxy"
+  client="${MIRRORPROXY_SMOKE_CLIENT_BINARY:-${root}/target/debug/mirrorproxy}"
+  if [[ -z "${MIRRORPROXY_SMOKE_CLIENT_BINARY:-}" ]]; then
+    cargo build --locked --quiet --package mirrorproxy-cli --bin mirrorproxy
+  fi
 
   lua_home="${work}/lua-home"
   "${client}" set lua --mirror mirrorproxy --base-url "${base}" --config-root "${lua_home}" >/dev/null
