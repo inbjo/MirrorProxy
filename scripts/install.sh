@@ -15,7 +15,7 @@ usage() {
 Install the latest stable MirrorProxy client release.
 
 Usage: install.sh [options]
-  --mirror URL       Prefix GitHub downloads with a MirrorProxy URL
+  --mirror URL       Prefix GitHub downloads and save the default MirrorProxy origin
   --version VERSION  Install a release tag instead of the latest stable release
   --install-dir DIR  Directory (default: /usr/local/bin; --setup: ~/.local/bin)
   --setup            Start the Skill + MCP setup wizard after installing the client
@@ -177,6 +177,15 @@ else
 fi
 
 echo "MirrorProxy installed to ${install_dir}/mirrorproxy"
+if [ -n "$mirror" ] && "${install_dir}/mirrorproxy" use --help >/dev/null 2>&1; then
+  if [ "$os" = linux ] && [ "$install_dir" = /usr/local/bin ] && [ "$(id -u)" -eq 0 ]; then
+    "${install_dir}/mirrorproxy" use "$mirror" || echo "Default source URL was not saved." >&2
+  elif [ "$os" = linux ] && [ "$install_dir" = /usr/local/bin ] && command -v sudo >/dev/null 2>&1; then
+    sudo "${install_dir}/mirrorproxy" use "$mirror" || echo "Default source URL was not saved." >&2
+  else
+    "${install_dir}/mirrorproxy" use "$mirror" --user || echo "Default source URL was not saved." >&2
+  fi
+fi
 case ":${PATH}:" in
   *":${install_dir}:"*) ;;
   *) echo "Add ${install_dir} to PATH before running mirrorproxy." ;;

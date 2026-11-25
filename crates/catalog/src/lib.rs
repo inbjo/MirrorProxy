@@ -1370,22 +1370,22 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
     SourceTemplate {
         target_code: "npm",
         os_family: "any",
-        scope: SourceScope::User,
-        template: "npm config set registry {repo_url}",
+        scope: SourceScope::System,
+        template: "npm config set registry {repo_url} --location=global",
         requires_sudo: false,
     },
     SourceTemplate { target_code: "bun", os_family: "any", scope: SourceScope::User, template: "[install]\nregistry = \"{repo_url}\"", requires_sudo: false },
     SourceTemplate {
         target_code: "pip",
         os_family: "any",
-        scope: SourceScope::User,
-        template: "pip config set global.index-url {repo_url}",
+        scope: SourceScope::System,
+        template: "pip config --global set global.index-url {repo_url}",
         requires_sudo: false,
     },
     SourceTemplate { target_code: "pdm", os_family: "any", scope: SourceScope::User, template: "pdm config pypi.url {repo_url}", requires_sudo: false },
-    SourceTemplate { target_code: "uv", os_family: "any", scope: SourceScope::User, template: "UV_DEFAULT_INDEX={repo_url} uv pip install <package>", requires_sudo: false },
+    SourceTemplate { target_code: "uv", os_family: "any", scope: SourceScope::User, template: "[[index]]\nurl = \"{repo_url}\"\ndefault = true", requires_sudo: false },
     SourceTemplate { target_code: "julia", os_family: "linux", scope: SourceScope::User, template: "export JULIA_PKG_SERVER={repo_url}", requires_sudo: false },
-    SourceTemplate { target_code: "poetry", os_family: "linux", scope: SourceScope::User, template: "poetry source add --priority=primary mirrorproxy {repo_url}", requires_sudo: false },
+    SourceTemplate { target_code: "poetry", os_family: "linux", scope: SourceScope::User, template: "Poetry requires a project-level package source in pyproject.toml. Mirror URL: {repo_url}", requires_sudo: false },
     SourceTemplate {
         target_code: "cargo",
         os_family: "any",
@@ -1411,7 +1411,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         target_code: "composer",
         os_family: "any",
         scope: SourceScope::User,
-        template: "composer config repo.packagist composer {repo_url}",
+        template: "composer config --global repo.packagist composer {repo_url}",
         requires_sudo: false,
     },
     SourceTemplate {
@@ -1440,7 +1440,7 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         target_code: "cpan",
         os_family: "any",
         scope: SourceScope::User,
-        template: "cpanm --mirror {repo_url} --mirror-only <module>",
+        template: "export PERL_CPANM_OPT='--mirror {repo_url} --mirror-only'",
         requires_sudo: false,
     },
     SourceTemplate {
@@ -1451,39 +1451,39 @@ pub const SOURCE_TEMPLATES: &[SourceTemplate] = &[
         requires_sudo: false,
     },
     SourceTemplate { target_code: "hackage", os_family: "any", scope: SourceScope::User, template: "repository hackage.haskell.org\n  url: {repo_url}\n  secure: True", requires_sudo: false },
-    SourceTemplate { target_code: "lua", os_family: "linux", scope: SourceScope::User, template: "luarocks install --server={repo_url} <module>", requires_sudo: false },
+    SourceTemplate { target_code: "lua", os_family: "linux", scope: SourceScope::User, template: "rocks_servers = { \"{repo_url}\" }", requires_sudo: false },
     SourceTemplate { target_code: "nvm", os_family: "linux", scope: SourceScope::User, template: "export NVM_NODEJS_ORG_MIRROR={repo_url}", requires_sudo: false },
     SourceTemplate { target_code: "ocaml", os_family: "linux", scope: SourceScope::User, template: "opam repository set-url default {repo_url}", requires_sudo: false },
     SourceTemplate { target_code: "clojars", os_family: "any", scope: SourceScope::User, template: "{:mvn/repos {\"clojars\" {:url \"{repo_url}\"}}}", requires_sudo: false },
-    SourceTemplate { target_code: "pub", os_family: "any", scope: SourceScope::User, template: "PUB_HOSTED_URL={repo_url} flutter pub get", requires_sudo: false },
+    SourceTemplate { target_code: "pub", os_family: "any", scope: SourceScope::User, template: "export PUB_HOSTED_URL='{repo_url}'", requires_sudo: false },
     SourceTemplate {
         target_code: "huggingface",
         os_family: "any",
         scope: SourceScope::User,
-        template: "HF_ENDPOINT='{repo_url}' HF_HUB_DISABLE_XET=1 hf download gpt2 config.json",
+        template: "export HF_ENDPOINT='{repo_url}'\nexport HF_HUB_DISABLE_XET=1",
         requires_sudo: false,
     },
     SourceTemplate { target_code: "anaconda", os_family: "any", scope: SourceScope::User, template: "channels:\n  - {repo_url}main\n  - defaults", requires_sudo: false },
     SourceTemplate {
         target_code: "docker",
         os_family: "any",
-        scope: SourceScope::User,
-        template: "docker pull {repo_url}/nginx",
-        requires_sudo: false,
+        scope: SourceScope::System,
+        template: "{\n  \"registry-mirrors\": [\"{repo_url}\"]\n}",
+        requires_sudo: true,
     },
     SourceTemplate {
         target_code: "homebrew",
         os_family: "macos",
         scope: SourceScope::User,
-        template: "export HOMEBREW_BOTTLE_DOMAIN={repo_url}",
+        template: "HOMEBREW_BOTTLE_DOMAIN={repo_url}",
         requires_sudo: false,
     },
     SourceTemplate {
         target_code: "guix",
-        os_family: "any",
-        scope: SourceScope::User,
-        template: "guix build --substitute-urls={repo_url} <package>",
-        requires_sudo: false,
+        os_family: "linux",
+        scope: SourceScope::System,
+        template: "(substitute-urls (cons \"{repo_url}\" %default-substitute-urls))",
+        requires_sudo: true,
     },
     SourceTemplate {
         target_code: "nix",
@@ -1686,7 +1686,7 @@ mod tests {
 
         assert_eq!(
             npm_templates[0].template,
-            "npm config set registry {repo_url}"
+            "npm config set registry {repo_url} --location=global"
         );
         assert!(cargo_templates[0].template.contains("[source.crates-io]"));
         assert!(github_templates[0].template.contains("insteadOf"));

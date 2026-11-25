@@ -7,16 +7,14 @@
 
 ## Linux Docker Engine
 
-推荐使用客户端结构化合并现有 `/etc/docker/daemon.json`：
+从 MirrorProxy 站点安装新版 CLI 后，执行一条命令即可合并 `/etc/docker/daemon.json` 中的镜像配置：
 
 ```bash
-mirrorproxy set docker --mirror mirrorproxy --base-url https://mirror.example.com \
-  --scope system --dry-run
-sudo mirrorproxy set docker --mirror mirrorproxy --base-url https://mirror.example.com \
-  --scope system
+sudo mirrorproxy set docker
 ```
 
-先审阅预览，再在维护窗口重启 Docker：
+未设置默认实例时，执行 `sudo mirrorproxy set docker https://mirror.example.com`。
+在不影响运行中容器时重启 Docker：
 
 ```bash
 sudo systemctl restart docker

@@ -18,7 +18,7 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
 export const PROXY_ADAPTERS = [
   'github', 'composer', 'oci', 'npm', 'nvm', 'opam', 'go', 'maven', 'rubygems', 'rustup',
   'nuget', 'cpan', 'cran', 'hackage', 'julia', 'luarocks', 'clojars', 'cocoapods', 'pub',
-  'anaconda', 'huggingface', 'texlive', 'elpa', 'nix', 'guix', 'flatpak', 'homebrew', 'os', 'crates', 'pypi',
+  'anaconda', 'huggingface', 'texlive', 'winget', 'elpa', 'nix', 'guix', 'flatpak', 'homebrew', 'os', 'crates', 'pypi',
 ] as const
 
 export const copy = async (value: string) => {

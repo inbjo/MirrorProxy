@@ -1,8 +1,9 @@
 # Linux 系统软件源
 
-独立客户端提供下列 28 类发行版的原生配置适配，参考了
-[LinuxMirrors](https://github.com/SuperManito/LinuxMirrors) 的系统覆盖范围。
-实现采用 Rust，不下载或执行对方脚本。`mirrorproxy systems` 展示客户端与服务端共享的目录。
+独立客户端提供下列 31 类发行版的原生配置适配。换源命令和包管理器流程参考
+[chsrc](https://github.com/RubyMetric/chsrc)，镜像目录参考
+[LinuxMirrors](https://github.com/SuperManito/LinuxMirrors)。迁移逻辑使用 Rust 实现。
+`mirrorproxy systems` 展示客户端与服务端共享的目录。
 
 版本范围表示**配置适配范围**，包括归档版本，不代表延长发行版安全支持，也不保证每个
 版本和架构的上游元数据仍然可用。测试夹具覆盖全部发行版，实际下载仍需在 Linux 验证。
@@ -13,6 +14,8 @@
 | --- | --- | --- | --- |
 | `debian` | Debian | 8–14、testing/sid | APT |
 | `ubuntu` | Ubuntu | 14–26 | APT |
+| `trisquel` | Trisquel | 现有 APT 仓库 | APT |
+| `linuxlite` | Linux Lite | 现有 APT 仓库 | APT |
 | `kali` | Kali Linux | 滚动版本 | APT |
 | `linuxmint` | Linux Mint / LMDE | Mint 19–22；LMDE 6–7 | APT |
 | `deepin` | Deepin | 现有版本布局，含 25/beige | APT |
@@ -39,29 +42,23 @@
 | `gentoo` | Gentoo | 现有 Portage 配置 | distfile 镜像 |
 | `nixos` | NixOS | 19–26 | Nix 模块及已有 root channel |
 | `void` | Void Linux | 滚动版本，保留已有 musl 路径 | XBPS |
+| `openwrt` | OpenWrt | 使用 opkg 的版本 | opkg |
 
-## 预览、应用与恢复
+## 一键换源
 
-需要已有 MirrorProxy 实例，启用 `os` 适配器，并使用包含新目录中仓库根地址的服务端版本。
-统一迁移当前使用 `mirrorproxy` 提供方。
+从站点执行 Linux 默认安装命令后，客户端会记住该实例。服务端需启用 `os` 代理。
 
 ```bash
-mirrorproxy systems
-sudo mirrorproxy set system --scope system --replace-existing --base-url https://mirror.example.com --dry-run
-sudo mirrorproxy set system --scope system --replace-existing --base-url https://mirror.example.com
-
-# 指定发行版时，客户端还会检查它是否匹配当前系统。
-sudo mirrorproxy set rocky --scope system --replace-existing --base-url https://mirror.example.com --dry-run
-
-sudo mirrorproxy reset system --scope system --dry-run
-sudo mirrorproxy reset system --scope system
+sudo mirrorproxy set debian     # 指定发行版，自动核对本机系统
+sudo mirrorproxy set system     # 自动识别发行版
 ```
 
-一次只执行一个 `set`，现有系统回滚记录会阻止再次迁移。
-`reset <发行版标识> --scope system` 也能恢复匹配发行版的统一迁移。
-已有按目标操作的命令及其回滚记录继续保留原有行为。
-`set apt --replace-existing` 仍是[客户端页面](Client-zh-CN)介绍的较窄的 Debian/Ubuntu
-基础仓库替换方式。
+执行其中一条即可。APT、DNF/YUM、zypper、pacman、apk、XBPS 和 opkg 会在写入后刷新包索引，
+失败则恢复原配置。Gentoo 的 distfiles 镜像写入后即可使用。NixOS 模块仍须导入并由管理员应用。
+OpenWrt 在 root 会话执行 `mirrorproxy set openwrt`。
+通过软件包管理器安装时，可直接用 `sudo mirrorproxy set debian https://mirror.example.com`，
+或运行 `sudo mirrorproxy use https://mirror.example.com` 保存默认实例。
+需要恢复时，执行 `sudo mirrorproxy reset system --scope system`。原有显式参数继续可用。
 
 系统识别读取 `os-release`，不执行 shell 表达式。Armbian、树莓派与 Proxmox 的标记文件
 用于识别仍报告父发行版 ID 的系统。系统识别文件的符号链接只能指向所选根目录内。
@@ -117,11 +114,11 @@ pacman 专用镜像列表还会识别原生 `$repo`/`$arch` URL 模板，不限�
 下面入口均支持 `--dry-run`，并复用系统多文件回滚记录，一次只能应用其中一个操作：
 
 ```bash
-sudo mirrorproxy set epel --scope system --replace-existing --base-url https://mirror.example.com
+sudo mirrorproxy set epel
 sudo mirrorproxy reset epel --scope system
-sudo mirrorproxy set docker-ce --scope system --replace-existing --base-url https://mirror.example.com
+sudo mirrorproxy set docker-ce
 sudo mirrorproxy reset docker-ce --scope system
-sudo mirrorproxy set gentoo-sync --scope system --replace-existing --base-url https://mirror.example.com
+sudo mirrorproxy set gentoo-sync
 sudo mirrorproxy reset gentoo-sync --scope system
 ```
 
@@ -148,11 +145,10 @@ sudo mirrorproxy reset gentoo-sync --scope system
 读取新增的多文件记录。应用和恢复后都需刷新原生包索引。客户端不迁移数据库，也不部署
 服务端。
 
-新公开仓库根地址已加入服务端默认值。如果 TOML 显式配置了 `upstreams.additional_os`，
-请合并 `config.example.toml` 中的新键并保留自定义覆盖；显式映射会替换默认映射。
-`upstreams.debian`、`upstreams.fedora` 等固定根地址继续使用原配置字段。
-服务启动会为旧持久化配置补入 EPEL、Next、Archive、Alma Vault、Docker CE 缺失键，
-已有同名自定义上游会保留。新增键位于 `upstreams.additional_os`。
+服务启动及后台保存运行配置时，会自动填充目录中缺失的公开系统仓库，包括 Debian 和
+Ubuntu 安全源、ports、发行版归档和 EPEL。已有同名上游保留。可在后台修改上游，
+或通过 `upstreams.additional_os` 配置新实例。仅供授权客户使用的 RHEL 仓库仍须显式配置。
+首页的 APT、DNF 和 pacman 卡片可选择发行版，并复制对应的一键换源命令。
 预览成功不代表已经验证远程连接。
 
 隔离测试可增加 `--config-root <目录>`，系统识别、原生配置和回滚状态均位于该目录下。
@@ -193,7 +189,7 @@ musl 构建需要安装对应 Rust target 和 musl 工具链，ARM 主机应选�
 `MIRRORPROXY_OS_SMOKE_DEBIAN_IMAGE=debian:trixie-slim` 或
 `MIRRORPROXY_OS_SMOKE_FEDORA_IMAGE=fedora:43` 等变量更换家族镜像、验证其他版本。
 
-`scripts/smoke-os-matrix.sh` 独立运行全部 28 个 profile，并输出逐项日志和 `results.tsv`；
+`scripts/smoke-os-matrix.sh` 独立运行全部 31 个 profile，并输出逐项日志和 `results.tsv`；
 缺少真实镜像显示 `BLOCKED`，不会用父发行版伪造通过。Mint、Zorin、Armbian、Proxmox、
 Raspberry Pi OS、RHEL、EndeavourOS、NixOS 可通过相应的
 `MIRRORPROXY_OS_SMOKE_<大写标识>_IMAGE` 指定真实镜像。`centos-stream` 使用

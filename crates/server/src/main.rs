@@ -5931,6 +5931,8 @@ struct SourceTargetSummary {
     aliases: Vec<String>,
     supported_modes: Vec<String>,
     default_scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    migration_target: Option<&'static str>,
     capabilities: SourceCapabilities,
 }
 
@@ -5995,6 +5997,19 @@ struct SourceTemplateSummary {
     requires_sudo: bool,
 }
 
+fn source_migration_target(code: &str) -> Option<&'static str> {
+    match code {
+        "apt" => Some("debian"),
+        "dnf" => Some("fedora"),
+        "pacman" => Some("archlinux"),
+        "zypper" => Some("opensuse"),
+        "xbps" => Some("void"),
+        "epel" => Some("epel"),
+        "docker-ce" => Some("docker-ce"),
+        _ => catalog::systems::system_distribution(code).map(|profile| profile.code),
+    }
+}
+
 async fn source_catalog(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.config();
     let mut targets = catalog::SOURCE_TARGETS
@@ -6014,6 +6029,7 @@ async fn source_catalog(State(state): State<AppState>) -> impl IntoResponse {
                 .map(|mode| mode.as_str().to_string())
                 .collect(),
             default_scope: target.default_scope.as_str().to_string(),
+            migration_target: source_migration_target(target.code),
             capabilities: SourceCapabilities::for_target(
                 target.code,
                 target
@@ -6039,13 +6055,20 @@ async fn source_catalog(State(state): State<AppState>) -> impl IntoResponse {
         if targets.iter().any(|target| target.code == *target_code) {
             continue;
         }
+        let built_in = catalog::systems::system_repository(target_code)
+            .is_some_and(|repository| !repository.upstream.is_empty());
         targets.push(SourceTargetSummary {
             code: target_code.clone(),
             name: target_code.clone(),
-            category: "repo".to_string(),
-            aliases: vec!["additional_os".to_string()],
+            category: if built_in { "os" } else { "repo" }.to_string(),
+            aliases: if built_in {
+                vec![]
+            } else {
+                vec!["additional_os".to_string()]
+            },
             supported_modes: vec!["proxy".to_string()],
             default_scope: "system".to_string(),
+            migration_target: source_migration_target(target_code),
             capabilities: SourceCapabilities::for_target(
                 target_code,
                 true,

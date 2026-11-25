@@ -30,7 +30,14 @@ export type PublicConfig = {
   }
 }
 
+export type UpstreamClientEndpoint =
+  | { kind: 'url' | 'repository' | 'image_prefix'; value: string }
+  | { kind: 'docker_mirror' }
+  | { kind: 'internal' }
+
 export type AdminConfig = Omit<PublicConfig, 'quota' | 'user_access' | 'site'> & {
+  built_in_os_repositories?: string[]
+  upstream_client_endpoints?: Record<string, UpstreamClientEndpoint>
   doh: { enabled: boolean; upstreams: string[]; ecs_mode?: 'auto' | 'passthrough'; ecs_auto_upstreams?: string[]; requests_per_minute?: number }
   site: SiteSettings
   quota: PublicConfig['quota'] & { request_event_retention_days: number; default_user_monthly_gb: number | null }
@@ -124,6 +131,7 @@ export type SourceCatalog = {
   targets: SourceTarget[]
   sources: TargetSource[]
   templates: SourceTemplate[]
+  system_profiles?: Array<{ code: string; name: string; format: string; requires_customer_mirror: boolean }>
   container_registries?: ContainerRegistryTarget[]
 }
 
@@ -152,6 +160,7 @@ export type SourceTarget = {
   aliases: string[]
   supported_modes: string[]
   default_scope: string
+  migration_target?: string
 }
 
 export type TargetSource = {

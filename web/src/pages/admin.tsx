@@ -1,6 +1,6 @@
-import { changedConfigSections, mergeSavedConfig, configSectionLabel } from '../config-draft'
+import { changedConfigSections, mergeSavedConfig, configSectionLabel, CONFIG_SCOPES, copyConfigScope } from '../config-draft'
 import { AdminHelp } from '../components/admin-help'
-import { Alert, Button, ConfigProvider, Dropdown, Space } from 'antd'
+import { Alert, Button, ConfigProvider, Drawer, Dropdown, Modal, Radio, Space, Tabs } from 'antd'
 import { HomeOutlined, UserOutlined } from '@ant-design/icons'
 import { history } from 'umi'
 import { ProLayout, PageContainer, ProCard, ProTable } from '@ant-design/pro-components'
@@ -12,7 +12,7 @@ import { byteLabel } from '../formatting'
 import { OperationToast } from '../operation-toast'
 import { AdminConnectionNotice, csrfErrorMessage } from '../connection-notice'
 import * as React from 'react'
-import { Activity, Download, Globe2, Gauge, LayoutDashboard, Mail, ScrollText, Settings2, UsersRound, CheckCircle2, ChartNoAxesCombined, CircleAlert, Languages, Moon, Plus, RefreshCw, LogIn, LogOut, KeyRound, Save, ShieldCheck, ShieldBan, Trash2, Sun } from 'lucide-react'
+import { Activity, Download, Globe2, Gauge, LayoutDashboard, Mail, Palette, ScrollText, Settings2, UsersRound, CheckCircle2, ChartNoAxesCombined, CircleAlert, Languages, RefreshCw, LogIn, LogOut, KeyRound, Save, ShieldCheck, ShieldBan } from 'lucide-react'
 import { readStoredPreference } from '../preferences'
 import { CacheOperations } from '../v13-operations'
 import { type Locale, type Theme, type AdminIdentity, type AdminConfig, type AdminStats, type SourceHealthReport, type AuditLogEntry, type AdminNotice, type AdminPasskey } from '../types'
@@ -20,28 +20,74 @@ import { MirrorProxyMark, HttpSecurityBanner, SiteFooter, responseError, request
 import { AdminSourceHealthPanel } from '../pages/admin-health'
 import { AdminGeoTraffic } from '../pages/admin-traffic'
 import { AdminIpAccess } from '../pages/admin-ip'
-import { AdminAcmeStatus } from '../pages/admin-acme'
+import { AdminAcmeStatus, type AdminAcmeEditor } from '../pages/admin-acme'
 import { AdminAuthProviders } from '../pages/admin-providers'
 import { AdminEmailSettings } from '../pages/admin-email'
 import { AdminSessionManagement } from '../pages/admin-sessions'
 import { AdminDohSettings } from '../components/admin-doh-settings'
+import { AdminUpstreams } from '../components/admin-upstreams'
+const ADMIN_LAYOUTS = ['side', 'top', 'mix'] as const
+type AdminLayout = typeof ADMIN_LAYOUTS[number]
+const ADMIN_THEME_KEY = 'mirrorproxy.theme'
+const ADMIN_LAYOUT_KEY = 'mirrorproxy.admin.layout'
+const EXPANDED_APPEARANCE_KEY = 'mirrorproxy.admin.appearance'
+
+function readAdminPreferences(): { theme: Theme; layout: AdminLayout } {
+  const theme = readStoredPreference<Theme>(localStorage, ADMIN_THEME_KEY, 'light', ['light', 'dark'])
+  const layout = readStoredPreference(localStorage, ADMIN_LAYOUT_KEY, 'mix', ADMIN_LAYOUTS)
+  try {
+    const expanded = JSON.parse(localStorage.getItem(EXPANDED_APPEARANCE_KEY) ?? 'null')
+    return {
+      theme: expanded?.theme === 'dark' || expanded?.theme === 'light' ? expanded.theme : theme,
+      layout: ADMIN_LAYOUTS.find(value => value === expanded?.layout) ?? layout,
+    }
+  } catch {
+    return { theme, layout }
+  }
+}
+
+type AdvancedTab = 'network' | 'doh' | 'upstreams' | 'runtime' | 'acme'
+type ConfigScopeName = keyof typeof CONFIG_SCOPES
 
 export function AdminPage() {
   const [locale, setLocale] = React.useState<Locale>(() => readStoredPreference(localStorage, 'mirrorproxy.locale', 'en', ['en', 'zh']))
-  const [theme, setTheme] = React.useState<Theme>(() => readStoredPreference(localStorage, 'mirrorproxy.theme', 'light', ['light', 'dark']))
+  const [{ theme, layout }, setPreferences] = React.useState(readAdminPreferences)
+  const [appearanceOpen, setAppearanceOpen] = React.useState(false)
+  const zh = locale === 'zh'
+  const appearanceLabel = zh ? '外观设置' : 'Appearance'
 
   React.useEffect(() => {
     document.documentElement.dataset.theme = theme
-    localStorage.setItem('mirrorproxy.theme', theme)
-  }, [theme])
+    localStorage.setItem(ADMIN_THEME_KEY, theme)
+    localStorage.setItem(ADMIN_LAYOUT_KEY, layout)
+    localStorage.removeItem(EXPANDED_APPEARANCE_KEY)
+  }, [theme, layout])
   React.useEffect(() => { localStorage.setItem('mirrorproxy.locale', locale); document.documentElement.dataset.locale = locale; document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en' }, [locale])
 
   const tools = [
     <Button key="language" className="admin-header-control" type="text" title={locale === 'zh' ? '语言' : 'Language'} aria-label={locale === 'zh' ? '语言' : 'Language'} icon={<Languages size={16} />} onClick={() => setLocale(locale === 'en' ? 'zh' : 'en')} />,
-    <Button key="theme" className="admin-header-control" type="text" title={locale === 'zh' ? '主题' : 'Theme'} aria-label={locale === 'zh' ? '主题' : 'Theme'} icon={theme === 'light' ? <Moon size={16} /> : <Sun size={16} />} onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} />
+    <Button key="appearance" className="admin-header-control" type="text" title={appearanceLabel} aria-label={appearanceLabel} icon={<Palette size={16} />} onClick={() => setAppearanceOpen(true)} />
   ]
-  return <ConfigProvider theme={{ components: { Checkbox: { controlInteractiveSize: 20 } } }}><AdminConsole locale={locale} theme={theme} tools={tools} /></ConfigProvider>
-
+  return <ConfigProvider theme={{ components: { Checkbox: { controlInteractiveSize: 20 } } }}>
+    <AdminConsole locale={locale} theme={theme} layout={layout} tools={tools} />
+    <Drawer title={appearanceLabel} open={appearanceOpen} onClose={() => setAppearanceOpen(false)}
+      footer={<Button onClick={() => setPreferences({ theme: 'light', layout: 'mix' })}>{zh ? '恢复默认' : 'Restore defaults'}</Button>}>
+      <fieldset className="admin-appearance-options">
+        <legend>{zh ? '页面主题' : 'Page theme'}</legend>
+        <Radio.Group value={theme} onChange={event => setPreferences({ theme: event.target.value, layout })}
+          options={[{ value: 'light', label: zh ? '浅色' : 'Light' }, { value: 'dark', label: zh ? '深色' : 'Dark' }]} />
+      </fieldset>
+      <fieldset className="admin-appearance-options">
+        <legend>{zh ? '菜单布局' : 'Navigation layout'}</legend>
+        <Radio.Group value={layout} onChange={event => setPreferences({ theme, layout: event.target.value })}
+          options={[
+            { value: 'side', label: zh ? '侧栏' : 'Sidebar' },
+            { value: 'top', label: zh ? '顶栏' : 'Top bar' },
+            { value: 'mix', label: zh ? '混合' : 'Mixed' },
+          ]} />
+      </fieldset>
+    </Drawer>
+  </ConfigProvider>
 }
 
 export function adminConfigErrorMessage(reason: string, status: number, locale: Locale, fallback: string) {
@@ -69,178 +115,42 @@ export function adminConfigErrorMessage(reason: string, status: number, locale: 
   return reason || fallback
 }
 
-export const RESERVED_OS_SOURCE_NAMES = new Set([
-  'alpine', 'openwrt', 'termux', 'debian', 'ubuntu', 'fedora', 'archlinux',
-  'opensuse', 'void', 'gentoo', 'freebsd',
-])
-
-export const CUSTOM_SOURCE_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/
-
-export function validHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value)
-    return (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.hostname)
-  } catch {
-    return false
-  }
-}
-
-export function AdditionalOsSourceRow({ locale, publicBaseUrl, name, url, onRename, onUrlChange, onRemove }: {
-  locale: Locale
-  publicBaseUrl: string
-  name: string
-  url: string
-  onRename: (nextName: string) => boolean
-  onUrlChange: (url: string) => void
-  onRemove: () => void
+export function AdminConsole({ locale, theme = 'light', layout = 'mix', tools }: {
+  locale: Locale; theme?: Theme; layout?: AdminLayout; tools?: React.ReactNode
 }) {
-  const [nameDraft, setNameDraft] = React.useState(name)
-  const proxyUrl = `${publicBaseUrl.replace(/\/$/, '')}/os/${name}`
-
-  React.useEffect(() => setNameDraft(name), [name])
-
-  const commitName = () => {
-    const normalized = nameDraft.trim().toLowerCase()
-    if (normalized === name) {
-      setNameDraft(name)
-      return
-    }
-    if (!onRename(normalized)) setNameDraft(name)
-  }
-
-  return <div className="custom-source-row">
-    <label><span>{locale === 'zh' ? '源名称' : 'Source name'}</span><Field aria-label={locale === 'zh' ? `${name} 的源名称` : `Source name for ${name}`} autoCapitalize="none" autoCorrect="off" spellCheck={false} value={nameDraft} onBlur={commitName} onChange={(event) => setNameDraft(event.target.value)} /></label>
-    <label><span>{locale === 'zh' ? '上游 URL' : 'Upstream URL'}</span><Field aria-label={locale === 'zh' ? `${name} 的上游 URL` : `Upstream URL for ${name}`} type="url" value={url} onChange={(event) => onUrlChange(event.target.value)} /></label>
-    <div className="custom-source-path"><span>{locale === 'zh' ? '代理根地址' : 'Proxy base URL'}</span><code>{proxyUrl}</code></div>
-    <Action aria-haspopup="dialog" aria-label={locale === 'zh' ? `删除自定义源 ${name}` : `Delete custom source ${name}`} className="custom-source-delete" type="button" onClick={onRemove}><span className="custom-source-delete-face"><Trash2 size={15} /></span></Action>
-  </div>
-}
-
-export function AdditionalOsEditor({ locale, publicBaseUrl, sources, onChange }: {
-  locale: Locale
-  publicBaseUrl: string
-  sources: Record<string, string>
-  onChange: (sources: Record<string, string>) => void
-}) {
-  const confirmAction = useConfirmDialog()
-  const [newName, setNewName] = React.useState('')
-  const [newUrl, setNewUrl] = React.useState('')
-  const [validationError, setValidationError] = React.useState('')
-  const [removedSource, setRemovedSource] = React.useState<{ name: string; url: string } | null>(null)
-
-  const nameError = (name: string, currentName?: string): string => {
-    if (!CUSTOM_SOURCE_NAME_PATTERN.test(name)) {
-      return locale === 'zh'
-        ? '源名称只能使用小写字母、数字、点、下划线和连字符，并且必须以字母或数字开头。'
-        : 'Source names may use lowercase letters, numbers, dots, underscores, and hyphens, and must start with a letter or number.'
-    }
-    if (RESERVED_OS_SOURCE_NAMES.has(name)) {
-      return locale === 'zh' ? '该名称属于内置 OS 源，请直接修改上方对应的固定上游。' : 'That name belongs to a built-in OS source. Edit its fixed upstream above instead.'
-    }
-    if (name !== currentName && Object.hasOwn(sources, name)) {
-      return locale === 'zh' ? '已存在同名自定义源。' : 'A custom source with that name already exists.'
-    }
-    return ''
-  }
-
-  const addSource = (event: React.FormEvent) => {
-    event.preventDefault()
-    const name = newName.trim().toLowerCase()
-    const url = newUrl.trim()
-    const error = nameError(name) || (!validHttpUrl(url)
-      ? (locale === 'zh' ? '请输入有效的 HTTP 或 HTTPS 上游 URL。' : 'Enter a valid HTTP or HTTPS upstream URL.')
-      : '')
-    if (error) {
-      setValidationError(error)
-      return
-    }
-    onChange({ ...sources, [name]: url })
-    setNewName('')
-    setNewUrl('')
-    setValidationError('')
-  }
-
-  const renameSource = (currentName: string, nextName: string): boolean => {
-    const error = nameError(nextName, currentName)
-    if (error) {
-      setValidationError(error)
-      return false
-    }
-    onChange(Object.fromEntries(Object.entries(sources).map(([name, url]) => name === currentName ? [nextName, url] : [name, url])))
-    setValidationError('')
-    return true
-  }
-
-  const removeSource = async (name: string) => {
-    if (!await confirmAction({
-      locale,
-      title: locale === 'zh' ? '删除自定义软件仓库' : 'Delete custom repository',
-      message: locale === 'zh' ? `确定删除“${name}”吗？保存配置后，该仓库的代理地址将不再可用。` : `Delete “${name}”? After saving the configuration, its proxy address will no longer be available.`,
-      confirmLabel: locale === 'zh' ? '删除仓库' : 'Delete repository',
-      tone: 'danger',
-    })) return
-    setRemovedSource({ name, url: sources[name] })
-    onChange(Object.fromEntries(Object.entries(sources).filter(([current]) => current !== name)))
-    setValidationError('')
-  }
-
-  const restoreSource = () => {
-    if (!removedSource) return
-    onChange({ ...sources, [removedSource.name]: removedSource.url })
-    setRemovedSource(null)
-  }
-
-  return <section className="custom-source-editor" aria-labelledby="custom-source-title">
-    <div className="custom-source-heading"><div><span className="console-kicker">ADDITIONAL_OS</span><h5 id="custom-source-title">{locale === 'zh' ? '自定义软件仓库' : 'Custom software repositories'}</h5></div><small>{locale === 'zh' ? `${Object.keys(sources).length} 个仓库` : `${Object.keys(sources).length} repositories`}</small></div>
-    <p className="custom-source-help">{locale === 'zh' ? '用于添加 ClickHouse、Docker CE 等 APT 仓库，或公开二进制文件仓库。填写上游仓库根地址；保存后，请用下方代理根地址替换原仓库地址。' : 'Add APT repositories such as ClickHouse and Docker CE, or public binary file repositories. Enter the upstream repository root, then replace the original repository URL with the proxy base URL below.'}</p>
-    <div className="custom-source-list">
-      {Object.entries(sources).map(([name, url]) => <AdditionalOsSourceRow key={name} locale={locale} publicBaseUrl={publicBaseUrl} name={name} url={url} onRename={(nextName) => renameSource(name, nextName)} onUrlChange={(nextUrl) => onChange({ ...sources, [name]: nextUrl })} onRemove={() => removeSource(name)} />)}
-      {Object.keys(sources).length === 0 ? <p className="custom-source-empty">{locale === 'zh' ? '尚未添加自定义软件仓库。' : 'No custom software repositories have been added.'}</p> : null}
-    </div>
-    <OperationToast locale={locale} notice={removedSource ? { tone: 'success', message: locale === 'zh' ? `已移除“${removedSource.name}”` : `Removed “${removedSource.name}”`, action: { label: locale === 'zh' ? '撤销' : 'Undo', run: restoreSource } } : null} />
-    <SettingsForm className="custom-source-add" onSubmit={addSource}>
-      <label><span>{locale === 'zh' ? '新源名称' : 'New source name'}</span><Field aria-label={locale === 'zh' ? '新源名称' : 'New source name'} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="clickhouse" value={newName} onChange={(event) => setNewName(event.target.value)} /></label>
-      <label><span>{locale === 'zh' ? '上游 URL' : 'Upstream URL'}</span><Field aria-label={locale === 'zh' ? '新源上游 URL' : 'New source upstream URL'} placeholder="https://packages.example.com" type="url" value={newUrl} onChange={(event) => setNewUrl(event.target.value)} /></label>
-      <Action className="secondary-button" type="submit"><Plus size={15} />{locale === 'zh' ? '添加源' : 'Add source'}</Action>
-    </SettingsForm>
-    <OperationToast locale={locale} notice={validationError ? { tone: 'error', message: validationError } : null} />
-  </section>
-}
-
-export function AdminConsole({ locale, theme = 'light', tools }: { locale: Locale; theme?: Theme; tools?: React.ReactNode }) {
   const confirmAction = useConfirmDialog()
   const text: Record<string, string> = locale === 'zh'
     ? {
         title: '运行控制台', login: '管理员登录', username: '管理员账号', password: '管理员密码', signIn: '登录', signOut: '退出登录',
         overview: '本月概览', sent: '已发送', billed: '计费流量', remaining: '配额剩余', requests: '请求', errors: '错误',
-        configuration: '运行时配置', publicUrl: '公开地址', trustedProxies: '可信反向代理', trustedProxiesHint: '逗号分隔的 IP 或 CIDR；仅信任你控制的反代实际连接 IP。Docker 中可能是网桥网关，只有可信来源的 X-Forwarded-* 头会被使用。', quota: '启用总流量限制', quotaGb: '总流量（GB）', retentionDays: '明细保留天数', timezone: '时区', cache: '启用小对象磁盘缓存', cacheDirectory: '缓存目录', cacheMaxEntry: '单项上限（MB）', cacheMaxTotal: '总容量（MB）', cacheDefaultTtl: '默认有效期（秒）', cacheMaxTtl: '最长有效期（秒）',
+        publicUrl: '公开地址', trustedProxies: '可信反向代理', trustedProxiesHint: '逗号分隔的 IP 或 CIDR；仅信任你控制的反代实际连接 IP。Docker 中可能是网桥网关，只有可信来源的 X-Forwarded-* 头会被使用。', quota: '启用总流量限制', quotaGb: '总流量（GB）', retentionDays: '明细保留天数', timezone: '时区', cache: '启用小对象磁盘缓存', cacheDirectory: '缓存目录', cacheMaxEntry: '单项上限（MB）', cacheMaxTotal: '总容量（MB）', cacheDefaultTtl: '默认有效期（秒）', cacheMaxTtl: '最长有效期（秒）',
         action: '超限动作', forwardAuth: '转发客户端认证头', rate: '启用请求限流', rpm: '每分钟请求数', adapters: '启用代理', upstreams: '上游地址', baseDomain: '用户子域名主域', accessMode: '包代理访问模式', infrastructureReady: '我已完成通配符 DNS、TLS 和原始 Host 转发配置', routingLength: '子域名最短长度', rotationCooldown: '子域名更换冷却（小时）', registrationMode: '注册模式', allowedDomains: '企业邮箱域名', emailTtl: '邮件登录有效期（分钟）',
         save: '保存配置', saving: '保存中…', refresh: '刷新统计', top: 'Top targets', daily: '当月日明细',
         badLogin: '登录失败，请检查管理员密码。', saveError: '配置保存失败。', saveErrorTitle: '保存失败', saveSuccessTitle: '配置已保存', saveSuccess: '新配置已生效。', closeNotice: '关闭提示', restart: '以下字段将在重启后生效：',
         quotaStopped: '代理已因月流量上限停止', noData: '本月尚无代理流量。', passwordHint: '初始密码见本机启动日志；修改密码后会退出所有管理员会话。',
         security: '修改密码', currentPassword: '当前密码', newPassword: '新密码（至少 12 位）', changePassword: '修改密码', passwordChanged: '密码已修改，请使用新密码重新登录。', passwordError: '密码修改失败，请确认当前密码。', passwordConfirm: '修改密码将使所有管理员会话失效，确定继续吗？', changeUsername: '修改当前账号', newUsername: '新管理员账号', usernameHint: '修改账号后会退出所有会话，并移除当前账号已登记的 Passkey。', usernameChanged: '管理员账号已修改，请使用新账号重新登录。', usernameError: '账号修改失败，请检查当前密码或新账号是否已存在。', usernameConfirm: '修改管理员账号将退出所有会话并移除已登记的 Passkey，确定继续吗？',
         administrators: '管理员账号', createAdministrator: '创建管理员', role: '角色', disable: '禁用', enable: '启用', adminCreateError: '管理员创建失败。',
-        passkeys: 'Passkey', usePasskey: '使用 Passkey 登录', addPasskey: '登记 Passkey', passkeyName: 'Passkey 名称', deletePasskey: '删除', passkeyError: 'Passkey 操作失败。', passkeyLoginHint: '可直接使用 Passkey 选择账号；旧安全密钥可填写用户名后登录。', webauthnEnabled: '启用管理员 Passkey', webauthnRpId: 'RP ID（主域名）', webauthnOrigin: 'RP Origin（HTTPS）', webauthnName: 'RP 名称', requirePasskey: '除应急账号外强制使用 Passkey', breakGlass: '应急管理员账号',
+        passkeys: 'Passkey', usePasskey: '使用 Passkey 登录', addPasskey: '登记 Passkey', passkeyName: 'Passkey 名称', deletePasskey: '删除', passkeyError: 'Passkey 操作失败。', webauthnEnabled: '启用管理员 Passkey', webauthnRpId: 'RP ID（主域名）', webauthnOrigin: 'RP Origin（HTTPS）', webauthnName: 'RP 名称', requirePasskey: '除应急账号外强制使用 Passkey', breakGlass: '应急管理员账号',
         generator: 'CLI 改源命令', target: '目标', mirror: '镜像站', scope: '作用域', distribution: '发行版代号', ready: '可直接执行', guidance: '当前仅生成配置指引', copyCommand: '复制命令', copiedCommand: '已复制',
         tabOverview: '概览', tabHealth: '镜像检测', tabGeo: '地域报表', tabIpAccess: 'IP 访问控制', tabAccess: '访问与配额', tabUsers: '用户与分组', tabProviders: '第三方登录', tabEmail: '邮件与邀请', tabSecurity: '管理员与安全', tabAdvanced: '高级设置', tabAudit: '审计日志',
         overviewHint: '查看当前月份的代理流量和请求状态。', healthHint: '检测全部公网代理路径，快速定位不可用的镜像源。', geoHint: '按国家、省市和代理目标分析实际与计费流量。', ipAccessHint: '查询 IP 地域并管理精确地址和 CIDR 黑白名单。', accessHint: '设置谁可以使用服务、子域名规则和流量上限。', usersHint: '管理用户、计费组、个人配额和使用状态。', providersHint: '配置 GitHub、Google 或企业 OIDC 等登录方式。', emailHint: '配置发件服务器，并邀请用户加入。', securityHint: '管理后台账号、Passkey、登录会话和密码。', advancedHint: '低频服务参数。如果不确定，请保持默认值。', auditHint: '查看最近的管理和安全操作。',
-        serviceAccess: '服务准入', trafficQuota: '流量配额', subdomainRouting: '用户子域名', advancedWarning: '这些选项直接影响代理请求和上游连接，错误配置可能导致服务不可用。', showUpstreams: '编辑上游地址', upstreamHint: '上游字段可填多个 HTTP(S) 地址，用英文逗号分隔；服务会按顺序请求，直到返回 200。', auditLog: '审计日志', noAudit: '暂无审记录。', defaultUserQuota: '默认单用户上限（GB）', bidirectionalAccounting: '双向计费', unlimited: '不限量', requestLabel: '次请求', errorLabel: '个错误', runtimeState: '当前运行地址',
+        serviceAccess: '服务准入', trafficQuota: '流量配额', subdomainRouting: '用户子域名', advancedWarning: '这些选项直接影响代理请求和上游连接，错误配置可能导致服务不可用。', auditLog: '审计日志', noAudit: '暂无审记录。', defaultUserQuota: '默认单用户上限（GB）', bidirectionalAccounting: '双向计费', unlimited: '不限量', requestLabel: '次请求', errorLabel: '个错误', runtimeState: '当前运行地址',
       }
     : {
         title: 'Operations console', login: 'Administrator sign in', username: 'Administrator username', password: 'Administrator password', signIn: 'Sign in', signOut: 'Sign out',
         overview: 'Month at a glance', sent: 'Sent', billed: 'Billed traffic', remaining: 'Quota remaining', requests: 'Requests', errors: 'Errors',
-        configuration: 'Runtime configuration', publicUrl: 'Public URL', trustedProxies: 'Trusted reverse proxies', trustedProxiesHint: 'Comma-separated IPs or CIDRs. Use the actual connection IP of a proxy you control (possibly a Docker bridge gateway). Only trusted peers may supply X-Forwarded-* headers.', quota: 'Enable total traffic limit', quotaGb: 'Total traffic (GB)', retentionDays: 'Event retention (days)', timezone: 'Timezone', cache: 'Enable small-response disk cache', cacheDirectory: 'Cache directory', cacheMaxEntry: 'Per-entry limit (MB)', cacheMaxTotal: 'Total capacity (MB)', cacheDefaultTtl: 'Default freshness (seconds)', cacheMaxTtl: 'Maximum freshness (seconds)',
+        publicUrl: 'Public URL', trustedProxies: 'Trusted reverse proxies', trustedProxiesHint: 'Comma-separated IPs or CIDRs. Use the actual connection IP of a proxy you control (possibly a Docker bridge gateway). Only trusted peers may supply X-Forwarded-* headers.', quota: 'Enable total traffic limit', quotaGb: 'Total traffic (GB)', retentionDays: 'Event retention (days)', timezone: 'Timezone', cache: 'Enable small-response disk cache', cacheDirectory: 'Cache directory', cacheMaxEntry: 'Per-entry limit (MB)', cacheMaxTotal: 'Total capacity (MB)', cacheDefaultTtl: 'Default freshness (seconds)', cacheMaxTtl: 'Maximum freshness (seconds)',
         action: 'Exceeded action', forwardAuth: 'Forward client authorization', rate: 'Enable request rate limit', rpm: 'Requests / minute', adapters: 'Enabled adapters', upstreams: 'Upstream endpoints', baseDomain: 'User subdomain base', accessMode: 'Package proxy access mode', infrastructureReady: 'I have configured wildcard DNS, TLS, and original Host forwarding', routingLength: 'Minimum routing ID length', rotationCooldown: 'Rotation cooldown (hours)', registrationMode: 'Registration mode', allowedDomains: 'Allowed email domains', emailTtl: 'Email login lifetime (minutes)',
         save: 'Save configuration', saving: 'Saving…', refresh: 'Refresh stats', top: 'Top targets', daily: 'Daily detail',
         badLogin: 'Sign in failed. Check the administrator password.', saveError: 'Configuration save failed.', saveErrorTitle: 'Save failed', saveSuccessTitle: 'Configuration saved', saveSuccess: 'The new configuration is active.', closeNotice: 'Dismiss notification', restart: 'These fields apply after restart:',
         quotaStopped: 'Proxy is stopped by the monthly traffic limit', noData: 'No proxied traffic this month yet.', passwordHint: 'The initial password is in the local startup log; changing it signs out every administrator session.',
         security: 'Change password', currentPassword: 'Current password', newPassword: 'New password (12 characters minimum)', changePassword: 'Change password', passwordChanged: 'Password changed. Sign in again with the new password.', passwordError: 'Password update failed. Check the current password.', passwordConfirm: 'This revokes every administrator session. Continue?', changeUsername: 'Change current username', newUsername: 'New administrator username', usernameHint: 'Changing the username signs out every session and removes passkeys registered to this account.', usernameChanged: 'Administrator username changed. Sign in again with the new username.', usernameError: 'Username update failed. Check the current password or whether the username already exists.', usernameConfirm: 'Changing the administrator username signs out every session and removes registered passkeys. Continue?',
         administrators: 'Administrators', createAdministrator: 'Create administrator', role: 'Role', disable: 'Disable', enable: 'Enable', adminCreateError: 'Administrator creation failed.',
-        passkeys: 'Passkeys', usePasskey: 'Sign in with a passkey', addPasskey: 'Register passkey', passkeyName: 'Passkey name', deletePasskey: 'Delete', passkeyError: 'Passkey operation failed.', passkeyLoginHint: 'Use a passkey to choose your account, or enter a username for an older security key.', webauthnEnabled: 'Enable administrator passkeys', webauthnRpId: 'RP ID (primary domain)', webauthnOrigin: 'RP origin (HTTPS)', webauthnName: 'RP name', requirePasskey: 'Require passkeys except break-glass account', breakGlass: 'Break-glass administrator',
+        passkeys: 'Passkeys', usePasskey: 'Sign in with a passkey', addPasskey: 'Register passkey', passkeyName: 'Passkey name', deletePasskey: 'Delete', passkeyError: 'Passkey operation failed.', webauthnEnabled: 'Enable administrator passkeys', webauthnRpId: 'RP ID (primary domain)', webauthnOrigin: 'RP origin (HTTPS)', webauthnName: 'RP name', requirePasskey: 'Require passkeys except break-glass account', breakGlass: 'Break-glass administrator',
         generator: 'CLI source command', target: 'Target', mirror: 'Mirror', scope: 'Scope', distribution: 'Distribution codename', ready: 'Ready to run', guidance: 'Currently generated as configuration guidance', copyCommand: 'Copy command', copiedCommand: 'Copied', auditLog: 'Audit log', noAudit: 'No audit entries yet.',
         tabOverview: 'Overview', tabHealth: 'Mirror health', tabGeo: 'Regional traffic', tabIpAccess: 'IP access control', tabAccess: 'Access & quotas', tabUsers: 'Users & groups', tabProviders: 'Identity providers', tabEmail: 'Email & invitations', tabSecurity: 'Administrators & security', tabAdvanced: 'Advanced', tabAudit: 'Audit log',
         overviewHint: 'Review proxy traffic and request health for the current month.', healthHint: 'Probe every public proxy path and identify unavailable mirrors.', geoHint: 'Analyze delivered and billed traffic by country, region, city, and proxy target.', ipAccessHint: 'Look up IP locations and manage exact-address and CIDR allow/deny rules.', accessHint: 'Control who can use the service, user subdomains, and traffic limits.', usersHint: 'Manage users, billing groups, individual quotas, and account status.', providersHint: 'Configure GitHub, Google, or an enterprise OpenID Connect provider.', emailHint: 'Configure outbound email and invite people to the service.', securityHint: 'Manage administrator accounts, passkeys, sessions, and passwords.', advancedHint: 'Low-frequency service settings. Keep the defaults unless you know they need to change.', auditHint: 'Review recent administrative and security operations.',
-        serviceAccess: 'Service access', trafficQuota: 'Traffic quota', subdomainRouting: 'User subdomains', advancedWarning: 'These settings directly affect proxy requests and upstream connectivity. Incorrect values can make the service unavailable.', showUpstreams: 'Edit upstream endpoints', upstreamHint: 'Upstream fields accept comma-separated HTTP(S) endpoints. Requests try them in order until one returns 200.', defaultUserQuota: 'Default per-user limit (GB)', bidirectionalAccounting: 'Bidirectional billing', unlimited: 'Unlimited', requestLabel: 'requests', errorLabel: 'errors', runtimeState: 'Listening on',
+        serviceAccess: 'Service access', trafficQuota: 'Traffic quota', subdomainRouting: 'User subdomains', advancedWarning: 'These settings directly affect proxy requests and upstream connectivity. Incorrect values can make the service unavailable.', defaultUserQuota: 'Default per-user limit (GB)', bidirectionalAccounting: 'Bidirectional billing', unlimited: 'Unlimited', requestLabel: 'requests', errorLabel: 'errors', runtimeState: 'Listening on',
       }
   const [token, setToken] = React.useState<string | null>(null)
   const [showInitialPasswordHint, setShowInitialPasswordHint] = React.useState(() => localStorage.getItem('mirrorproxy.admin.signed-in') !== '1')
@@ -252,13 +162,14 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
   const revision = React.useRef<string | null>(null)
   const [configConflict, setConfigConflict] = React.useState(false)
   const changedSections = changedConfigSections(savedDraft, draft)
-  const dirty = changedSections.length > 0
+  const [acmeDirty, setAcmeDirty] = React.useState(false)
+  const dirty = changedSections.length > 0 || acmeDirty
   React.useEffect(() => {
-    if (!dirty) return
+    if (!token || !dirty) return
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [dirty])
+  }, [token, dirty])
 
   const [stats, setStats] = React.useState<AdminStats | null>(null)
   const [sourceHealth, setSourceHealth] = React.useState<SourceHealthReport | null>(null)
@@ -281,9 +192,18 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
   const [passkeyName, setPasskeyName] = React.useState('')
   const [passkeyBusy, setPasskeyBusy] = React.useState(false)
   const [activeTab, selectTab] = React.useState<AdminTab>(() => adminTabFromPath(window.location.pathname))
+  const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>('network')
+  const [visitedAdvanced, setVisitedAdvanced] = React.useState(activeTab === 'advanced')
+  const [pendingNavigation, setPendingNavigation] = React.useState<(() => void) | null>(null)
+  const [savingAndSwitching, setSavingAndSwitching] = React.useState(false)
+  const acmeEditor = React.useRef<AdminAcmeEditor>(null)
+  const activeScope: ConfigScopeName | null = activeTab === 'access' || activeTab === 'security' ? activeTab
+    : activeTab === 'advanced' && advancedTab !== 'acme' ? advancedTab : null
+  const scopeDirty = (scope: ConfigScopeName) => Boolean(savedDraft && draft &&
+    changedConfigSections(savedDraft, copyConfigScope(savedDraft, draft, CONFIG_SCOPES[scope])).length)
   const setActiveTab = (tab: AdminTab) => { selectTab(tab); history.push(`/admin/${tab}`) }
   React.useEffect(() => history.listen(() => selectTab(adminTabFromPath(window.location.pathname))), [])
-
+  React.useEffect(() => { if (activeTab === 'advanced') setVisitedAdvanced(true) }, [activeTab])
 
   const badLoginText = React.useRef(text.badLogin)
   badLoginText.current = text.badLogin
@@ -296,14 +216,9 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
     if (configResponse.status === 401 || statsResponse.status === 401) throw new Error('unauthorized')
     if (!configResponse.ok || !statsResponse.ok) throw new Error('load failed')
     const [config, nextStats] = await Promise.all([configResponse.json() as Promise<AdminConfig>, statsResponse.json() as Promise<AdminStats>])
-    const webauthn = config.webauthn ?? { enabled: false, rp_id: '', rp_origin: '', rp_name: 'MirrorProxy', require_passkey: false, break_glass_username: 'admin' }
-    if (window.location.protocol === 'https:') {
-      if (!webauthn.rp_id) webauthn.rp_id = window.location.hostname
-      if (!webauthn.rp_origin) webauthn.rp_origin = window.location.origin
-    }
     const nextDraft: AdminConfig = {
       ...config,
-      public_base_url: config.public_base_url || window.location.origin,
+      public_base_url: config.public_base_url ?? '',
       trusted_proxies: config.trusted_proxies ?? [],
       site: config.site ?? { title: 'MirrorProxy', description: '', keywords: [], icon_url: '/favicon.svg' },
       outbound_proxy: config.outbound_proxy ?? { enabled: false, url: '', no_proxy: ['127.0.0.1', 'localhost'], username: null, password: null, has_password: false },
@@ -315,7 +230,7 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
       alerts: config.alerts ?? { enabled: false, webhook_url: '', has_webhook_url: false, email_enabled: false, email_recipients: [], quota_percent: 80, source_failures: 3, cooldown_secs: 3600 },
       user_access: config.user_access ?? { base_domain: '', mode: 'public', infrastructure_ready: false, routing_id_min_length: 12, routing_rotation_cooldown_hours: 24 },
       registration: config.registration ?? { mode: 'invite_only', allowed_email_domains: [], email_token_ttl_minutes: 10 },
-      webauthn,
+      webauthn: config.webauthn ?? { enabled: false, rp_id: '', rp_origin: '', rp_name: 'MirrorProxy', require_passkey: false, break_glass_username: 'admin' },
     }
     revision.current = configResponse.headers?.get('etag') ?? null
     setDraft(nextDraft)
@@ -331,7 +246,7 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
     setStats(await response.json() as AdminStats)
   }
   const reloadConfig = async () => {
-    if (dirty && !await confirmAction({ locale, title: locale === 'zh' ? '重新加载配置' : 'Reload configuration', message: locale === 'zh' ? '将丢弃未保存的修改并加载最新配置。' : 'Discard unsaved changes and load the latest configuration?' })) return
+    if (changedSections.length && !await confirmAction({ locale, title: locale === 'zh' ? '重新加载配置' : 'Reload configuration', message: locale === 'zh' ? '将丢弃未保存的修改并加载最新配置。' : 'Discard unsaved changes and load the latest configuration?' })) return
     await load(token ?? '').catch(() => setError(text.saveError))
   }
 
@@ -452,13 +367,14 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
     }
   }
 
-  const save = async (): Promise<boolean> => {
-    if (!token || !draft) return false
-    const submitted = draft
+  const save = async (scope: ConfigScopeName): Promise<boolean> => {
+    if (!token || !draft || !savedDraft || saving || configConflict) return false
+    const submitted = copyConfigScope(savedDraft, draft, CONFIG_SCOPES[scope])
+    const { upstream_client_endpoints: _clientEndpoints, ...requestConfig } = submitted
     setSaving(true); setError(null); setNotice(null)
     try {
       const response = await request('/admin/api/config', {
-        method: 'PUT', headers: { 'content-type': 'application/json', ...(revision.current ? { 'If-Match': revision.current } : {}) }, body: JSON.stringify(submitted),
+        method: 'PUT', headers: { 'content-type': 'application/json', ...(revision.current ? { 'If-Match': revision.current } : {}) }, body: JSON.stringify(requestConfig),
       })
       if (!response.ok) {
         if (response.status === 412) { setConfigConflict(true); return false }
@@ -483,6 +399,33 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
       return false
     } finally {
       setSaving(false)
+    }
+  }
+
+  const leaveAdvancedTab = (navigate: () => void) => {
+    if (activeTab === 'advanced') {
+      if (saving || acmeEditor.current?.saving) return
+      if (activeScope ? scopeDirty(activeScope) : acmeDirty) {
+        setPendingNavigation(() => navigate)
+        return
+      }
+    }
+    navigate()
+  }
+
+  const finishNavigation = () => {
+    setPendingNavigation(null)
+    pendingNavigation?.()
+  }
+
+  const saveAndNavigate = async () => {
+    setSavingAndSwitching(true)
+    try {
+      const saved = activeScope ? await save(activeScope) : await acmeEditor.current?.save()
+      if (saved) finishNavigation()
+      else setPendingNavigation(null)
+    } finally {
+      setSavingAndSwitching(false)
     }
   }
 
@@ -519,7 +462,7 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
   const registerPasskey = async (event: React.FormEvent) => {
     event.preventDefault(); setPasskeyBusy(true); setError(null)
     try {
-      const saved = await save()
+      const saved = await save('security')
       if (!saved) return
       const start = await request('/admin/api/auth/passkeys/register/start', { method: 'POST' })
       if (!start.ok) throw new Error(await responseError(start) || 'passkey start failed')
@@ -599,13 +542,28 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
     { id: 'advanced', label: text.tabAdvanced, hint: text.advancedHint },
     { id: 'audit', label: text.tabAudit, hint: text.auditHint },
   ] as Array<{ id: typeof activeTab; label: string; hint: string }>
+  const navigate = (next: AdminTab) => {
+    if (next !== activeTab) leaveAdvancedTab(() => setActiveTab(next))
+  }
+  const accountButton = (avatar: React.ReactNode) => <Dropdown menu={{
+    items: [{ key: 'change-password', label: text.changePassword, icon: <KeyRound size={14} /> },
+      { type: 'divider' }, { key: 'sign-out', label: text.signOut, icon: <LogOut size={14} /> }],
+    onClick: ({ key }) => { if (key === 'change-password') navigate('security'); else if (key === 'sign-out') void signOut() },
+  }} trigger={['click']}><Button className="admin-header-account" type="text" aria-label={locale === 'zh' ? '账户菜单' : 'Account menu'}>{avatar}</Button></Dropdown>
+  const headerActions = [
+    <Button className="admin-header-control" key="home" type="text" href="/" target="_blank" rel="noopener noreferrer"
+      aria-label={locale === 'zh' ? '镜像首页' : 'Mirror home'} title={locale === 'zh' ? '镜像首页' : 'Mirror home'} icon={<HomeOutlined />} />,
+    ...React.Children.toArray(tools),
+  ]
   const activeTabCopy = tabs.find((tab) => tab.id === activeTab) ?? tabs[0]
-  const showConfigActions = activeTab === 'access' || activeTab === 'advanced' || activeTab === 'security'
+  const publicBaseUrl = draft?.public_base_url || window.location.origin
+  const advancedLabel = (tab: AdvancedTab, label: string) => (tab === 'acme' ? acmeDirty : scopeDirty(tab))
+    ? <span>{label} <span className="advanced-tab-unsaved" aria-label={locale === 'zh' ? '未保存' : 'Unsaved changes'}>●</span></span> : label
   const configStatus = <>
     {restartRequired.length ? <p className="restart-note">{text.restart} {restartRequired.join(', ')}</p> : null}
-    {dirty ? <Alert className="config-change-summary" type="info" showIcon title={locale === 'zh' ? `有 ${changedSections.length} 组未保存修改` : `${changedSections.length} unsaved setting groups`} description={<>
+    {changedSections.length ? <Alert className="config-change-summary" type="info" showIcon title={locale === 'zh' ? `有 ${changedSections.length} 组未保存修改` : `${changedSections.length} unsaved setting groups`} description={<>
       <span>{locale === 'zh' ? '保存后立即生效；GeoIP 变更需重启。修改分组：' : 'Applies after saving; GeoIP changes require restart. Changed groups: '}{changedSections.map(key => configSectionLabel(key, locale === 'zh')).join('、')}</span>
-      {!showConfigActions ? <Button onClick={() => { void reloadConfig() }}>{locale === 'zh' ? '放弃修改' : 'Discard changes'}</Button> : null}
+      {!activeScope ? <Button onClick={() => { void reloadConfig() }}>{locale === 'zh' ? '放弃修改' : 'Discard changes'}</Button> : null}
     </>} /> : null}
     {configConflict ? <Alert type="warning" showIcon title={locale === 'zh' ? '配置已被其他页面修改' : 'Configuration changed elsewhere'} description={locale === 'zh' ? '当前草稿已保留。请记录需要的修改，重新加载最新配置后再保存。' : 'Your draft is preserved. Keep the changes you need, reload the latest configuration, then save again.'} action={<Button onClick={() => { void reloadConfig() }}>{locale === 'zh' ? '重新加载' : 'Reload configuration'}</Button>} /> : null}
   </>
@@ -616,20 +574,37 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
       <OperationToast locale={locale} notice={error ? { tone: error === text.passwordChanged || error === text.usernameChanged ? 'success' : 'error', message: error } : null} onClose={() => setError(null)} />
       {!token ? <header className="admin-login-header"><a className="brand-mark" href="/"><MirrorProxyMark size={24} /> MirrorProxy</a><Space>{tools}</Space></header> : null}
       {!token ? <div className="admin-login-notice"><HttpSecurityBanner locale={locale} /></div> : null}
-      {!token ? <SettingsForm className="login-card admin-login-card" onSubmit={signIn}><div className="admin-login-intro"><span className="admin-login-emblem" aria-hidden="true"><ShieldCheck size={25} /></span><h3>{text.login}</h3>{showInitialPasswordHint ? <p>{text.passwordHint}</p> : null}</div><label className="admin-username-field">{text.username}<Field autoFocus required autoComplete="username webauthn" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="admin-password-field">{text.password}<Field required={!passkeyEnabled} autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label><div className="login-actions admin-login-actions"><Action className="primary-button password-login-button" type="submit"><LogIn size={17} /> {text.signIn}</Action>{passkeyEnabled ? <Action className="secondary-button passkey-login-button" disabled={passkeyBusy} type="button" onClick={signInWithPasskey}><KeyRound size={17} /> {text.usePasskey}</Action> : null}</div>{passkeyEnabled ? <p className="field-hint">{text.passkeyLoginHint}</p> : null}</SettingsForm> : null}
+      {!token ? <SettingsForm className="login-card admin-login-card" onSubmit={signIn}><div className="admin-login-intro"><span className="admin-login-emblem" aria-hidden="true"><ShieldCheck size={25} /></span><h3>{text.login}</h3>{showInitialPasswordHint ? <p>{text.passwordHint}</p> : null}</div><label className="admin-username-field">{text.username}<Field autoFocus required autoComplete="username webauthn" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="admin-password-field">{text.password}<Field required={!passkeyEnabled} autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label><div className="login-actions admin-login-actions"><Action className="primary-button password-login-button" type="submit"><LogIn size={17} /> {text.signIn}</Action>{passkeyEnabled ? <Action className="secondary-button passkey-login-button" disabled={passkeyBusy} type="button" onClick={signInWithPasskey}><KeyRound size={17} /> {text.usePasskey}</Action> : null}</div></SettingsForm> : null}
       {!token ? <SiteFooter /> : null}
       {token && draft && stats ? <ProLayout className="console-workspace" title="MirrorProxy" logo="/icon-192.png"
-        layout="mix" contentWidth="Fluid" fixedHeader={false} fixSiderbar navTheme={theme === 'dark' ? 'realDark' : 'light'}
+        layout={layout} contentWidth="Fluid" fixedHeader={false} fixSiderbar navTheme={theme === 'dark' ? 'realDark' : 'light'}
         siderWidth={240} breakpoint="lg" splitMenus={false} location={{ pathname: `/admin/${activeTab}` }}
         menu={{ locale: false }} route={{ routes: tabs.map(tab => ({ path: `/admin/${tab.id}`, name: tab.label, icon: ADMIN_ICONS[tab.id] })) }}
-        menuItemRender={(item, dom) => <a href={item.path} aria-label={item.name} aria-current={item.path === `/admin/${activeTab}` ? 'page' : undefined} onClick={event => { if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey) { event.preventDefault(); setActiveTab(adminTabFromPath(item.path ?? '')) } }}>{dom}</a>}
-        actionsRender={() => [<Button className="admin-header-control" key="home" type="text" href="/" target="_blank" rel="noopener noreferrer" aria-label={locale === 'zh' ? '镜像首页' : 'Mirror home'} title={locale === 'zh' ? '镜像首页' : 'Mirror home'} icon={<HomeOutlined />} />, ...React.Children.toArray(tools)]}
-        avatarProps={{ icon: <UserOutlined />, title: <span className="pro-header-username">{identity?.username ?? 'admin'}</span>, size: 'small', render: (_, avatar) => <Dropdown menu={{ items: [{ key: 'change-password', label: text.changePassword, icon: <KeyRound size={14} /> }, { type: 'divider' }, { key: 'sign-out', label: text.signOut, icon: <LogOut size={14} /> }], onClick: ({ key }) => { if (key === 'change-password') setActiveTab('security'); else if (key === 'sign-out') void signOut() } }} trigger={['click']}><Button className="admin-header-account" type="text" aria-label={locale === 'zh' ? '账户菜单' : 'Account menu'}>{avatar}</Button></Dropdown> }}
+        menuItemRender={(item, dom) => {
+          return <a href={item.path} aria-label={item.name} aria-current={item.path === `/admin/${activeTab}` ? 'page' : undefined}
+            onClick={event => {
+              if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+                event.preventDefault()
+                navigate(adminTabFromPath(item.path ?? ''))
+              }
+            }}>{dom}</a>
+        }}
+        actionsRender={() => headerActions}
+        avatarProps={{ icon: <UserOutlined />, title: <span className="pro-header-username">{identity?.username ?? 'admin'}</span>,
+          size: 'small', render: (_, avatar) => accountButton(avatar) }}
         footerRender={() => <SiteFooter footerText={draft.site.footer_text} />}>
-        <PageContainer title={activeTab === 'security' ? <span className="admin-heading-help">{activeTabCopy.label}<AdminHelp label={locale === 'zh' ? '管理员与安全说明' : 'Administrators & security help'}>{activeTabCopy.hint}</AdminHelp></span> : activeTabCopy.label} content={activeTab === 'security' ? undefined : activeTabCopy.hint} breadcrumb={{ items: [{ title: locale === 'zh' ? '管理后台' : 'Administration' }, { title: activeTabCopy.label }] }} extra={!showConfigActions ? <div className="console-actions">{activeTab === 'overview' || activeTab === 'audit' ? <Action onClick={() => (activeTab === 'audit' ? loadAudit(auditPage) : refreshStats()).catch(() => setError(text.saveError))}>{text.refresh}</Action> : null}{activeTab === 'health' ? <Action onClick={() => loadSourceHealth().catch(() => setError(text.saveError))}>{locale === 'zh' ? '刷新状态' : 'Refresh status'}</Action> : null}{activeTab === 'health' ? <Action className="primary-button" disabled={sourceHealthBusy || sourceHealth?.running} onClick={runSourceHealth}><RefreshCw className={sourceHealthBusy || sourceHealth?.running ? 'spin' : ''} size={16} /> {locale === 'zh' ? (sourceHealthBusy || sourceHealth?.running ? '检测中…' : '立即检测') : (sourceHealthBusy || sourceHealth?.running ? 'Checking…' : 'Run check')}</Action> : null}</div> : undefined}>
+        <PageContainer title={activeTab === 'security' ? <span className="admin-heading-help">{activeTabCopy.label}<AdminHelp label={locale === 'zh' ? '管理员与安全说明' : 'Administrators & security help'}>{activeTabCopy.hint}</AdminHelp></span> : activeTabCopy.label} content={activeTab === 'security' ? undefined : activeTabCopy.hint} breadcrumb={{ items: [{ title: locale === 'zh' ? '管理后台' : 'Administration' }, { title: activeTabCopy.label }] }} extra={!activeScope ? <div className="console-actions">{activeTab === 'overview' || activeTab === 'audit' ? <Action onClick={() => (activeTab === 'audit' ? loadAudit(auditPage) : refreshStats()).catch(() => setError(text.saveError))}>{text.refresh}</Action> : null}{activeTab === 'health' ? <Action onClick={() => loadSourceHealth().catch(() => setError(text.saveError))}>{locale === 'zh' ? '刷新状态' : 'Refresh status'}</Action> : null}{activeTab === 'health' ? <Action className="primary-button" disabled={sourceHealthBusy || sourceHealth?.running} onClick={runSourceHealth}><RefreshCw className={sourceHealthBusy || sourceHealth?.running ? 'spin' : ''} size={16} /> {locale === 'zh' ? (sourceHealthBusy || sourceHealth?.running ? '检测中…' : '立即检测') : (sourceHealthBusy || sourceHealth?.running ? 'Checking…' : 'Run check')}</Action> : null}</div> : undefined}>
           <HttpSecurityBanner locale={locale} />
-          {!showConfigActions ? configStatus : null}
-          <AdminConnectionNotice locale={locale} onConfigure={() => { setActiveTab('advanced'); requestAnimationFrame(() => document.getElementById('trusted-proxies')?.focus()) }} />
+          {!activeScope ? configStatus : null}
+          <AdminConnectionNotice locale={locale} onConfigure={() => {
+            const configure = () => {
+              setAdvancedTab('network')
+              if (activeTab !== 'advanced') setActiveTab('advanced')
+              requestAnimationFrame(() => document.getElementById('trusted-proxies')?.focus())
+            }
+            if (activeTab === 'advanced' && advancedTab === 'network') configure()
+            else leaveAdvancedTab(configure)
+          }} />
         {activeTab === 'overview' ? <section className="admin-tab-panel console-overview"><div className="console-section-head"><div><h3>{text.overview}</h3><p>{stats.month} · {stats.quota.timezone}</p></div></div>
           {stats.quota.exceeded ? <div className="quota-alert"><ChartNoAxesCombined size={18} /> {text.quotaStopped}</div> : null}
           <div className="console-metrics"><ConsoleMetric label={draft.quota.bidirectional_accounting ? text.billed : text.sent} value={byteLabel(stats.response_bytes)} /><ConsoleMetric label={text.remaining} value={stats.quota.enabled ? byteLabel(stats.quota.remaining_bytes) : '∞'} /><ConsoleMetric label={text.requests} value={stats.request_count.toLocaleString()} /><ConsoleMetric label={text.errors} value={stats.error_count.toLocaleString()} /></div>
@@ -640,64 +615,86 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
         {activeTab === 'geo' ? <AdminGeoTraffic locale={locale} /> : null}
         {activeTab === 'ip-access' ? <AdminIpAccess locale={locale} superAdmin={identity?.role === 'super_admin'} /> : null}
         {activeTab === 'access' ? <section className="admin-tab-panel settings-stack">
-          <Panel className="settings-card"><div className="settings-card-head"><div className="admin-heading-help"><h4>{text.serviceAccess}</h4><AdminHelp label={String(text.serviceAccess) + (locale === 'zh' ? '说明' : ' help')}>{text.accessHint}</AdminHelp></div></div><div className="config-fields"><label>{text.publicUrl}<Field value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label>{text.registrationMode}<Choice value={draft.registration.mode} onChange={(event) => updateRegistration('mode', event.target.value)}><option value="invite_only">{locale === 'zh' ? '仅邀请用户' : 'Invitation only'}</option><option value="domain_allowlist">{locale === 'zh' ? '仅允许指定邮箱域名' : 'Allowed email domains'}</option><option value="open">{locale === 'zh' ? '开放注册' : 'Open registration'}</option><option value="disabled">{locale === 'zh' ? '禁止新用户' : 'New users disabled'}</option></Choice></label><div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-1">{text.allowedDomains}</label><AdminHelp label={String(text.allowedDomains) + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '仅“指定邮箱域名”模式需要填写，多个域名用逗号分隔。' : 'Only required for the allowed-domain mode. Separate multiple domains with commas.'}</AdminHelp></div><Field id="admin-hint-admin-1" placeholder="example.com, subsidiary.example.com" value={draft.registration.allowed_email_domains.join(', ')} onChange={(event) => updateRegistration('allowed_email_domains', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /></div><label>{text.emailTtl}<Field min="1" max="60" type="number" value={draft.registration.email_token_ttl_minutes} onChange={(event) => updateRegistration('email_token_ttl_minutes', Number(event.target.value))} /></label></div></Panel>
+          <Panel className="settings-card"><div className="settings-card-head"><div className="admin-heading-help"><h4>{text.serviceAccess}</h4><AdminHelp label={String(text.serviceAccess) + (locale === 'zh' ? '说明' : ' help')}>{text.accessHint}</AdminHelp></div></div><div className="config-fields"><label>{text.publicUrl}<Field placeholder={window.location.origin} value={draft.public_base_url} onChange={(event) => update('public_base_url', event.target.value)} /></label><label>{text.registrationMode}<Choice value={draft.registration.mode} onChange={(event) => updateRegistration('mode', event.target.value)}><option value="invite_only">{locale === 'zh' ? '仅邀请用户' : 'Invitation only'}</option><option value="domain_allowlist">{locale === 'zh' ? '仅允许指定邮箱域名' : 'Allowed email domains'}</option><option value="open">{locale === 'zh' ? '开放注册' : 'Open registration'}</option><option value="disabled">{locale === 'zh' ? '禁止新用户' : 'New users disabled'}</option></Choice></label><div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-1">{text.allowedDomains}</label><AdminHelp label={String(text.allowedDomains) + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '仅“指定邮箱域名”模式需要填写，多个域名用逗号分隔。' : 'Only required for the allowed-domain mode. Separate multiple domains with commas.'}</AdminHelp></div><Field id="admin-hint-admin-1" placeholder="example.com, subsidiary.example.com" value={draft.registration.allowed_email_domains.join(', ')} onChange={(event) => updateRegistration('allowed_email_domains', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /></div><label>{text.emailTtl}<Field min="1" max="60" type="number" value={draft.registration.email_token_ttl_minutes} onChange={(event) => updateRegistration('email_token_ttl_minutes', Number(event.target.value))} /></label></div></Panel>
           <Panel className="settings-card"><div className="settings-card-head"><div className="admin-heading-help"><h4>{locale === 'zh' ? '站点与 SEO' : 'Site identity & SEO'}</h4><AdminHelp label={String(locale === 'zh' ? '站点与 SEO' : 'Site identity & SEO') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '这些信息会直接写入服务端返回的 HTML，供浏览器、搜索引擎和分享卡片读取。' : 'These values are rendered into server HTML for browsers, search engines, and link previews.'}</AdminHelp></div></div><div className="config-fields site-settings-fields"><label>{locale === 'zh' ? '网站标题' : 'Site title'}<Field maxLength={100} value={draft.site.title} onChange={(event) => updateSite('title', event.target.value)} /></label><div><div className="admin-field-label"><label htmlFor="admin-hint-admin-2">{locale === 'zh' ? '站点图标 URL' : 'Site icon URL'}</label><AdminHelp label={String(locale === 'zh' ? '站点图标 URL' : 'Site icon URL') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '支持站内绝对路径或 HTTP(S) 地址。' : 'Use a root-relative path or HTTP(S) URL.'}</AdminHelp></div><Field id="admin-hint-admin-2" placeholder="/favicon.svg" value={draft.site.icon_url} onChange={(event) => updateSite('icon_url', event.target.value)} /></div><label className="wide-field">{locale === 'zh' ? 'SEO 描述' : 'SEO description'}<TextArea maxLength={300} rows={3} value={draft.site.description} onChange={(event) => updateSite('description', event.target.value)} /></label><div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-3">{locale === 'zh' ? 'SEO 关键词' : 'SEO keywords'}</label><AdminHelp label={String(locale === 'zh' ? 'SEO 关键词' : 'SEO keywords') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '最多 20 项，使用逗号分隔。' : 'Up to 20 comma-separated values.'}</AdminHelp></div><Field id="admin-hint-admin-3" placeholder={locale === 'zh' ? '镜像, 代理, 软件源' : 'mirror, proxy, package registry'} value={draft.site.keywords.join(', ')} onChange={(event) => updateSite('keywords', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /></div><div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-4">{locale === 'zh' ? '底部左侧文案' : 'Footer text'}</label><AdminHelp label={String(locale === 'zh' ? '底部左侧文案' : 'Footer text') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '留空时显示当前站点域名；右侧 GitHub 链接与版本号保持固定。' : 'Leave blank to show the current hostname. The GitHub link and version remain fixed.'}</AdminHelp></div><Field id="admin-hint-admin-4" maxLength={200} placeholder={window.location.hostname} value={draft.site.footer_text} onChange={(event) => updateSite('footer_text', event.target.value)} /></div></div></Panel>
           <Panel className="settings-card"><div className="settings-card-head"><div className="admin-heading-help"><h4>{text.subdomainRouting}</h4><AdminHelp label={String(text.subdomainRouting) + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '默认保留主域名代理。只有企业内部强制计费时才需要强制用户子域名。' : 'Keep main-domain proxying by default. Require user subdomains only for controlled internal deployments.'}</AdminHelp></div></div><div className="config-fields"><label>{text.baseDomain}<Field placeholder="mirror.example.com" value={draft.user_access.base_domain} onChange={(event) => updateUserAccess('base_domain', event.target.value)} /></label><label>{text.accessMode}<Choice value={draft.user_access.mode} onChange={(event) => updateUserAccess('mode', event.target.value)}><option value="public">{locale === 'zh' ? '公开模式（推荐）' : 'Public (recommended)'}</option><option value="subdomain_required">{locale === 'zh' ? '强制用户子域名' : 'Require user subdomains'}</option></Choice></label>{draft.user_access.mode === 'subdomain_required' ? <div className="infrastructure-readiness wide-field"><label className="toggle-field"><Field type="checkbox" checked={draft.user_access.infrastructure_ready} onChange={(event) => updateUserAccess('infrastructure_ready', event.target.checked)} />{text.infrastructureReady}</label><p>{locale === 'zh' ? '这是保存前的安全确认，不会自动配置基础设施。请确保 *.主域名 已解析到本服务、TLS 证书覆盖通配符域名，并且反向代理保留客户端请求的原始 Host。' : 'This is a safety acknowledgement, not automatic provisioning. Ensure *.base-domain resolves to this service, TLS covers the wildcard domain, and the reverse proxy preserves the original Host header.'}</p></div> : <Alert className="infrastructure-readiness infrastructure-readiness-passive wide-field" type="info" role="note" showIcon icon={<CircleAlert size={18} aria-hidden="true" />} title={locale === 'zh' ? '公开模式只使用公开地址，不需要通配符 DNS、通配符证书或用户子域名配置。' : 'Public mode only uses the public URL; wildcard DNS, wildcard certificates, and user subdomains are not required.'} />}</div></Panel>
           <Panel className="settings-card"><div className="settings-card-head"><div className="admin-heading-help"><h4>{text.trafficQuota}</h4><AdminHelp label={String(text.trafficQuota) + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '公开代理流量与所有用户流量共同计入每月总流量；每个用户还受默认单用户上限约束。用量按所选时区每月重置，双向计费用于同时计算 VPS 流入与流出的厂商。' : 'Public proxy traffic and all user traffic share the monthly total; each user also has a per-user limit. Usage resets monthly in the selected timezone. Bidirectional billing counts both VPS ingress and egress.'}</AdminHelp></div></div><div className="config-fields"><label className="toggle-field quota-toggle"><Field type="checkbox" checked={draft.quota.enabled} onChange={(event) => updateQuota('enabled', event.target.checked)} />{text.quota}</label><label className="toggle-field quota-toggle"><Field type="checkbox" checked={draft.quota.bidirectional_accounting} onChange={(event) => updateQuota('bidirectional_accounting', event.target.checked)} />{text.bidirectionalAccounting}</label><label>{text.quotaGb}<Field min="0" type="number" value={draft.quota.monthly_gb} onChange={(event) => updateQuota('monthly_gb', Number(event.target.value))} /></label><label>{text.defaultUserQuota}<Field min="0" type="number" value={draft.quota.default_user_monthly_gb ?? ''} placeholder={text.unlimited} onChange={(event) => updateQuota('default_user_monthly_gb', event.target.value === '' ? null : Number(event.target.value))} /></label><label>{text.timezone}<Field value={draft.quota.timezone} onChange={(event) => updateQuota('timezone', event.target.value)} /></label><label>{text.action}<Choice value={draft.quota.on_exceeded} onChange={(event) => updateQuota('on_exceeded', event.target.value)}><option value="stop_proxy">{locale === 'zh' ? '停止代理（503）' : 'Stop proxying (503)'}</option><option value="throttle">{locale === 'zh' ? '请求限流（429）' : 'Rate limit (429)'}</option></Choice></label></div></Panel>
           <Panel className="settings-card"><div className="settings-card-head"><div className="admin-heading-help"><h4>{locale === 'zh' ? '运行告警' : 'Operational alerts'}</h4><AdminHelp label={String(locale === 'zh' ? '运行告警' : 'Operational alerts') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '配额接近上限或多个上游异常时，通过 Webhook、邮件或两者通知；每个渠道独立按冷却时间去重。' : 'Notify by webhook, email, or both when quota or upstream health crosses a threshold. Each channel is deduplicated independently.'}</AdminHelp></div></div><div className="config-fields"><label className="toggle-field"><Field type="checkbox" checked={draft.alerts.enabled} onChange={(event) => updateAlerts('enabled', event.target.checked)} />{locale === 'zh' ? '启用告警' : 'Enable alerts'}</label><label className="toggle-field"><Field type="checkbox" checked={draft.alerts.email_enabled} onChange={(event) => updateAlerts('email_enabled', event.target.checked)} />{locale === 'zh' ? '发送邮件通知' : 'Send email notifications'}</label><div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-5">Webhook URL</label><AdminHelp label={String('Webhook URL') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '不使用 Webhook 时可留空。' : 'Leave blank when only email delivery is needed.'}</AdminHelp></div><Field id="admin-hint-admin-5" type="password" placeholder={draft.alerts.has_webhook_url ? (locale === 'zh' ? '已保存，留空表示不修改' : 'Saved; leave blank to keep') : 'https://hooks.example/…'} value={draft.alerts.webhook_url} onChange={(event) => updateAlerts('webhook_url', event.target.value)} /></div><div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-6">{locale === 'zh' ? '告警收件人' : 'Alert recipients'}</label><AdminHelp label={String(locale === 'zh' ? '告警收件人' : 'Alert recipients') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '多个邮箱用逗号分隔；发送邮件前需要先在“邮件与邀请”中启用 SMTP。' : 'Comma-separated addresses. SMTP must be enabled under Email & invitations.'}</AdminHelp></div><Field id="admin-hint-admin-6" type="text" placeholder="ops@example.com, owner@example.com" value={draft.alerts.email_recipients.join(', ')} onChange={(event) => updateAlerts('email_recipients', event.target.value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean))} /></div><label>{locale === 'zh' ? '配额阈值（%）' : 'Quota threshold (%)'}<Field min="1" max="100" type="number" value={draft.alerts.quota_percent} onChange={(event) => updateAlerts('quota_percent', Number(event.target.value))} /></label><label>{locale === 'zh' ? '异常上游组阈值' : 'Unhealthy source threshold'}<Field min="1" type="number" value={draft.alerts.source_failures} onChange={(event) => updateAlerts('source_failures', Number(event.target.value))} /></label><label>{locale === 'zh' ? '冷却时间（秒）' : 'Cooldown (seconds)'}<Field min="1" type="number" value={draft.alerts.cooldown_secs} onChange={(event) => updateAlerts('cooldown_secs', Number(event.target.value))} /></label></div></Panel>
         </section> : null}
-        {activeTab === 'advanced' ? <section className="admin-tab-panel settings-stack advanced-settings">
+        {visitedAdvanced || activeTab === 'advanced' ? <section className="admin-tab-panel settings-stack advanced-settings" hidden={activeTab !== 'advanced'}>
           <Alert type="warning" role="note" showIcon title={text.advancedWarning} />
-          <AdminAcmeStatus locale={locale} superAdmin={identity?.role === 'super_admin'} />
-          <Panel className="settings-card">
-            <div className="settings-card-head"><div><div className="admin-heading-help"><h4>{text.configuration}</h4><AdminHelp label={String(text.configuration) + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '相关配置已按用途分组；启用开关与它控制的参数位于同一区域。' : 'Settings are grouped by purpose; each switch sits with the values it controls.'}</AdminHelp></div></div><p>{text.runtimeState}: {draft.listen_addr}</p></div>
-            <div className="runtime-config-groups">
-              <section className="runtime-config-group runtime-config-group-wide">
-                <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '代理与请求头' : 'Proxy and request headers'}</h5><AdminHelp label={String(locale === 'zh' ? '代理与请求头' : 'Proxy and request headers') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '只有可信反向代理的转发头才会参与客户端地址识别。' : 'Only forwarding headers from trusted reverse proxies are used.'}</AdminHelp></div></div>
-                <div className="runtime-config-fields"><label className="wide-field">{text.trustedProxies}<Field id="trusted-proxies" aria-label={text.trustedProxies} aria-describedby="trusted-proxies-hint" value={draft.trusted_proxies.join(', ')} onChange={(event) => update('trusted_proxies', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small id="trusted-proxies-hint">{text.trustedProxiesHint}</small></label><label className="toggle-field wide-field"><Field type="checkbox" checked={draft.forward_client_authorization} onChange={(event) => update('forward_client_authorization', event.target.checked)} />{text.forwardAuth}</label></div>
-              </section>
-              <section className="runtime-config-group runtime-config-group-wide">
-                <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '镜像上游代理' : 'Mirror upstream proxy'}</h5><AdminHelp label={String(locale === 'zh' ? '镜像上游代理' : 'Mirror upstream proxy') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '让所有镜像上游请求通过一个 HTTP、HTTPS 或 SOCKS5 代理；保存后立即生效。' : 'Route every mirror-upstream request through one HTTP, HTTPS, or SOCKS5 proxy; changes apply immediately.'}</AdminHelp></div></div>
-                <div className="runtime-config-fields">
-                  <label className="toggle-field wide-field"><Field type="checkbox" checked={draft.outbound_proxy.enabled} onChange={(event) => updateOutboundProxy('enabled', event.target.checked)} />{locale === 'zh' ? '启用镜像上游代理' : 'Enable mirror upstream proxy'}</label>
-                  <div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-7">{locale === 'zh' ? '代理地址' : 'Proxy URL'}</label><AdminHelp label={String(locale === 'zh' ? '代理地址' : 'Proxy URL') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '支持 http://、https://、socks5:// 和 socks5h://；socks5h 由代理解析 DNS。' : 'Supports http://, https://, socks5://, and socks5h://; socks5h resolves DNS through the proxy.'}</AdminHelp></div><Field id="admin-hint-admin-7" placeholder="socks5h://proxy.example.com:1080" value={draft.outbound_proxy.url} onChange={(event) => updateOutboundProxy('url', event.target.value)} /></div>
-                  <label>{locale === 'zh' ? '用户名（可选）' : 'Username (optional)'}<Field autoComplete="off" value={draft.outbound_proxy.username ?? ''} onChange={(event) => updateOutboundProxy('username', event.target.value || null)} /></label>
-                  <label>{locale === 'zh' ? '密码（可选）' : 'Password (optional)'}<Field autoComplete="new-password" type="password" placeholder={draft.outbound_proxy.has_password ? (locale === 'zh' ? '已保存，留空表示不修改' : 'Saved; leave blank to keep') : ''} value={draft.outbound_proxy.password ?? ''} onChange={(event) => updateOutboundProxy('password', event.target.value || null)} /></label>
-                  <div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-8">{locale === 'zh' ? '不使用代理的地址' : 'Bypass proxy for'}</label><AdminHelp label={String(locale === 'zh' ? '不使用代理的地址' : 'Bypass proxy for') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '多个主机或地址用逗号分隔。' : 'Separate hosts or addresses with commas.'}</AdminHelp></div><Field id="admin-hint-admin-8" placeholder="127.0.0.1, localhost" value={draft.outbound_proxy.no_proxy.join(', ')} onChange={(event) => updateOutboundProxy('no_proxy', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /></div>
+          <Tabs activeKey={advancedTab} tabPlacement="top" onChange={key => leaveAdvancedTab(() => setAdvancedTab(key as AdvancedTab))}
+            items={[
+              { key: 'network', label: advancedLabel('network', locale === 'zh' ? '代理网络' : 'Proxy network'), children: <Panel className="settings-card">
+                <div className="settings-card-head"><p>{text.runtimeState}: {draft.listen_addr}</p></div>
+                <div className="runtime-config-groups">
+                  <section className="runtime-config-group runtime-config-group-wide">
+                    <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '代理与请求头' : 'Proxy and request headers'}</h5><AdminHelp label={String(locale === 'zh' ? '代理与请求头' : 'Proxy and request headers') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '只有可信反向代理的转发头才会参与客户端地址识别。' : 'Only forwarding headers from trusted reverse proxies are used.'}</AdminHelp></div></div>
+                    <div className="runtime-config-fields"><label className="wide-field">{text.trustedProxies}<Field id="trusted-proxies" aria-label={text.trustedProxies} aria-describedby="trusted-proxies-hint" value={draft.trusted_proxies.join(', ')} onChange={(event) => update('trusted_proxies', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /><small id="trusted-proxies-hint">{text.trustedProxiesHint}</small></label><label className="toggle-field wide-field"><Field type="checkbox" checked={draft.forward_client_authorization} onChange={(event) => update('forward_client_authorization', event.target.checked)} />{text.forwardAuth}</label></div>
+                  </section>
+                  <section className="runtime-config-group runtime-config-group-wide">
+                    <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '镜像上游代理' : 'Mirror upstream proxy'}</h5><AdminHelp label={String(locale === 'zh' ? '镜像上游代理' : 'Mirror upstream proxy') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '让所有镜像上游请求通过一个 HTTP、HTTPS 或 SOCKS5 代理；保存后立即生效。' : 'Route every mirror-upstream request through one HTTP, HTTPS, or SOCKS5 proxy; changes apply immediately.'}</AdminHelp></div></div>
+                    <div className="runtime-config-fields">
+                      <label className="toggle-field wide-field"><Field type="checkbox" checked={draft.outbound_proxy.enabled} onChange={(event) => updateOutboundProxy('enabled', event.target.checked)} />{locale === 'zh' ? '启用镜像上游代理' : 'Enable mirror upstream proxy'}</label>
+                      <div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-7">{locale === 'zh' ? '代理地址' : 'Proxy URL'}</label><AdminHelp label={String(locale === 'zh' ? '代理地址' : 'Proxy URL') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '支持 http://、https://、socks5:// 和 socks5h://；socks5h 由代理解析 DNS。' : 'Supports http://, https://, socks5://, and socks5h://; socks5h resolves DNS through the proxy.'}</AdminHelp></div><Field id="admin-hint-admin-7" placeholder="socks5h://proxy.example.com:1080" value={draft.outbound_proxy.url} onChange={(event) => updateOutboundProxy('url', event.target.value)} /></div>
+                      <label>{locale === 'zh' ? '用户名（可选）' : 'Username (optional)'}<Field autoComplete="off" value={draft.outbound_proxy.username ?? ''} onChange={(event) => updateOutboundProxy('username', event.target.value || null)} /></label>
+                      <label>{locale === 'zh' ? '密码（可选）' : 'Password (optional)'}<Field autoComplete="new-password" type="password" placeholder={draft.outbound_proxy.has_password ? (locale === 'zh' ? '已保存，留空表示不修改' : 'Saved; leave blank to keep') : ''} value={draft.outbound_proxy.password ?? ''} onChange={(event) => updateOutboundProxy('password', event.target.value || null)} /></label>
+                      <div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-8">{locale === 'zh' ? '不使用代理的地址' : 'Bypass proxy for'}</label><AdminHelp label={String(locale === 'zh' ? '不使用代理的地址' : 'Bypass proxy for') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '多个主机或地址用逗号分隔。' : 'Separate hosts or addresses with commas.'}</AdminHelp></div><Field id="admin-hint-admin-8" placeholder="127.0.0.1, localhost" value={draft.outbound_proxy.no_proxy.join(', ')} onChange={(event) => updateOutboundProxy('no_proxy', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /></div>
+                    </div>
+                  </section>
+                  <section className={`runtime-config-group runtime-config-group-wide${draft.upstream_tls.insecure_skip_verify ? ' runtime-config-group-danger' : ''}`}>
+                    <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '镜像上游 TLS 信任' : 'Mirror upstream TLS trust'}</h5><AdminHelp label={String(locale === 'zh' ? '镜像上游 TLS 信任' : 'Mirror upstream TLS trust') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '默认同时信任 WebPKI 公共根证书和操作系统根证书；以下设置只影响镜像上游，不影响 ACME、DNS API 或 OAuth。' : 'WebPKI public roots and native system roots are trusted by default. These settings affect mirror upstreams only, never ACME, DNS APIs, or OAuth.'}</AdminHelp></div></div>
+                    <div className="runtime-config-fields">
+                      <div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-9">{locale === 'zh' ? '附加 CA PEM Bundle 路径' : 'Additional CA PEM bundle paths'}</label><AdminHelp label={String(locale === 'zh' ? '附加 CA PEM Bundle 路径' : 'Additional CA PEM bundle paths') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '多个路径用逗号分隔。Docker 部署时需要先将证书文件挂载到容器中；保存时会立即读取并校验证书。' : 'Separate paths with commas. Mount certificate files into Docker first; bundles are read and validated when saved.'}</AdminHelp></div><Field id="admin-hint-admin-9" placeholder="/etc/mirrorproxy/ca/company-root.pem" value={draft.upstream_tls.ca_certificates.join(', ')} onChange={(event) => updateUpstreamTls('ca_certificates', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /></div>
+                      <label className="toggle-field wide-field tls-insecure-toggle"><Field type="checkbox" checked={draft.upstream_tls.insecure_skip_verify} onChange={(event) => toggleInsecureUpstreamTls(event.target.checked)} /><ShieldBan size={16} />{locale === 'zh' ? '跳过镜像上游 TLS 证书校验（不安全，仅调试）' : 'Skip mirror-upstream TLS verification (unsafe, debugging only)'}</label>
+                      {draft.upstream_tls.insecure_skip_verify ? <div className="tls-danger-note wide-field" role="alert"><CircleAlert size={18} /><span>{locale === 'zh' ? '当前所有镜像上游 HTTPS 请求均不会验证证书，可能被中间人篡改。完成调试后请立即关闭。' : 'Certificates are not verified for any mirror-upstream HTTPS request, allowing man-in-the-middle attacks. Disable this immediately after debugging.'}</span></div> : null}
+                    </div>
+                  </section>
                 </div>
-              </section>
-              <AdminDohSettings locale={locale} value={draft.doh} baseUrl={draft.public_base_url} onChange={(value) => update('doh', value)} />
-              <section className={`runtime-config-group runtime-config-group-wide${draft.upstream_tls.insecure_skip_verify ? ' runtime-config-group-danger' : ''}`}>
-                <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '镜像上游 TLS 信任' : 'Mirror upstream TLS trust'}</h5><AdminHelp label={String(locale === 'zh' ? '镜像上游 TLS 信任' : 'Mirror upstream TLS trust') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '默认同时信任 WebPKI 公共根证书和操作系统根证书；以下设置只影响镜像上游，不影响 ACME、DNS API 或 OAuth。' : 'WebPKI public roots and native system roots are trusted by default. These settings affect mirror upstreams only, never ACME, DNS APIs, or OAuth.'}</AdminHelp></div></div>
-                <div className="runtime-config-fields">
-                  <div className="wide-field"><div className="admin-field-label"><label htmlFor="admin-hint-admin-9">{locale === 'zh' ? '附加 CA PEM Bundle 路径' : 'Additional CA PEM bundle paths'}</label><AdminHelp label={String(locale === 'zh' ? '附加 CA PEM Bundle 路径' : 'Additional CA PEM bundle paths') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '多个路径用逗号分隔。Docker 部署时需要先将证书文件挂载到容器中；保存时会立即读取并校验证书。' : 'Separate paths with commas. Mount certificate files into Docker first; bundles are read and validated when saved.'}</AdminHelp></div><Field id="admin-hint-admin-9" placeholder="/etc/mirrorproxy/ca/company-root.pem" value={draft.upstream_tls.ca_certificates.join(', ')} onChange={(event) => updateUpstreamTls('ca_certificates', event.target.value.split(',').map((item) => item.trim()).filter(Boolean))} /></div>
-                  <label className="toggle-field wide-field tls-insecure-toggle"><Field type="checkbox" checked={draft.upstream_tls.insecure_skip_verify} onChange={(event) => toggleInsecureUpstreamTls(event.target.checked)} /><ShieldBan size={16} />{locale === 'zh' ? '跳过镜像上游 TLS 证书校验（不安全，仅调试）' : 'Skip mirror-upstream TLS verification (unsafe, debugging only)'}</label>
-                  {draft.upstream_tls.insecure_skip_verify ? <div className="tls-danger-note wide-field" role="alert"><CircleAlert size={18} /><span>{locale === 'zh' ? '当前所有镜像上游 HTTPS 请求均不会验证证书，可能被中间人篡改。完成调试后请立即关闭。' : 'Certificates are not verified for any mirror-upstream HTTPS request, allowing man-in-the-middle attacks. Disable this immediately after debugging.'}</span></div> : null}
+              </Panel> },
+              { key: 'doh', label: advancedLabel('doh', 'DoH'), children: <Panel className="settings-card">
+                <AdminDohSettings locale={locale} value={draft.doh} baseUrl={publicBaseUrl} onChange={(value) => update('doh', value)} />
+              </Panel> },
+              { key: 'upstreams', label: advancedLabel('upstreams', locale === 'zh' ? '镜像源' : 'Mirror sources'), children: <div className="settings-stack">
+                <Panel className="settings-card">
+                  <h4>{text.upstreams}</h4>
+                  <AdminUpstreams locale={locale} upstreams={draft.upstreams}
+                    publicBaseUrl={savedDraft?.public_base_url || window.location.origin} clientEndpoints={savedDraft?.upstream_client_endpoints}
+                    builtInRepositories={draft.built_in_os_repositories} updateUpstream={updateUpstream} onChange={updateAdditionalOsUpstreams} />
+                </Panel>
+                <Panel className="settings-card">
+                  <div className="runtime-config-groups">
+                  <section className="runtime-config-group">
+                    <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '上游选择策略' : 'Upstream selection'}</h5><AdminHelp label={String(locale === 'zh' ? '上游选择策略' : 'Upstream selection') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '顺序模式保持配置优先级；自适应模式根据失败熔断与响应延迟动态排序。' : 'Ordered mode preserves configured priority; adaptive mode ranks endpoints using circuit state and latency.'}</AdminHelp></div></div>
+                    <div className="runtime-config-fields paired-fields"><label>{locale === 'zh' ? '策略' : 'Strategy'}<Choice value={draft.upstream_selection.strategy} onChange={(event) => updateUpstreamSelection('strategy', event.target.value)}><option value="ordered">{locale === 'zh' ? '顺序优先' : 'Ordered'}</option><option value="adaptive">{locale === 'zh' ? '自适应' : 'Adaptive'}</option></Choice></label><label>{locale === 'zh' ? '失败阈值' : 'Failure threshold'}<Field min="1" type="number" value={draft.upstream_selection.failure_threshold} onChange={(event) => updateUpstreamSelection('failure_threshold', Number(event.target.value))} /></label><label>{locale === 'zh' ? '熔断冷却（秒）' : 'Circuit cooldown (seconds)'}<Field min="1" type="number" value={draft.upstream_selection.cooldown_secs} onChange={(event) => updateUpstreamSelection('cooldown_secs', Number(event.target.value))} /></label></div>
+                  </section>
+                  </div>
+                </Panel>
+                <Panel className="settings-card"><h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><Field type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div></Panel>
+              </div> },
+              { key: 'runtime', label: advancedLabel('runtime', locale === 'zh' ? '运行时配置' : 'Runtime configuration'), children: <Panel className="settings-card">
+                <div className="runtime-config-groups">
+                  <section className="runtime-config-group">
+                    <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '请求限流' : 'Request rate limiting'}</h5><AdminHelp label={String(locale === 'zh' ? '请求限流' : 'Request rate limiting') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '启用后按客户端限制每分钟请求数。' : 'Limits requests per client when enabled.'}</AdminHelp></div></div>
+                    <div className="runtime-config-fields paired-fields"><label className="toggle-field"><Field type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<Field min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label><label className="toggle-field wide-field"><Field type="checkbox" checked={draft.metrics.local_only} onChange={(event) => updateMetrics(event.target.checked)} />{locale === 'zh' ? '仅允许本机访问 /metrics（推荐）' : 'Allow /metrics from localhost only (recommended)'}</label></div>
+                  </section>
+                  <section className="runtime-config-group">
+                    <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '小对象磁盘缓存' : 'Small-object disk cache'}</h5><AdminHelp label={String(locale === 'zh' ? '小对象磁盘缓存' : 'Small-object disk cache') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '遵循上游缓存指令，并通过 ETag 或修改时间重新验证已过期内容。' : 'Honors upstream cache directives and revalidates stale content with ETag or modification time.'}</AdminHelp></div></div>
+                    <div className="runtime-config-fields paired-fields"><label className="toggle-field wide-field"><Field type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label><label>{text.cacheMaxEntry}<Field min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label>{text.cacheMaxTotal}<Field min="1" type="number" value={draft.cache.max_total_mb} onChange={(event) => updateCache('max_total_mb', Number(event.target.value))} /></label><label>{text.cacheDefaultTtl}<Field min="1" type="number" value={draft.cache.default_ttl_secs} onChange={(event) => updateCache('default_ttl_secs', Number(event.target.value))} /></label><label>{text.cacheMaxTtl}<Field min="1" type="number" value={draft.cache.max_ttl_secs} onChange={(event) => updateCache('max_ttl_secs', Number(event.target.value))} /></label><label className="wide-field">{text.cacheDirectory}<Field value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><CacheOperations locale={locale} confirmAction={confirmAction} /></div>
+                  </section>
+                  <section className="runtime-config-group">
+                    <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '流量明细' : 'Traffic records'}</h5><AdminHelp label={String(locale === 'zh' ? '流量明细' : 'Traffic records') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '控制请求级流量明细在数据库中的保留时间。' : 'Controls how long request-level traffic records remain in the database.'}</AdminHelp></div></div>
+                    <div className="runtime-config-fields"><label>{text.retentionDays}<Field min="1" type="number" value={draft.quota.request_event_retention_days} onChange={(event) => updateQuota('request_event_retention_days', Number(event.target.value))} /></label></div>
+                  </section>
+                  <section className="runtime-config-group">
+                    <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '用户子域名' : 'User subdomains'}</h5><AdminHelp label={String(locale === 'zh' ? '用户子域名' : 'User subdomains') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '控制专属地址的随机标识长度和更换频率。' : 'Controls dedicated-address ID length and rotation frequency.'}</AdminHelp></div></div>
+                    <div className="runtime-config-fields paired-fields"><label>{text.routingLength}<Field min="8" max="32" type="number" value={draft.user_access.routing_id_min_length} onChange={(event) => updateUserAccess('routing_id_min_length', Number(event.target.value))} /></label><label>{text.rotationCooldown}<Field min="0" max="8760" type="number" value={draft.user_access.routing_rotation_cooldown_hours} onChange={(event) => updateUserAccess('routing_rotation_cooldown_hours', Number(event.target.value))} /></label></div>
+                  </section>
                 </div>
-              </section>
-              <section className="runtime-config-group">
-                <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '请求限流' : 'Request rate limiting'}</h5><AdminHelp label={String(locale === 'zh' ? '请求限流' : 'Request rate limiting') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '启用后按客户端限制每分钟请求数。' : 'Limits requests per client when enabled.'}</AdminHelp></div></div>
-                <div className="runtime-config-fields paired-fields"><label className="toggle-field"><Field type="checkbox" checked={draft.rate_limit.enabled} onChange={(event) => updateRate('enabled', event.target.checked)} />{text.rate}</label><label>{text.rpm}<Field min="1" type="number" value={draft.rate_limit.requests_per_minute} onChange={(event) => updateRate('requests_per_minute', Number(event.target.value))} /></label><label className="toggle-field wide-field"><Field type="checkbox" checked={draft.metrics.local_only} onChange={(event) => updateMetrics(event.target.checked)} />{locale === 'zh' ? '仅允许本机访问 /metrics（推荐）' : 'Allow /metrics from localhost only (recommended)'}</label></div>
-              </section>
-              <section className="runtime-config-group">
-                <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '小对象磁盘缓存' : 'Small-object disk cache'}</h5><AdminHelp label={String(locale === 'zh' ? '小对象磁盘缓存' : 'Small-object disk cache') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '遵循上游缓存指令，并通过 ETag 或修改时间重新验证已过期内容。' : 'Honors upstream cache directives and revalidates stale content with ETag or modification time.'}</AdminHelp></div></div>
-                <div className="runtime-config-fields paired-fields"><label className="toggle-field wide-field"><Field type="checkbox" checked={draft.cache.enabled} onChange={(event) => updateCache('enabled', event.target.checked)} />{text.cache}</label><label>{text.cacheMaxEntry}<Field min="1" type="number" value={draft.cache.max_entry_mb} onChange={(event) => updateCache('max_entry_mb', Number(event.target.value))} /></label><label>{text.cacheMaxTotal}<Field min="1" type="number" value={draft.cache.max_total_mb} onChange={(event) => updateCache('max_total_mb', Number(event.target.value))} /></label><label>{text.cacheDefaultTtl}<Field min="1" type="number" value={draft.cache.default_ttl_secs} onChange={(event) => updateCache('default_ttl_secs', Number(event.target.value))} /></label><label>{text.cacheMaxTtl}<Field min="1" type="number" value={draft.cache.max_ttl_secs} onChange={(event) => updateCache('max_ttl_secs', Number(event.target.value))} /></label><label className="wide-field">{text.cacheDirectory}<Field value={draft.cache.directory} onChange={(event) => updateCache('directory', event.target.value)} /></label><CacheOperations locale={locale} confirmAction={confirmAction} /></div>
-              </section>
-              <section className="runtime-config-group">
-                <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '上游选择策略' : 'Upstream selection'}</h5><AdminHelp label={String(locale === 'zh' ? '上游选择策略' : 'Upstream selection') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '顺序模式保持配置优先级；自适应模式根据失败熔断与响应延迟动态排序。' : 'Ordered mode preserves configured priority; adaptive mode ranks endpoints using circuit state and latency.'}</AdminHelp></div></div>
-                <div className="runtime-config-fields paired-fields"><label>{locale === 'zh' ? '策略' : 'Strategy'}<Choice value={draft.upstream_selection.strategy} onChange={(event) => updateUpstreamSelection('strategy', event.target.value)}><option value="ordered">{locale === 'zh' ? '顺序优先' : 'Ordered'}</option><option value="adaptive">{locale === 'zh' ? '自适应' : 'Adaptive'}</option></Choice></label><label>{locale === 'zh' ? '失败阈值' : 'Failure threshold'}<Field min="1" type="number" value={draft.upstream_selection.failure_threshold} onChange={(event) => updateUpstreamSelection('failure_threshold', Number(event.target.value))} /></label><label>{locale === 'zh' ? '熔断冷却（秒）' : 'Circuit cooldown (seconds)'}<Field min="1" type="number" value={draft.upstream_selection.cooldown_secs} onChange={(event) => updateUpstreamSelection('cooldown_secs', Number(event.target.value))} /></label></div>
-              </section>
-              <section className="runtime-config-group">
-                <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '流量明细' : 'Traffic records'}</h5><AdminHelp label={String(locale === 'zh' ? '流量明细' : 'Traffic records') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '控制请求级流量明细在数据库中的保留时间。' : 'Controls how long request-level traffic records remain in the database.'}</AdminHelp></div></div>
-                <div className="runtime-config-fields"><label>{text.retentionDays}<Field min="1" type="number" value={draft.quota.request_event_retention_days} onChange={(event) => updateQuota('request_event_retention_days', Number(event.target.value))} /></label></div>
-              </section>
-              <section className="runtime-config-group">
-                <div className="runtime-config-group-head"><div className="admin-heading-help"><h5>{locale === 'zh' ? '用户子域名' : 'User subdomains'}</h5><AdminHelp label={String(locale === 'zh' ? '用户子域名' : 'User subdomains') + (locale === 'zh' ? '说明' : ' help')}>{locale === 'zh' ? '控制专属地址的随机标识长度和更换频率。' : 'Controls dedicated-address ID length and rotation frequency.'}</AdminHelp></div></div>
-                <div className="runtime-config-fields paired-fields"><label>{text.routingLength}<Field min="8" max="32" type="number" value={draft.user_access.routing_id_min_length} onChange={(event) => updateUserAccess('routing_id_min_length', Number(event.target.value))} /></label><label>{text.rotationCooldown}<Field min="0" max="8760" type="number" value={draft.user_access.routing_rotation_cooldown_hours} onChange={(event) => updateUserAccess('routing_rotation_cooldown_hours', Number(event.target.value))} /></label></div>
-              </section>
-            </div>
-          </Panel>
-          <Panel className="settings-card"><h4>{text.adapters}</h4><div className="adapter-toggles">{PROXY_ADAPTERS.map((adapter) => <label key={adapter}><Field type="checkbox" checked={draft.enabled_proxies.includes(adapter)} onChange={() => toggleAdapter(adapter)} />{adapter}</label>)}</div><details className="advanced-details"><summary>{text.showUpstreams}</summary><p className="field-hint">{text.upstreamHint}</p><div className="upstream-fields">{Object.entries(draft.upstreams).flatMap(([key, value]) => typeof value === 'string' ? [<label key={key}><span>{key}</span><Field value={value} onChange={(event) => updateUpstream(key, event.target.value)} /></label>] : [])}</div><AdditionalOsEditor locale={locale} publicBaseUrl={draft.public_base_url} sources={typeof draft.upstreams.additional_os === 'object' ? draft.upstreams.additional_os : {}} onChange={updateAdditionalOsUpstreams} /></details></Panel>
+              </Panel> },
+              { key: 'acme', label: advancedLabel('acme', locale === 'zh' ? 'HTTPS 证书' : 'HTTPS certificates'),
+                children: <AdminAcmeStatus ref={acmeEditor} locale={locale} superAdmin={identity?.role === 'super_admin'} onDirtyChange={setAcmeDirty} /> },
+            ]} />
         </section> : null}
         {activeTab === 'users' ? <React.Suspense fallback={<p role="status">{locale === 'zh' ? '加载中…' : 'Loading…'}</p>}><AdminBillingManagement locale={locale} targets={[...PROXY_ADAPTERS, 'doh']} /></React.Suspense> : null}
         {activeTab === 'providers' ? <AdminAuthProviders locale={locale} /> : null}
@@ -712,7 +709,12 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
           <Panel className="settings-card passkey-settings-card">
             <div className="settings-card-head"><div className="admin-heading-help"><h2>{text.passkeys}</h2><AdminHelp label={locale === 'zh' ? 'Passkey 说明' : 'Passkeys help'}>{window.location.protocol === 'https:' ? (locale === 'zh' ? '已根据当前 HTTPS 地址自动填写 RP 信息。' : 'RP information was filled from the current HTTPS address.') : (locale === 'zh' ? 'Passkey 只能在 HTTPS 或本机安全上下文中使用。' : 'Passkeys require HTTPS or a secure localhost context.')}</AdminHelp></div></div>
             <div className="config-fields">
-              <label className="toggle-field"><Field type="checkbox" checked={draft.webauthn.enabled} onChange={(event) => update('webauthn', { ...draft.webauthn, enabled: event.target.checked })} />{text.webauthnEnabled}</label>
+              <label className="toggle-field"><Field type="checkbox" checked={draft.webauthn.enabled} onChange={event => {
+                const enabled = event.target.checked
+                const defaults = enabled && window.location.protocol === 'https:'
+                  ? { rp_id: draft.webauthn.rp_id || window.location.hostname, rp_origin: draft.webauthn.rp_origin || window.location.origin } : {}
+                update('webauthn', { ...draft.webauthn, ...defaults, enabled })
+              }} />{text.webauthnEnabled}</label>
               <label className="toggle-field"><Field type="checkbox" checked={draft.webauthn.require_passkey} onChange={(event) => update('webauthn', { ...draft.webauthn, require_passkey: event.target.checked })} />{locale === 'zh' ? '登录时强制使用 Passkey' : 'Require a passkey for sign-in'}</label>
               <label>{text.webauthnRpId}<Field value={draft.webauthn.rp_id} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_id: event.target.value })} /></label>
               <label>{text.webauthnOrigin}<Field value={draft.webauthn.rp_origin} onChange={(event) => update('webauthn', { ...draft.webauthn, rp_origin: event.target.value })} /></label>
@@ -727,13 +729,26 @@ export function AdminConsole({ locale, theme = 'light', tools }: { locale: Local
           { title: locale === 'zh' ? '操作' : 'Action', dataIndex: 'action', width: 210, render: (_, entry) => auditActionLabel(entry.action, locale) },
           { title: locale === 'zh' ? '详情' : 'Details', dataIndex: 'detail' },
         ]} /></section> : null}
-        {showConfigActions ? <div className="config-save-footer">
+        {activeScope ? <div className="config-save-footer">
           {configStatus}
           <div className="form-actions">
-            {dirty && !configConflict ? <Button disabled={saving} onClick={() => { void reloadConfig() }}>{locale === 'zh' ? '放弃修改' : 'Discard changes'}</Button> : null}
-            <Action className="primary-button" disabled={saving} onClick={save}><Save size={16} /> {saving ? text.saving : text.save}</Action>
+            {scopeDirty(activeScope) && !configConflict ? <Button disabled={saving} onClick={async () => {
+              if (!savedDraft || !await confirmAction({ locale, message: locale === 'zh' ? '确定放弃当前分组的未保存修改？' : 'Discard unsaved changes in this section?' })) return
+              setDraft(current => current && copyConfigScope(current, savedDraft, CONFIG_SCOPES[activeScope]))
+            }}>{locale === 'zh' ? '放弃修改' : 'Discard changes'}</Button> : null}
+            <Action className="primary-button" disabled={saving || configConflict || (activeTab === 'advanced' && !scopeDirty(activeScope))} onClick={() => { void save(activeScope) }}><Save size={16} /> {saving ? text.saving : text.save}</Action>
           </div>
         </div> : null}
+        <Modal open={pendingNavigation !== null} title={locale === 'zh' ? '当前标签有未保存的修改' : 'Unsaved changes in this tab'}
+          onCancel={() => { if (!savingAndSwitching) setPendingNavigation(null) }}
+          closable={!savingAndSwitching} keyboard={!savingAndSwitching} mask={{ closable: !savingAndSwitching }}
+          footer={[
+            <Button key="stay" disabled={savingAndSwitching} onClick={() => setPendingNavigation(null)}>{locale === 'zh' ? '留在当前页' : 'Stay here'}</Button>,
+            <Button key="keep" disabled={savingAndSwitching} onClick={finishNavigation}>{locale === 'zh' ? '保留草稿并切换' : 'Keep draft and switch'}</Button>,
+            <Button key="save" type="primary" disabled={Boolean(activeScope && configConflict)} loading={savingAndSwitching} onClick={() => { void saveAndNavigate() }}>{locale === 'zh' ? '保存并切换' : 'Save and switch'}</Button>,
+          ]}>
+          <p>{locale === 'zh' ? '切换前可以保存当前标签，也可以保留草稿，稍后回来继续编辑。' : 'Save this tab before switching, or keep its draft to finish editing later.'}</p>
+        </Modal>
       </PageContainer></ProLayout> : null}
     </section>
   )

@@ -7,16 +7,15 @@ This page configures MirrorProxy for Docker Engine, Docker Desktop, and OrbStack
 
 ## Linux Docker Engine
 
-Use the client to merge `/etc/docker/daemon.json` structurally:
+After installing the current CLI from the MirrorProxy site, merge the registry
+mirror into `/etc/docker/daemon.json` with one command:
 
 ```bash
-mirrorproxy set docker --mirror mirrorproxy --base-url https://mirror.example.com \
-  --scope system --dry-run
-sudo mirrorproxy set docker --mirror mirrorproxy --base-url https://mirror.example.com \
-  --scope system
+sudo mirrorproxy set docker
 ```
 
-Review the preview, then restart Docker during a maintenance window:
+If no default instance is configured, use `sudo mirrorproxy set docker https://mirror.example.com`.
+Restart Docker when it is safe for your running containers:
 
 ```bash
 sudo systemctl restart docker

@@ -33,6 +33,9 @@ curl -fsSL https://raw.githubusercontent.com/inbjo/MirrorProxy/main/scripts/inst
 `MIRRORPROXY_DOWNLOAD_MIRROR`、`MIRRORPROXY_GITHUB_REPO`。Windows 脚本接受
 `-Version`、`-InstallDir`、`-Mirror` 和 `-Repository` 参数。
 
+使用新版客户端和脚本时，传入 `--mirror`（PowerShell 用 `-Mirror`）还会保存实例地址，
+安装后可直接运行 `mirrorproxy set go`、`mirrorproxy set pip` 等换源命令。
+
 ## Homebrew（macOS/Linux）
 
 首次使用先添加官方 Tap，之后可以直接安装和升级：

@@ -80,6 +80,15 @@ try {
     }
     $env:Path = "$InstallDir;$env:Path"
     Write-Host "MirrorProxy installed to $(Join-Path $InstallDir 'mirrorproxy.exe')"
+    if (-not [string]::IsNullOrWhiteSpace($Mirror)) {
+        $installed = Join-Path $InstallDir 'mirrorproxy.exe'
+        # Older releases support installation before the default-origin command is available.
+        $useHelp = & $installed help 2>$null
+        if ($LASTEXITCODE -eq 0 -and $useHelp -match '^\s+use\s+') {
+            & $installed use $Mirror --user
+            if ($LASTEXITCODE -ne 0) { Write-Warning "Default source URL was not saved." }
+        }
+    }
     if ($Setup) {
         $previousInputEncoding = [Console]::InputEncoding
         $previousOutputEncoding = [Console]::OutputEncoding

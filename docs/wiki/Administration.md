@@ -11,11 +11,32 @@ Open **`https://your-host/admin`**. The first account is `admin`; use the config
 | --- | --- |
 | Check service health, requests, and quotas | Overview |
 | Check an upstream source | Mirror health |
-| Change upstreams, adapters, outbound proxy, or cache | Advanced |
+| Change upstreams and enabled adapters | Advanced → Mirror sources |
+| Set trusted reverse proxies, outbound proxy, or upstream TLS | Advanced → Proxy network |
+| Configure caching or rate limits | Advanced → Runtime configuration |
 | Change admin passwords, passkeys, or sessions | Administrators & security |
 | Manage users, quotas, billing groups, and site identity | Access & quotas; Users & groups |
 | Set up mail, invitations, and identity providers | Email & invitations; Identity providers |
 | Inspect regional traffic, IP rules, and actions | Regional traffic; IP access control; Audit log |
+
+Use **Appearance** to choose the page theme and navigation layout. Changes apply immediately and are saved in this browser. Select **Restore defaults** to reset both settings.
+
+Each **Advanced** tab saves its own settings. When switching away from an edited
+tab, you can save, keep the draft for later, or stay on the tab. **Mirror sources**
+lists all upstreams and software repositories in one table. Filter by name and
+select **Edit** to paste upstream URLs one per line or separated by commas.
+Saving preserves the entered order.
+
+The table labels built-in proxies, fixed system repositories, removable
+repositories, and internal upstreams. Copy the **Client proxy address** for
+client settings. For example, npm uses `/npm/` and WinGet uses
+`/winget/cache`. Docker Hub can use the instance as a registry mirror, while
+other OCI registries use the displayed image name prefix. Internal upstreams
+are used by MirrorProxy during proxying.
+
+Use **Add repository** to create a custom software repository. Fixed
+repositories allow upstream edits. Removable repositories, including some
+presets, can also be renamed or deleted.
 
 ## Administrators and login
 

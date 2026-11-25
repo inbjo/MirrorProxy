@@ -68,7 +68,7 @@ for target in ${targets}; do
       ;;
   esac
   case "${target}" in
-    kali|linuxmint|deepin|zorin|armbian|proxmox|raspios|openkylin)
+    kali|trisquel|linuxlite|linuxmint|deepin|zorin|armbian|proxmox|raspios|openkylin)
       image_variable="MIRRORPROXY_OS_SMOKE_${target^^}_IMAGE"
       case "${target}" in
         kali) default_image=kalilinux/kali-rolling:latest ;;
@@ -253,6 +253,17 @@ store_path=\$(nix-instantiate --eval --strict -E '(import <nixpkgs> {}).hello.ou
 nix-store --option substituters \"\${MIRROR_BASE}/os/nix-store/\" --option fallback false --realise \"\${store_path}\"
 mirrorproxy reset system --scope system
 test ! -e /etc/nixos/mirrorproxy.nix"
+      ;;
+    openwrt)
+      openwrt_image="${MIRRORPROXY_OS_SMOKE_OPENWRT_IMAGE:-}"
+      [[ -n "${openwrt_image}" ]] || { echo "openwrt requires an authentic opkg OpenWrt image"; exit 2; }
+      run_case openwrt "${openwrt_image}" "${install_client}
+sha256sum /etc/opkg/distfeeds.conf > /tmp/feeds.before
+mirrorproxy set openwrt "\${MIRROR_BASE}"
+grep -F "\${MIRROR_BASE}/os/openwrt/" /etc/opkg/distfeeds.conf
+opkg list | grep -E '^libc - '
+mirrorproxy reset openwrt --scope system
+sha256sum -c /tmp/feeds.before"
       ;;
     *)
       echo "unknown OS smoke target: ${target}" >&2

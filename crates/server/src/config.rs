@@ -1711,19 +1711,40 @@ impl Upstreams {
         if self.fedora.trim_end_matches('/') == LEGACY_FEDORA {
             self.fedora = default_fedora_repository();
         }
-        for code in [
-            "epel",
-            "epel-next",
-            "epel-archive",
-            "alma-vault",
-            "docker-ce",
-        ] {
-            let repository = mirrorproxy_catalog::systems::system_repository(code)
-                .expect("built-in repository exists");
-            self.additional_os
-                .entry(code.into())
-                .or_insert_with(|| repository.upstream.into());
-        }
+        self.fill_system_repository_defaults();
+    }
+
+    pub(crate) fn fill_system_repository_defaults(&mut self) {
+        add_system_repository_defaults(&mut self.additional_os);
+    }
+}
+
+pub(crate) fn additional_system_repositories(
+) -> impl Iterator<Item = &'static mirrorproxy_catalog::systems::SystemRepository> {
+    mirrorproxy_catalog::systems::SYSTEM_REPOSITORIES
+        .iter()
+        .filter(|repository| {
+            !repository.upstream.is_empty()
+                && !matches!(
+                    repository.code,
+                    "debian"
+                        | "ubuntu"
+                        | "fedora"
+                        | "archlinux"
+                        | "opensuse"
+                        | "void"
+                        | "gentoo"
+                        | "alpine"
+                        | "openwrt"
+                )
+        })
+}
+
+fn add_system_repository_defaults(repositories: &mut BTreeMap<String, String>) {
+    for repository in additional_system_repositories() {
+        repositories
+            .entry(repository.code.into())
+            .or_insert_with(|| repository.upstream.into());
     }
 }
 
@@ -2747,25 +2768,7 @@ fn default_os_repositories() -> BTreeMap<String, String> {
         ("netbsd".to_string(), "https://cdn.netbsd.org".to_string()),
         ("openbsd".to_string(), "https://cdn.openbsd.org".to_string()),
     ]);
-    for repository in mirrorproxy_catalog::systems::SYSTEM_REPOSITORIES {
-        if !repository.upstream.is_empty()
-            && !matches!(
-                repository.code,
-                "debian"
-                    | "ubuntu"
-                    | "fedora"
-                    | "archlinux"
-                    | "opensuse"
-                    | "void"
-                    | "gentoo"
-                    | "alpine"
-            )
-        {
-            repositories
-                .entry(repository.code.to_string())
-                .or_insert_with(|| repository.upstream.to_string());
-        }
-    }
+    add_system_repository_defaults(&mut repositories);
     repositories
 }
 
@@ -3186,7 +3189,7 @@ insecure_skip_verify = true
     }
 
     #[test]
-    fn upgrades_only_the_legacy_fedora_default() {
+    fn upgrades_legacy_fedora_and_fills_missing_system_repositories() {
         let mut legacy = Upstreams {
             fedora: "https://mirrors.xmission.com/fedora/linux/".into(),
             ..Upstreams::default()
@@ -3207,8 +3210,25 @@ insecure_skip_verify = true
         customized
             .additional_os
             .insert("epel".into(), "https://epel.example".into());
+        customized.additional_os.insert(
+            "debian-security".into(),
+            "https://mirror.example/debian-security".into(),
+        );
         customized.upgrade_legacy_defaults();
         assert_eq!(customized.additional_os["epel"], "https://epel.example");
+        assert_eq!(
+            customized.additional_os["debian-security"],
+            "https://mirror.example/debian-security"
+        );
+        assert_eq!(
+            customized.additional_os["ubuntu-security"],
+            "https://security.ubuntu.com/ubuntu"
+        );
+        assert!(!customized.additional_os.contains_key("rhel"));
+        assert!(!customized.additional_os.contains_key("debian"));
+        for repository in additional_system_repositories() {
+            assert!(customized.additional_os.contains_key(repository.code));
+        }
         assert_eq!(
             customized.additional_os["docker-ce"],
             "https://download.docker.com"

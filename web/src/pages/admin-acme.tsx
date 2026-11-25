@@ -9,10 +9,18 @@ import { CircleAlert, RefreshCw, KeyRound, Save, Terminal } from 'lucide-react'
 import { type Locale, type AcmeStatusView, type OperationNotice, type AcmeConfigDraft, type AcmeDnsConfigDraft } from '../types'
 import { hydrateAcmeConfig } from '../components/shared'
 
-export function AdminAcmeStatus({ locale, superAdmin }: { locale: Locale; superAdmin: boolean }) {
+export type AdminAcmeEditor = { saving: boolean; save: () => Promise<boolean> }
+
+export function AdminAcmeStatus({ locale, superAdmin, ref, onDirtyChange }: {
+  locale: Locale
+  superAdmin: boolean
+  ref: React.Ref<AdminAcmeEditor>
+  onDirtyChange: (dirty: boolean) => void
+}) {
   const [status, setStatus] = React.useState<AcmeStatusView | null>(null)
   const [notice, setNotice] = React.useState<OperationNotice | null>(null)
   const [draft, setDraft] = React.useState<AcmeConfigDraft | null>(null)
+  const [savedDraft, setSavedDraft] = React.useState<AcmeConfigDraft | null>(null)
   const [managedByEnvironment, setManagedByEnvironment] = React.useState(false)
   const [restartRequired, setRestartRequired] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
@@ -28,12 +36,19 @@ export function AdminAcmeStatus({ locale, superAdmin }: { locale: Locale; superA
     const response = await request('/admin/api/acme/config')
     if (!response.ok) return
     const value = await response.json() as { config?: Partial<AcmeConfigDraft>; managed_by_environment?: boolean; restart_required?: boolean }
-    if (value.config) setDraft(hydrateAcmeConfig(value.config))
+    if (value.config) {
+      const config = hydrateAcmeConfig(value.config)
+      setDraft(config)
+      setSavedDraft(config)
+    }
     setManagedByEnvironment(Boolean(value.managed_by_environment))
     setRestartRequired(Boolean(value.restart_required))
   }, [superAdmin])
   React.useEffect(() => { load().catch(() => undefined) }, [load])
   React.useEffect(() => { loadConfig().catch(() => undefined) }, [loadConfig])
+  const dirty = Boolean(superAdmin && draft && JSON.stringify(draft) !== JSON.stringify(savedDraft))
+  React.useEffect(() => { onDirtyChange(dirty) }, [dirty, onDirtyChange])
+  React.useEffect(() => () => onDirtyChange(false), [onDirtyChange])
   React.useEffect(() => {
     if (!status?.running) return
     const timer = window.setInterval(() => load().catch(() => undefined), 2000)
@@ -49,23 +64,30 @@ export function AdminAcmeStatus({ locale, superAdmin }: { locale: Locale; superA
     setStatus((current) => current ? { ...current, running: true } : current)
     setNotice({ tone: 'success', message: locale === 'zh' ? '证书签发任务已进入队列，可在此查看结果。' : 'Certificate issuance is queued. Its result will appear here.' })
   }
-  const saveConfig = async () => {
-    if (!draft || managedByEnvironment) return
+  const saveConfig = async (): Promise<boolean> => {
+    if (!draft || managedByEnvironment || saving) return false
     setSaving(true); setNotice(null)
     try {
       const response = await request('/admin/api/acme/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) })
       const value = await response.json().catch(() => ({})) as { config?: Partial<AcmeConfigDraft>; restart_required?: boolean; error?: string }
       if (!response.ok) {
         setNotice({ tone: 'error', message: value.error || (locale === 'zh' ? 'ACME 配置保存失败。' : 'ACME settings could not be saved.') })
-        return
+        return false
       }
-      if (value.config) setDraft(hydrateAcmeConfig(value.config))
+      const config = value.config ? hydrateAcmeConfig(value.config) : draft
+      setDraft(config)
+      setSavedDraft(config)
       setRestartRequired(Boolean(value.restart_required))
       setNotice({ tone: 'success', message: locale === 'zh' ? 'ACME 配置已安全保存，重启 MirrorProxy 后生效。' : 'ACME settings were saved securely and take effect after restarting MirrorProxy.' })
+      return true
+    } catch {
+      setNotice({ tone: 'error', message: locale === 'zh' ? 'ACME 配置保存失败。' : 'ACME settings could not be saved.' })
+      return false
     } finally {
       setSaving(false)
     }
   }
+  React.useImperativeHandle(ref, () => ({ saving, save: saveConfig }))
   const updateConfig = <K extends keyof AcmeConfigDraft>(key: K, value: AcmeConfigDraft[K]) => setDraft((current) => current ? { ...current, [key]: value } : current)
   const updateDns = <K extends keyof AcmeDnsConfigDraft>(key: K, value: AcmeDnsConfigDraft[K]) => setDraft((current) => current ? { ...current, dns: { ...current.dns, [key]: value } } : current)
   const savedPlaceholder = (saved: boolean) => saved ? (locale === 'zh' ? '已保存，留空表示保留' : 'Saved; leave blank to keep') : ''

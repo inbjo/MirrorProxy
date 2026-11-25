@@ -17,6 +17,8 @@ mod apt;
 mod download;
 mod setup;
 mod system;
+mod update;
+mod user_sources;
 
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -29,6 +31,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Check for or install the latest stable client release.
+    Update(update::Args),
     /// Authenticate, check or fetch a controlled custom download.
     Download(download::DownloadArgs),
     /// Install instance-bound Skill and MCP configuration with a local wizard.
@@ -59,7 +63,11 @@ impl Command {
     fn into_source_command(self) -> SourcesCommand {
         match self {
             Self::Sources { command } | Self::Source(command) => command,
-            Self::Mcp { .. } | Self::Agent { .. } | Self::Setup(_) | Self::Download(_) => {
+            Self::Mcp { .. }
+            | Self::Agent { .. }
+            | Self::Setup(_)
+            | Self::Download(_)
+            | Self::Update(_) => {
                 unreachable!("not a source command")
             }
         }
@@ -68,6 +76,15 @@ impl Command {
 
 #[derive(Subcommand, Debug)]
 enum SourcesCommand {
+    /// Set the default MirrorProxy origin.
+    Use {
+        url: String,
+        /// Store the origin for the current user only.
+        #[arg(long)]
+        user: bool,
+        #[arg(long)]
+        config_root: Option<PathBuf>,
+    },
     /// List source targets known to MirrorProxy.
     List {
         #[arg(long)]
@@ -86,12 +103,15 @@ enum SourcesCommand {
     /// Change a local source target to a mirror.
     Set {
         target: String,
+        /// MirrorProxy origin. Omit it to use the configured default.
+        #[arg(conflicts_with = "base_url")]
+        url: Option<String>,
         #[arg(long, default_value = "mirrorproxy")]
         mirror: String,
         #[arg(long)]
         base_url: Option<String>,
-        #[arg(long, default_value = "user")]
-        scope: String,
+        #[arg(long)]
+        scope: Option<String>,
         /// Override the root used to locate scoped configuration files.
         #[arg(long)]
         config_root: Option<PathBuf>,
@@ -125,16 +145,55 @@ enum SourcesCommand {
 
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
+        Command::Update(args) => update::run(args),
         Command::Setup(args) => setup::run(args),
         Command::Download(args) => download::run(args),
         Command::Mcp { base_url } => agent::run(&base_url, None),
         Command::Agent { base_url, command } => agent::run(&base_url, Some(command)),
-        command => run_sources_command(command.into_source_command()),
+        command => {
+            let command = command.into_source_command();
+            let check_for_update = match &command {
+                SourcesCommand::Set {
+                    dry_run,
+                    config_root,
+                    ..
+                }
+                | SourcesCommand::Reset {
+                    dry_run,
+                    config_root,
+                    ..
+                } => !dry_run && config_root.is_none(),
+                SourcesCommand::Use { config_root, .. } => config_root.is_none(),
+                _ => true,
+            };
+            run_sources_command(command)?;
+            if check_for_update {
+                update::maybe_notify();
+            }
+            Ok(())
+        }
     }
 }
 
 fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
     match command {
+        SourcesCommand::Use {
+            url,
+            user,
+            config_root,
+        } => {
+            // An explicit root models a Linux installation on every host.
+            let scope = if user || (!cfg!(target_os = "linux") && config_root.is_none()) {
+                CliSourceScope::User
+            } else {
+                CliSourceScope::System
+            };
+            let url = system::validated_base_url(&url)?;
+            let path = client_origin_path(scope, config_root.as_deref())?;
+            reject_symlink(&path)?;
+            write_atomic(&path, &format!("{url}\n"))?;
+            println!("default mirror: {url}");
+        }
         SourcesCommand::Systems => {
             println!("{:<17} {:<32} {:<10} versions", "code", "name", "format");
             for profile in catalog::systems::SYSTEM_DISTRIBUTIONS {
@@ -146,7 +205,10 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                     profile.versions
                 );
             }
-            println!("\nIndependent repositories: epel, docker-ce, gentoo-sync (set/reset with --scope system; set requires --replace-existing)");
+            println!("\nUse sudo mirrorproxy set system, or name a distribution such as debian.");
+            println!(
+                "Independent repositories: sudo mirrorproxy set epel | docker-ce | gentoo-sync"
+            );
         }
         SourcesCommand::List { category } => {
             let category = category
@@ -195,9 +257,11 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                 .as_deref()
                 .map(system::validated_base_url)
                 .transpose()?;
-            if matches!(target.as_str(), "epel" | "docker-ce" | "gentoo-sync") {
-                let base = base_url.as_deref().unwrap_or("https://mirror.example.com");
-                println!("target: {target}\ncommand: mirrorproxy set {target} --scope system --replace-existing --base-url {base}\nreset: mirrorproxy reset {target} --scope system");
+            if is_system_migration_target(&target) {
+                let origin = base_url
+                    .as_ref()
+                    .map_or(String::new(), |base| format!(" {base}"));
+                println!("target: {target}\ncommand: sudo mirrorproxy set {target}{origin}\nreset: sudo mirrorproxy reset {target} --scope system");
                 return Ok(());
             }
             let Some(target) = catalog::find_target(&target) else {
@@ -245,14 +309,15 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
 
             if !commands.is_empty() {
                 println!();
-                println!("commands:");
+                println!("manual setup commands and snippets:");
                 for (provider_code, command) in commands {
                     print_source_command(provider_code, &command);
                 }
             }
         }
         SourcesCommand::Set {
-            target,
+            mut target,
+            url,
             mirror,
             base_url,
             scope,
@@ -262,6 +327,37 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
             force,
             dry_run,
         } => {
+            let root = config_root.as_deref().unwrap_or_else(|| Path::new("/"));
+            let simple = base_url.is_none()
+                && scope.is_none()
+                && distribution.is_none()
+                && !replace_existing;
+            let default_scope = scope_for_target(&target);
+            let base_url = match url.or(base_url) {
+                None if simple && mirror == "mirrorproxy" => {
+                    let saved = read_client_origin(default_scope, config_root.as_deref())?.ok_or_else(|| {
+                        anyhow::anyhow!("no default MirrorProxy origin; run mirrorproxy set {target} <instance-url>")
+                    })?;
+                    Some(system::validated_base_url(saved.trim())?)
+                }
+                origin => origin,
+            };
+            if simple && target == "apt" {
+                target = apt::detect_distribution(root)?
+                    .split('/')
+                    .next()
+                    .unwrap()
+                    .to_string();
+            }
+            let replace_existing =
+                replace_existing || (simple && is_system_migration_target(&target));
+            let scope = scope.unwrap_or_else(|| {
+                if simple {
+                    scope_for_target(&target).as_str().to_string()
+                } else {
+                    "user".into()
+                }
+            });
             if matches!(
                 target.as_str(),
                 "system" | "epel" | "docker-ce" | "gentoo-sync"
@@ -278,13 +374,29 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                     "system migration requires the MirrorProxy provider"
                 );
                 anyhow::ensure!(distribution.is_none(), "--replace-existing preserves existing suites; do not combine it with --distribution");
-                let root = config_root.as_deref().unwrap_or_else(|| Path::new("/"));
                 let rollback = source_rollback_path("system", scope, root);
-                let plan =
-                    system::prepare(root, &target, base_url.as_deref())?.with_operation(&target);
-                plan.preview();
+                let plan = system::prepare(root, &target, base_url.as_deref(), simple)?
+                    .with_operation(&target);
+                if dry_run || !simple {
+                    plan.preview();
+                }
                 if !dry_run {
                     plan.apply(&rollback)?;
+                    if simple && config_root.is_none() {
+                        let profile = plan.profile().expect("system plans have a profile");
+                        if let Err(error) = system::refresh_indexes(profile) {
+                            let path = source_config_path("system", scope, root)?;
+                            let restored = apt::reset_if_managed("system", &path, &rollback, false, false)
+                                .context("package index refresh failed and automatic rollback could not finish; run mirrorproxy reset system --scope system")?;
+                            anyhow::ensure!(restored, "package index refresh failed and the rollback record was unavailable: {error}");
+                            return Err(error.context(
+                                "package index refresh failed; previous sources restored",
+                            ));
+                        }
+                    }
+                    if simple {
+                        println!("system sources updated");
+                    }
                 }
                 return Ok(());
             }
@@ -345,6 +457,7 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                     &locations.rollback_path,
                     distribution,
                     force,
+                    simple,
                 )?;
                 apt::preview_file(
                     &plan.config_path,
@@ -359,6 +472,7 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                     &locations.rollback_path,
                     distribution,
                     force,
+                    simple,
                 )?;
                 println!("config: {}", applied.config_path.display());
                 println!("rollback: {}", applied.rollback_path.display());
@@ -435,7 +549,26 @@ fn run_sources_command(command: SourcesCommand) -> anyhow::Result<()> {
                 print_source_command("default", &command.command);
                 return Ok(());
             }
-            let locations = source_locations(scope, config_root, command.target_code)?;
+            let mut locations = source_locations(scope, config_root.clone(), command.target_code)?;
+            if scope == CliSourceScope::User && config_root.is_none() && !dry_run {
+                if let Some(legacy) = legacy_user_config_path(command.target_code) {
+                    reject_symlink(&locations.rollback_path)?;
+                    if let Some(raw) = read_optional_file(&locations.rollback_path)? {
+                        let record: SourceRollback = serde_json::from_str(&raw)?;
+                        if record.config_path == legacy {
+                            locations.config_path = legacy;
+                        }
+                    }
+                }
+            }
+            if command.target_code == "apt" && scope == CliSourceScope::System {
+                let system_rollback = locations.rollback_path.with_file_name("system.json");
+                reject_symlink(&system_rollback)?;
+                anyhow::ensure!(
+                    !system_rollback.exists(),
+                    "a system migration is active; reset it before resetting APT"
+                );
+            }
             if apt::reset_if_managed(
                 command.target_code,
                 &locations.config_path,
@@ -569,6 +702,37 @@ fn default_user_source_config_path(target_code: &str) -> anyhow::Result<PathBuf>
         )
     })?;
 
+    if target_code == "go" {
+        if let Some(path) = std::env::var_os("GOENV").filter(|path| !path.is_empty()) {
+            anyhow::ensure!(
+                path != "off",
+                "Go has disabled its configuration file with GOENV=off"
+            );
+            return Ok(PathBuf::from(path));
+        }
+    }
+    if target_code == "cargo" {
+        let directory = std::env::var_os("CARGO_HOME")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".cargo"));
+        let legacy = directory.join("config");
+        return Ok(if legacy.exists() {
+            legacy
+        } else {
+            directory.join("config.toml")
+        });
+    }
+    if target_code == "homebrew" && cfg!(unix) {
+        return Ok(std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .map_or_else(
+                || home.join(".homebrew/brew.env"),
+                |root| root.join("homebrew/brew.env"),
+            ));
+    }
+
     #[cfg(windows)]
     {
         if target_code == "pdm" {
@@ -601,14 +765,27 @@ fn default_user_source_config_path(target_code: &str) -> anyhow::Result<PathBuf>
 
     #[cfg(target_os = "macos")]
     {
-        if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from) {
-            if let Some(path) = xdg_user_config_path(target_code, &config_home) {
-                return Ok(path);
+        let application_support = home.join("Library/Application Support");
+        if target_code == "pip" {
+            let directory = std::env::var_os("XDG_DATA_HOME")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| application_support.clone())
+                .join("pip");
+            return Ok(if directory.is_dir() {
+                directory.join("pip.conf")
+            } else {
+                home.join(".config/pip/pip.conf")
+            });
+        }
+        if target_code != "go" {
+            if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from) {
+                if let Some(path) = xdg_user_config_path(target_code, &config_home) {
+                    return Ok(path);
+                }
             }
         }
-        let application_support = home.join("Library/Application Support");
         let path = match target_code {
-            "pip" => application_support.join("pip/pip.conf"),
             "pdm" => application_support.join("pdm/config.toml"),
             "go" => application_support.join("go/env"),
             "composer" => home.join(".composer/config.json"),
@@ -645,6 +822,21 @@ fn xdg_user_config_path(target_code: &str, config_home: &Path) -> Option<PathBuf
         _ => return None,
     };
     Some(config_home.join(relative))
+}
+
+fn legacy_user_config_path(target: &str) -> Option<PathBuf> {
+    let home = user_home()?;
+    match target {
+        "cargo" => Some(home.join(".cargo/config.toml")),
+        "homebrew" if cfg!(target_os = "linux") => Some(home.join(".config/homebrew/brew.env")),
+        "pip" if cfg!(target_os = "macos") => {
+            Some(home.join("Library/Application Support/pip/pip.conf"))
+        }
+        "go" if cfg!(target_os = "macos") => std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .map(|path| path.join("go/env")),
+        _ => None,
+    }
 }
 
 fn user_state_directory() -> anyhow::Result<PathBuf> {
@@ -685,6 +877,35 @@ fn user_state_directory() -> anyhow::Result<PathBuf> {
     ))
 }
 
+fn client_origin_path(scope: CliSourceScope, root: Option<&Path>) -> anyhow::Result<PathBuf> {
+    match scope {
+        CliSourceScope::System => Ok(root
+            .unwrap_or_else(|| Path::new("/"))
+            .join("etc/mirrorproxy/client-origin")),
+        CliSourceScope::User => Ok(match root {
+            Some(root) => root.join(".local/state/mirrorproxy/sources"),
+            None => user_state_directory()?,
+        }
+        .join("client-origin")),
+    }
+}
+
+fn read_client_origin(
+    scope: CliSourceScope,
+    root: Option<&Path>,
+) -> anyhow::Result<Option<String>> {
+    let path = client_origin_path(scope, root)?;
+    reject_symlink(&path)?;
+    let saved = read_optional_file(&path)?;
+    if saved.is_some()
+        || scope == CliSourceScope::System
+        || !(cfg!(target_os = "linux") || root.is_some())
+    {
+        return Ok(saved);
+    }
+    read_client_origin(CliSourceScope::System, root)
+}
+
 fn user_home() -> Option<PathBuf> {
     if cfg!(windows) {
         std::env::var_os("USERPROFILE")
@@ -714,6 +935,7 @@ fn apply_source_set(
         &rollback_path,
         distribution,
         force,
+        false,
     )
 }
 
@@ -724,6 +946,7 @@ fn apply_source_set_at(
     rollback_path: &Path,
     distribution: Option<&str>,
     force: bool,
+    simple: bool,
 ) -> anyhow::Result<AppliedSource> {
     let rollback = prepare_source_set_at(
         command,
@@ -732,6 +955,7 @@ fn apply_source_set_at(
         rollback_path,
         distribution,
         force,
+        simple,
     )?;
     let rollback_content = serde_json::to_string_pretty(&rollback)?;
     write_atomic(rollback_path, &rollback_content)
@@ -758,6 +982,7 @@ fn prepare_source_set_at(
     rollback_path: &Path,
     distribution: Option<&str>,
     force: bool,
+    simple: bool,
 ) -> anyhow::Result<SourceRollback> {
     if scope == CliSourceScope::System {
         let migration_record = rollback_path.with_file_name("system.json");
@@ -781,11 +1006,21 @@ fn prepare_source_set_at(
     reject_symlink(config_path)?;
 
     let original_content = read_optional_file(config_path)?;
+    let merged = if simple && scope == CliSourceScope::User {
+        user_sources::merge(
+            command.target_code,
+            original_content.as_deref().unwrap_or_default(),
+            &command.repo_url,
+        )?
+    } else {
+        None
+    };
     if original_content
         .as_deref()
         .is_some_and(|content| !content.trim().is_empty())
         && !matches!(command.target_code, "github" | "docker")
         && !force
+        && merged.is_none()
     {
         anyhow::bail!(
             "{} already contains user configuration; rerun with --force to replace it after recording a rollback",
@@ -793,7 +1028,9 @@ fn prepare_source_set_at(
         );
     }
 
-    let expected_content = if command.target_code == "github" {
+    let expected_content = if let Some(merged) = merged {
+        merged
+    } else if command.target_code == "github" {
         if scope != CliSourceScope::User {
             anyhow::bail!("github supports only user-scope configuration writes");
         }
@@ -1312,6 +1549,22 @@ fn plan_source_set_command(
     })
 }
 
+fn is_system_migration_target(target: &str) -> bool {
+    matches!(target, "system" | "epel" | "docker-ce" | "gentoo-sync")
+        || catalog::systems::system_distribution(target).is_some()
+}
+
+fn scope_for_target(target: &str) -> CliSourceScope {
+    if is_system_migration_target(target)
+        || catalog::find_target(target)
+            .is_some_and(|target| target.default_scope == catalog::SourceScope::System)
+    {
+        CliSourceScope::System
+    } else {
+        CliSourceScope::User
+    }
+}
+
 fn plan_source_reset_command(target: &str) -> anyhow::Result<PlannedResetCommand> {
     let target = catalog::find_target(target)
         .ok_or_else(|| anyhow::anyhow!("unknown source target '{target}'"))?;
@@ -1335,16 +1588,16 @@ fn mirrorproxy_source_url(base_url: Option<&str>, source_path: &str) -> String {
 
 fn source_config_command(target_code: &str, repo_url: &str) -> Option<String> {
     if target_code == "huggingface" {
-        // Guidance only: never persist shell environment variables or tokens.
+        // Emit setup guidance without editing the user's environment.
         let url = repo_url.trim_end_matches('/');
         return Some(if cfg!(windows) {
             format!(
-                "$env:HF_ENDPOINT='{}'; $env:HF_HUB_DISABLE_XET='1'; hf download gpt2 config.json",
+                "[Environment]::SetEnvironmentVariable('HF_ENDPOINT', '{}', 'User')\n[Environment]::SetEnvironmentVariable('HF_HUB_DISABLE_XET', '1', 'User')",
                 url.replace('\'', "''")
             )
         } else {
             format!(
-                "HF_ENDPOINT='{}' HF_HUB_DISABLE_XET=1 hf download gpt2 config.json",
+                "export HF_ENDPOINT='{}'\nexport HF_HUB_DISABLE_XET=1",
                 url.replace('\'', "'\"'\"'")
             )
         });
@@ -1358,9 +1611,9 @@ fn source_config_command(target_code: &str, repo_url: &str) -> Option<String> {
 
 fn source_reset_command(target_code: &str) -> Option<String> {
     let command = match target_code {
-        "npm" => "npm config delete registry",
+        "npm" => "npm config delete registry --location=global",
         "bun" => "Restore the previous Bun ~/.bunfig.toml registry setting",
-        "pip" => "pip config unset global.index-url",
+        "pip" => "pip config --global unset global.index-url",
         "pdm" => "Restore the previous PDM repository configuration",
         "uv" => "Restore the previous uv index-url configuration",
         "cargo" => {
@@ -1379,7 +1632,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
         "lua" => "Restore the previous LuaRocks rocks_servers configuration",
         "homebrew" => "Restore the previous Homebrew user environment file",
         "nix" => "Restore the previous Nix user configuration",
-        "composer" => "composer config --unset repos.packagist",
+        "composer" => "composer config --global --unset repos.packagist",
         "docker" => {
             "Remove the registry-mirrors entry from Docker daemon config and restart Docker"
         }
@@ -1394,7 +1647,7 @@ fn source_reset_command(target_code: &str) -> Option<String> {
 fn template_repo_url(target_code: &str, repo_url: &str) -> Option<String> {
     match target_code {
         "cargo" => Some(cargo_registry_url(repo_url)),
-        "docker" => Some(docker_registry_host(repo_url)?),
+        "docker" => docker_registry_mirror_url(repo_url).ok(),
         _ => Some(repo_url.to_string()),
     }
 }
@@ -1461,18 +1714,6 @@ fn cargo_registry_url(repo_url: &str) -> String {
     } else {
         format!("sparse+{repo_url}")
     }
-}
-
-fn docker_registry_host(repo_url: &str) -> Option<String> {
-    let without_scheme = repo_url
-        .strip_prefix("https://")
-        .or_else(|| repo_url.strip_prefix("http://"))?;
-    Some(
-        without_scheme
-            .trim_end_matches('/')
-            .trim_end_matches("/v2")
-            .to_string(),
-    )
 }
 
 #[cfg(test)]
@@ -1568,7 +1809,7 @@ mod tests {
                     assert_eq!(target, "bun");
                     assert_eq!(mirror, "mirrorproxy");
                     assert_eq!(base_url.as_deref(), Some("https://sina.dev"));
-                    assert_eq!(scope, "user");
+                    assert_eq!(scope.as_deref(), Some("user"));
                 }
                 command => panic!("expected set command, got {command:?}"),
             }
@@ -1606,11 +1847,11 @@ mod tests {
     fn source_config_command_generates_copyable_commands() {
         assert_eq!(
             source_config_command("npm", "https://mirror.example/npm/").unwrap(),
-            "npm config set registry https://mirror.example/npm/"
+            "npm config set registry https://mirror.example/npm/ --location=global"
         );
         assert_eq!(
             source_config_command("pip", "https://mirror.example/pypi/simple/").unwrap(),
-            "pip config set global.index-url https://mirror.example/pypi/simple/"
+            "pip config --global set global.index-url https://mirror.example/pypi/simple/"
         );
         assert_eq!(
             source_config_command("go", "https://mirror.example/goproxy/").unwrap(),
@@ -1632,11 +1873,11 @@ mod tests {
         );
         assert_eq!(
             source_config_command("cpan", "https://mirror.example/cpan/").unwrap(),
-            "cpanm --mirror https://mirror.example/cpan/ --mirror-only <module>"
+            "export PERL_CPANM_OPT='--mirror https://mirror.example/cpan/ --mirror-only'"
         );
         assert_eq!(
             source_config_command("composer", "https://mirror.example/composer/").unwrap(),
-            "composer config repo.packagist composer https://mirror.example/composer/"
+            "composer config --global repo.packagist composer https://mirror.example/composer/"
         );
         assert_eq!(
             source_config_command("github", "https://mirror.example/https://github.com/").unwrap(),
@@ -1664,20 +1905,16 @@ mod tests {
                 .contains("\nregistry = \"sparse+https://mirror.example/crates-index/\"")
         );
         assert_eq!(
-            docker_registry_host("https://mirror.example/v2/").unwrap(),
-            "mirror.example"
-        );
-        assert_eq!(
             source_config_command("docker", "https://mirror.example/v2/").unwrap(),
-            "docker pull mirror.example/nginx"
+            "{\n  \"registry-mirrors\": [\"https://mirror.example\"]\n}"
         );
         assert_eq!(
             source_config_command("homebrew", "https://mirror.example/homebrew").unwrap(),
-            "export HOMEBREW_BOTTLE_DOMAIN=https://mirror.example/homebrew"
+            "HOMEBREW_BOTTLE_DOMAIN=https://mirror.example/homebrew"
         );
         assert_eq!(
             source_config_command("guix", "https://mirror.example/guix/").unwrap(),
-            "guix build --substitute-urls=https://mirror.example/guix/ <package>"
+            "(substitute-urls (cons \"https://mirror.example/guix/\" %default-substitute-urls))"
         );
     }
 
@@ -1688,11 +1925,10 @@ mod tests {
         assert_eq!(planned.target_code, "huggingface");
         assert_eq!(planned.repo_url, "https://mirror.example/huggingface");
         assert!(planned.command.contains("HF_HUB_DISABLE_XET"));
-        assert!(planned.command.contains("hf download gpt2 config.json"));
         assert!(planned.command.starts_with(if cfg!(windows) {
-            "$env:HF_ENDPOINT="
+            "[Environment]::SetEnvironmentVariable('HF_ENDPOINT'"
         } else {
-            "HF_ENDPOINT="
+            "export HF_ENDPOINT="
         }));
         let target = catalog::find_target("hf").unwrap();
         assert!(!target.supported_modes.contains(&SourceMode::LocalConfig));
@@ -1738,14 +1974,14 @@ mod tests {
         assert_eq!(npm.repo_url, "https://mirror.example/npm/");
         assert_eq!(
             npm.command,
-            "npm config set registry https://mirror.example/npm/"
+            "npm config set registry https://mirror.example/npm/ --location=global"
         );
 
         let pip = plan_source_set_command("pip", "tuna", None).unwrap();
         assert_eq!(pip.provider_code, "tuna");
         assert_eq!(
             pip.command,
-            "pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple"
+            "pip config --global set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple"
         );
 
         for target_code in ["lua", "homebrew", "nix"] {
@@ -1763,7 +1999,7 @@ mod tests {
     fn plan_source_reset_command_builds_dry_run_commands() {
         let npm = plan_source_reset_command("npm").unwrap();
         assert_eq!(npm.target_code, "npm");
-        assert_eq!(npm.command, "npm config delete registry");
+        assert_eq!(npm.command, "npm config delete registry --location=global");
 
         let bun = plan_source_reset_command("bun").unwrap();
         assert_eq!(bun.target_code, "bun");

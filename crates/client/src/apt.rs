@@ -416,6 +416,27 @@ impl AptPlan {
         self
     }
 
+    pub(super) fn profile(&self) -> Option<&'static catalog::systems::SystemDistribution> {
+        self.system_profile
+            .as_deref()
+            .and_then(catalog::systems::system_distribution)
+    }
+
+    pub(super) fn verify_legacy_apt_input(
+        &self,
+        path: &Path,
+        expected: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.apt_files
+                .iter()
+                .find(|file| file.path == path)
+                .is_some_and(|file| !file.was_missing && file.original == expected),
+            "the previously generated APT source changed while planning the migration"
+        );
+        Ok(())
+    }
+
     pub(super) fn preview(&self) {
         if let Some(profile) = &self.system_profile {
             println!("system: {profile}; existing release, architecture and signature settings are preserved");
