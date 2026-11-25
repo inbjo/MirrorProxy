@@ -218,6 +218,14 @@ pub(super) fn admin_config_value(mut config: Config) -> serde_json::Value {
         serde_json::json!(crate::config::additional_system_repositories()
             .map(|repository| repository.code)
             .collect::<Vec<_>>());
+    let client_endpoints: std::collections::BTreeMap<_, _> = value["upstreams"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, upstream)| upstream.is_string())
+        .filter_map(|(name, _)| upstream_client_endpoint(name).map(|endpoint| (name, endpoint)))
+        .collect();
+    value["upstream_client_endpoints"] = serde_json::json!(client_endpoints);
     if let Some(outbound_proxy) = value
         .get_mut("outbound_proxy")
         .and_then(serde_json::Value::as_object_mut)
@@ -231,4 +239,99 @@ pub(super) fn admin_config_value(mut config: Config) -> serde_json::Value {
         alerts.insert("has_webhook_url".into(), has_alert_webhook.into());
     }
     value
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+enum UpstreamClientEndpoint {
+    Url(&'static str),
+    Repository(String),
+    DockerMirror,
+    ImagePrefix(&'static str),
+    Internal,
+}
+
+fn upstream_client_endpoint(name: &str) -> Option<UpstreamClientEndpoint> {
+    use UpstreamClientEndpoint as Endpoint;
+    let target = match name {
+        "pypi_files" | "crates_api" => return Some(Endpoint::Internal),
+        "github_raw" => return Some(Endpoint::Url("/https://raw.githubusercontent.com/")),
+        "docker_hub" => return Some(Endpoint::DockerMirror),
+        "alpine" | "openwrt" | "termux" | "debian" | "ubuntu" | "fedora" | "archlinux"
+        | "opensuse" | "void" | "gentoo" | "freebsd" => {
+            return Some(Endpoint::Repository(format!("/os/{name}")))
+        }
+        "packagist" => "composer",
+        "opam" => "ocaml",
+        "go_proxy" => "go",
+        "luarocks" => "lua",
+        "pub_repository" => "pub",
+        "crates_index" => "cargo",
+        "pypi_simple" => "pip",
+        name => name,
+    };
+    if let Some(registry) = catalog::CONTAINER_REGISTRIES
+        .iter()
+        .find(|registry| registry.code == name && !registry.legacy)
+    {
+        return Some(Endpoint::ImagePrefix(registry.host));
+    }
+    catalog::TARGET_SOURCES
+        .iter()
+        .find(|entry| entry.target_code == target && entry.provider_code == "mirrorproxy")
+        .map(|entry| Endpoint::Url(entry.repo_url))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admin_config_classifies_every_upstream_and_uses_client_specific_entries() {
+        let config = admin_config_value(Config::default());
+        let endpoints = &config["upstream_client_endpoints"];
+        for (name, _) in config["upstreams"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, entry)| entry.is_string())
+        {
+            assert!(
+                endpoints.get(name).is_some(),
+                "missing client entry for {name}"
+            );
+        }
+        for (name, path) in [
+            ("winget", "/winget/cache"),
+            ("npm", "/npm/"),
+            ("pypi_simple", "/pypi/simple/"),
+            ("crates_index", "/crates-index/"),
+            ("nuget", "/nuget/v3/index.json"),
+        ] {
+            assert_eq!(
+                endpoints[name],
+                serde_json::json!({"kind":"url","value":path})
+            );
+        }
+        assert_eq!(
+            endpoints["pypi_files"],
+            serde_json::json!({"kind":"internal"})
+        );
+        assert_eq!(
+            endpoints["crates_api"],
+            serde_json::json!({"kind":"internal"})
+        );
+        assert_eq!(
+            endpoints["debian"],
+            serde_json::json!({"kind":"repository","value":"/os/debian"})
+        );
+        assert_eq!(
+            endpoints["docker_hub"],
+            serde_json::json!({"kind":"docker_mirror"})
+        );
+        assert_eq!(
+            endpoints["ghcr"],
+            serde_json::json!({"kind":"image_prefix","value":"ghcr.io"})
+        );
+    }
 }

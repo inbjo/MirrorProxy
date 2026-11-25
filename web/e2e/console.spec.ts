@@ -72,7 +72,8 @@ const adminConfig = {
   listen_addr: '127.0.0.1:3000',
   management: { enabled: false, listen_addr: '127.0.0.1:3001' },
   metrics: { local_only: true },
-  upstreams: { npm: 'https://registry.npmjs.org', additional_os: { clickhouse: 'https://packages.clickhouse.com/deb' } },
+  built_in_os_repositories: ['linuxmint'],
+  upstreams: { npm: 'https://registry.npmjs.org', additional_os: { linuxmint: 'https://mirrors.edge.kernel.org/linuxmint-packages', clickhouse: 'https://packages.clickhouse.com/deb', msys2: 'https://repo.msys2.org' } },
   timeout: { request_secs: 30 },
   upstream_selection: { strategy: 'ordered', failure_threshold: 3, cooldown_secs: 30 },
   alerts: { enabled: false, webhook_url: '', has_webhook_url: false, email_enabled: false, email_recipients: [], quota_percent: 80, source_failures: 3, cooldown_secs: 3600 },
@@ -425,7 +426,7 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await page.route('**/admin/api/config', async route => {
     if (route.request().method() === 'PUT') {
       savedConfig = route.request().postDataJSON() as typeof adminConfig
-      persistedConfig = { ...savedConfig, outbound_proxy: { ...savedConfig.outbound_proxy, password: null, has_password: Boolean(savedConfig.outbound_proxy.password) } }
+      persistedConfig = { ...savedConfig, outbound_proxy: { ...savedConfig.outbound_proxy, password: null, has_password: Boolean(savedConfig.outbound_proxy.password) || savedConfig.outbound_proxy.has_password } }
       await route.fulfill({ json: { config: persistedConfig, restart_required: ['listen_addr'] } })
       return
     }
@@ -453,26 +454,62 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await expect(page.getByText('These fields apply after restart: listen_addr')).toBeVisible()
 
   await page.getByRole('link', { name: 'Advanced', exact: true }).click()
-  await page.getByText('Edit upstream endpoints').click()
-  const deleteSource = page.getByRole('button', { name: 'Delete custom source clickhouse' })
-  await expect(deleteSource).toBeVisible()
-  const deleteDimensions = () => deleteSource.evaluate((button) => ({
-    hitArea: button.getBoundingClientRect().height,
-    width: button.getBoundingClientRect().width,
-    face: button.querySelector('.custom-source-delete-face')?.getBoundingClientRect().height,
-    onRight: Math.abs(button.getBoundingClientRect().right - button.closest('.custom-source-row')!.getBoundingClientRect().right) < 20,
-  }))
-  for (const width of [1280, 390]) {
+  await page.getByRole('tab', { name: 'Mirror sources' }).click()
+  const sourceTab = page.getByRole('tabpanel')
+  await expect(sourceTab.getByRole('table')).toHaveCount(1)
+  const repositories = sourceTab.getByRole('table')
+  await expect(sourceTab.getByText(/enter one HTTP\(S\) URL per line/)).toBeVisible()
+  const fixed = repositories.getByRole('row', { name: /linuxmint/ })
+  await expect(repositories.getByRole('row', { name: /^npm/ })).toBeVisible()
+  await expect(fixed.getByText('Fixed system repository', { exact: true })).toBeVisible()
+  await expect(fixed.getByRole('button', { name: /Delete/ })).toHaveCount(0)
+  await expect(repositories.getByRole('button', { name: 'Delete repository msys2', exact: true })).toBeVisible()
+  const deleteSource = repositories.getByRole('button', { name: 'Delete repository clickhouse', exact: true })
+  const deleteDimensions = () => deleteSource.evaluate(button => {
+    const edit = button.previousElementSibling!.getBoundingClientRect()
+    const remove = button.getBoundingClientRect()
+    const cell = button.closest('td')!.getBoundingClientRect()
+    return { height: remove.height, width: remove.width, aligned: Math.abs(remove.top - edit.top) < 1, fitsCell: remove.right <= cell.right }
+  })
+  for (const width of [1280, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
-    expect(await deleteDimensions()).toEqual({ hitArea: 44, width: 44, face: 32, onRight: true })
+    expect(await deleteDimensions()).toEqual({ height: 44, width: 44, aligned: true, fitsCell: true })
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
   }
   await page.setViewportSize({ width: 1280, height: 720 })
   await deleteSource.click()
-  const deleteDialog = page.getByRole('dialog')
-  await expect(deleteDialog).toBeVisible()
-  await deleteDialog.getByRole('button', { name: 'Cancel' }).click()
-  await expect(page.getByLabel('Upstream URL for clickhouse')).toBeVisible()
+  await confirmDialog(page, 'Cancel')
+  await expect(repositories.getByText('https://packages.clickhouse.com/deb', { exact: true })).toBeVisible()
+  await fixed.getByRole('button', { name: 'Edit repository linuxmint', exact: true }).click()
+  const editRepository = page.getByRole('dialog', { name: /Edit upstream URLs/ })
+  await expect(editRepository.getByRole('textbox', { name: 'Source name' })).not.toBeEditable()
+  const addresses = editRepository.getByRole('textbox', { name: 'Upstream URLs' })
+  await expect(addresses).toHaveAccessibleDescription(/per line.*commas.*order/)
+  await addresses.fill('https://first.example/linuxmint\nhttps://second.example/linuxmint, https://third.example/linuxmint')
+  await editRepository.getByRole('button', { name: 'Apply to draft' }).click()
+  await expect(editRepository).toBeHidden()
+  await expect(fixed.locator('ol li')).toHaveText([
+    'https://first.example/linuxmint', 'https://second.example/linuxmint', 'https://third.example/linuxmint',
+  ])
+  await page.getByRole('button', { name: 'Save configuration' }).click()
+  await expect.poll(() => savedConfig?.upstreams.additional_os.linuxmint).toBe('https://first.example/linuxmint,https://second.example/linuxmint,https://third.example/linuxmint')
+  await expect(page.getByRole('button', { name: 'Save configuration' })).toBeDisabled()
+  await page.getByRole('tab', { name: 'Proxy network' }).click()
   await page.getByLabel('Enable mirror upstream proxy').check()
+  await page.getByLabel('Proxy URL').fill('socks5h://proxy.example:1080')
+  await page.getByLabel('Username (optional)').fill('proxy-user')
+  await page.getByLabel('Password (optional)').fill('proxy-password')
+  await page.getByLabel('Bypass proxy for').fill('localhost, 127.0.0.1')
+  await page.getByRole('tab', { name: 'DoH', exact: true }).click()
+  await confirmDialog(page, 'Save and switch')
+  await expect.poll(() => savedConfig?.outbound_proxy).toEqual({
+    enabled: true,
+    url: 'socks5h://proxy.example:1080',
+    no_proxy: ['localhost', '127.0.0.1'],
+    username: 'proxy-user',
+    password: 'proxy-password',
+    has_password: false,
+  })
   await page.getByLabel('Enable DoH proxy').check()
   await expect(page.getByLabel('Client URL', { exact: true })).toHaveValue('https://updated.example/dns-query')
   const dohUpstreams = page.getByRole('combobox', { name: 'Upstream resolvers' })
@@ -497,27 +534,16 @@ test('signs in and saves an updated runtime configuration', async ({ page }) => 
   await expect.poll(() => dohSettings.locator('.doh-upstreams').evaluate(element => element.scrollWidth <= element.clientWidth && element.getBoundingClientRect().right <= window.innerWidth)).toBe(true)
   await dohSettings.screenshot({ path: test.info().outputPath('doh-upstreams-mobile.png') })
   await page.setViewportSize({ width: 1280, height: 720 })
-  await page.keyboard.press('Escape')
-  await page.getByLabel('Proxy URL').fill('socks5h://proxy.example:1080')
-  await page.getByLabel('Username (optional)').fill('proxy-user')
-  await page.getByLabel('Password (optional)').fill('proxy-password')
-  await page.getByLabel('Bypass proxy for').fill('localhost, 127.0.0.1')
   await page.getByRole('button', { name: 'Save configuration' }).click()
-  await expect.poll(() => savedConfig?.outbound_proxy).toEqual({
-    enabled: true,
-    url: 'socks5h://proxy.example:1080',
-    no_proxy: ['localhost', '127.0.0.1'],
-    username: 'proxy-user',
-    password: 'proxy-password',
-    has_password: false,
-  })
-  await expect(page.getByLabel('Password (optional)')).toHaveAttribute('placeholder', 'Saved; leave blank to keep')
   await expect.poll(() => savedConfig?.doh).toEqual({ enabled: true, upstreams: ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query', 'https://dns.alidns.com/dns-query', 'https://resolver.example/custom/dns'] })
+  await page.getByRole('tab', { name: 'Proxy network' }).click()
+  await expect(page.getByLabel('Password (optional)')).toHaveAttribute('placeholder', 'Saved; leave blank to keep')
   await page.reload()
   await page.locator('.admin-username-field input').fill('admin')
   await page.getByLabel('Administrator password').fill('correct-password')
   await page.getByRole('button', { name: 'Sign in' }).click()
   await page.getByRole('link', { name: 'Advanced', exact: true }).click()
+  await page.getByRole('tab', { name: 'DoH', exact: true }).click()
   await expect(page.getByLabel('Enable DoH proxy')).toBeChecked()
 })
 
@@ -572,14 +598,23 @@ test('operates the v1.3 cache, alerts, and adaptive upstream controls', async ({
   const siteFieldTops = await page.locator('.site-settings-fields > label, .site-settings-fields > div').evaluateAll((labels) => labels.slice(0, 2).map((label) => label.querySelector('input')!.getBoundingClientRect().top))
   expect(Math.abs(siteFieldTops[0] - siteFieldTops[1])).toBeLessThanOrEqual(1)
   await page.getByRole('link', { name: 'Advanced', exact: true }).click()
+  await page.getByRole('tab', { name: 'HTTPS certificates' }).click()
   const nativeHttps = page.getByLabel('Enable native HTTPS')
   await expect(nativeHttps).toBeVisible()
   await nativeHttps.check()
   await expect(nativeHttps).toHaveCSS('width', '20px')
   await expect(page.getByLabel('Permanently redirect HTTP to HTTPS')).toHaveCSS('width', '20px')
+  await page.getByRole('tab', { name: 'Mirror sources' }).click()
+  await confirmDialog(page, 'Keep draft and switch')
   await expect(page.getByRole('heading', { name: 'Upstream selection' })).toBeVisible()
-  await selectChoice(page, page.getByRole('combobox', { name: 'Strategy', exact: true }), 'Adaptive')
-  await expect(page.getByLabel('Strategy').locator('xpath=ancestor::span[contains(@class, "choice-field")]')).toBeVisible()
+  const strategy = page.getByRole('combobox', { name: 'Strategy', exact: true })
+  await strategy.click()
+  await expect(page.getByRole('option', { name: 'Adaptive', exact: true })).toBeVisible()
+  await strategy.press('ArrowDown')
+  await strategy.press('Enter')
+  await expect(strategy.locator('xpath=ancestor::span[contains(@class, "choice-field")]')).toContainText('Adaptive')
+  await page.getByRole('tab', { name: 'Runtime configuration' }).click()
+  await confirmDialog(page, 'Keep draft and switch')
   await expect(page.getByText('2 entries · 2.0 KB / 256.0 MB')).toBeVisible()
   await page.getByRole('button', { name: 'Purge cache' }).click()
   await confirmDialog(page, 'Purge cache')
@@ -615,6 +650,7 @@ test('localizes the administrator tabs and primary settings in Chinese', async (
   await page.locator('button[aria-description="管理员账号与密码说明"]').focus()
   await expect(credentialsHelp).toBeVisible()
   await page.getByRole('link', { name: '高级设置', exact: true }).click()
+  await page.getByRole('tab', { name: '镜像源', exact: true }).click()
   await page.getByRole('combobox', { name: '策略', exact: true }).click()
   await expect(page.getByRole('option')).toHaveText(['顺序优先', '自适应'])
 })
@@ -1436,7 +1472,7 @@ test('keeps administrator actions and health tables usable across themes and wid
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toHaveCount(0)
   const header = page.locator('.ant-pro-global-header')
   await expect(header.locator('.ant-pro-global-header-header-actions-item')).toHaveCount(3)
-  await page.getByRole('button', { name: 'Theme', exact: true }).hover()
+  await page.getByRole('button', { name: 'Appearance', exact: true }).hover()
   await header.screenshot({ path: test.info().outputPath('admin-header-hover.png'), animations: 'disabled' })
   await page.locator('.source-health-summary').screenshot({ path: test.info().outputPath('mirror-health-summary.png'), animations: 'disabled' })
   await page.getByRole('button', { name: 'Account menu' }).click()
@@ -1468,6 +1504,176 @@ test('keeps administrator actions and health tables usable across themes and wid
       await page.locator('.source-health-table-wrap').screenshot({ path: test.info().outputPath(`health-table-${theme}-${width}.png`), animations: 'disabled' })
     }
   }
+})
+
+test('persists appearance preferences and keeps every top navigation item reachable', async ({ page }) => {
+  await mockAdminLayoutApis(page)
+  await page.addInitScript(() => {
+    if (localStorage.getItem('mirrorproxy.admin.layout') === null) {
+      localStorage.setItem('mirrorproxy.admin.appearance', JSON.stringify({
+        theme: 'dark', layout: 'mix', showHeader: false, primaryColor: '#ff9900',
+      }))
+    }
+  })
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/admin/overview')
+  await page.getByRole('button', { name: 'Appearance' }).click()
+  const drawer = page.getByRole('dialog', { name: 'Appearance' })
+  await expect(drawer.getByRole('group').filter({ has: page.getByRole('radio') })).toHaveCount(2)
+  await expect(drawer.getByRole('radio', { name: 'Dark', exact: true })).toBeChecked()
+  await expect(drawer.getByRole('switch')).toHaveCount(0)
+  expect(await page.evaluate(() => localStorage.getItem('mirrorproxy.admin.appearance'))).toBeNull()
+  await drawer.getByRole('radio', { name: 'Sidebar' }).check()
+  await expect(page.locator('.console-workspace')).toHaveClass(/ant-pro-layout-side/)
+  await drawer.getByRole('button', { name: 'Close' }).click()
+  await page.getByRole('button', { name: 'Appearance' }).click()
+  await drawer.getByRole('radio', { name: 'Top bar' }).check()
+  await drawer.getByRole('group', { name: 'Page theme' }).getByRole('radio', { name: 'Dark', exact: true }).check()
+  await drawer.getByRole('button', { name: 'Close' }).click()
+  await page.reload()
+  await expect(page.locator('.console-workspace')).toHaveClass(/ant-pro-layout-top/)
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  const overflow = page.locator('.ant-menu-overflow-item-rest:visible')
+  await expect(overflow).toBeVisible()
+  await overflow.hover()
+  await page.getByRole('link', { name: 'Audit log', exact: true }).click()
+  await expect(page).toHaveURL(/\/admin\/audit$/)
+
+  await page.setViewportSize({ width: 390, height: 900 })
+  await page.locator('.ant-pro-global-header-collapsed-button').click()
+  await page.getByRole('link', { name: 'Advanced', exact: true }).click()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('tab', { name: 'Proxy network' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(390)
+  await page.getByRole('button', { name: 'Appearance' }).click()
+  await drawer.getByRole('button', { name: 'Restore defaults' }).click()
+  await expect(drawer.getByRole('radio', { name: 'Mixed' })).toBeChecked()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+})
+
+test('saves advanced tabs independently and edits ordered upstreams from pasted URLs', async ({ page }) => {
+  await mockAdminLayoutApis(page)
+  const extraRepositories = Object.fromEntries(Array.from({ length: 12 }, (_, index) => [`repository-${index}`, `https://repository-${index}.example`]))
+  let stored = { ...adminConfig, upstreams: {
+    ...adminConfig.upstreams,
+    go_proxy: 'https://proxy.golang.org',
+    additional_os: { ...adminConfig.upstreams.additional_os, ...extraRepositories },
+  } }
+  const writes: string[] = []
+  let rejectWrite = true
+  await page.route('**/admin/api/config', async route => {
+    if (route.request().method() === 'PUT') {
+      writes.push(route.request().headers()['if-match'])
+      if (rejectWrite) {
+        await route.fulfill({ status: 400, json: { error: 'invalid configuration' } })
+        return
+      }
+      stored = route.request().postDataJSON() as typeof stored
+      await route.fulfill({ headers: { etag: `"${writes.length}"` }, json: { config: stored, restart_required: [] } })
+      return
+    }
+    await route.fulfill({ headers: { etag: '"0"' }, json: stored })
+  })
+  await page.goto('/admin/access')
+  await page.getByLabel('Total traffic (GB)', { exact: true }).fill('725')
+  await page.getByRole('link', { name: 'Advanced', exact: true }).click()
+  const runtime = page.getByRole('tab', { name: /Runtime configuration/ })
+  const sources = page.getByRole('tab', { name: /Mirror sources/ })
+  await runtime.click()
+  const retention = page.getByLabel(/retention/i, { exact: false })
+  await retention.fill('46')
+  await sources.click()
+  await confirmDialog(page, 'Stay here')
+  await expect(runtime).toHaveAttribute('aria-selected', 'true')
+  await sources.click()
+  await confirmDialog(page, 'Save and switch')
+  await expect(runtime).toHaveAttribute('aria-selected', 'true')
+  await expect(retention).toHaveValue('46')
+  await sources.click()
+  await confirmDialog(page, 'Keep draft and switch')
+  expect(writes).toEqual(['"0"'])
+
+  const upstreamTable = page.getByRole('tabpanel').getByRole('table')
+  await expect(upstreamTable.getByRole('row')).toHaveCount(1 + 2 + 3 + 12)
+  await expect(upstreamTable.getByRole('row', { name: /^repository-11/ })).toBeVisible()
+  await page.getByRole('textbox', { name: 'Filter sources' }).fill('npm')
+  await expect(page.getByRole('row', { name: /^go_proxy/ })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Edit upstream URLs for npm' }).click()
+  const editor = page.getByRole('dialog', { name: /Edit upstream URLs/ })
+  const upstreams = editor.getByRole('textbox', { name: 'Upstream URLs' })
+  await expect(upstreams).toHaveValue(adminConfig.upstreams.npm)
+  await upstreams.fill('ftp://bad.example')
+  await editor.getByRole('button', { name: 'Apply to draft' }).click()
+  await expect(editor.getByRole('alert')).toContainText('Address 1')
+  const input = 'https://first.example/npm/\n\nhttps://second.example/npm/, https://third.example/npm/'
+  await upstreams.fill(input)
+  await editor.getByRole('button', { name: 'Apply to draft' }).click()
+  await expect(editor).toBeHidden()
+  await expect(page.getByRole('row', { name: /^npm/ }).locator('ol li')).toHaveText(input.split(/[,\n]+/).map(url => url.trim()))
+  expect(writes).toHaveLength(1)
+  rejectWrite = false
+  await page.getByRole('button', { name: 'Save configuration' }).click()
+  await expect.poll(() => stored.upstreams.npm).toBe(input.split(/[,\n]+/).map(url => url.trim()).join(','))
+  expect(stored.quota).toEqual(adminConfig.quota)
+  await runtime.click()
+  await expect(retention).toHaveValue('46')
+  await page.getByRole('button', { name: 'Save configuration' }).click()
+  await expect.poll(() => stored.quota.request_event_retention_days).toBe(46)
+  expect(stored.quota.monthly_gb).toBe(adminConfig.quota.monthly_gb)
+  await page.getByRole('link', { name: 'Access & quotas', exact: true }).click()
+  await expect(page.getByLabel('Total traffic (GB)', { exact: true })).toHaveValue('725')
+  expect(writes).toEqual(['"0"', '"0"', '"2"'])
+})
+
+test('labels source types and copies client proxy addresses without exposing internal upstreams as client entries', async ({ page, context }) => {
+  await mockAdminLayoutApis(page)
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.route('**/admin/api/config', route => route.fulfill({ json: {
+    ...adminConfig,
+    public_base_url: 'https://client.example:8443',
+    enabled_proxies: [...adminConfig.enabled_proxies, 'winget'],
+    upstreams: {
+      ...adminConfig.upstreams, winget: 'https://winget.example/cache', pypi_files: 'https://files.pythonhosted.org',
+      docker_hub: 'https://registry-1.docker.io', ghcr: 'https://ghcr.io',
+    },
+    upstream_client_endpoints: {
+      npm: { kind: 'url', value: '/npm/' },
+      winget: { kind: 'url', value: '/winget/cache' },
+      pypi_files: { kind: 'internal' },
+      docker_hub: { kind: 'docker_mirror' },
+      ghcr: { kind: 'image_prefix', value: 'ghcr.io' },
+    },
+  } }))
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/admin/advanced')
+  await page.getByRole('tab', { name: 'Mirror sources' }).click()
+  const table = page.getByRole('tabpanel').getByRole('table')
+  await expect(table.getByRole('columnheader', { name: 'Client proxy address' })).toBeVisible()
+  const npm = table.getByRole('row', { name: /^npm/ })
+  const winget = table.getByRole('row', { name: /^winget/ })
+  const files = table.getByRole('row', { name: /^pypi_files/ })
+  await expect(npm.getByText('Built-in proxy', { exact: true })).toBeVisible()
+  await expect(npm.getByText('https://registry.npmjs.org', { exact: true })).toBeVisible()
+  await expect(npm.getByText('https://client.example:8443/npm/', { exact: true })).toBeVisible()
+  await expect(winget.getByText('https://client.example:8443/winget/cache', { exact: true })).toBeVisible()
+  await expect(files.getByText('Internal upstream', { exact: true })).toBeVisible()
+  await expect(files.getByText('Used internally by the proxy')).toBeVisible()
+  await expect(files.getByRole('button', { name: /Copy client address/ })).toHaveCount(0)
+  await expect(table.getByRole('row', { name: /^linuxmint/ }).getByText('Fixed system repository')).toBeVisible()
+  await expect(table.getByRole('row', { name: /^msys2/ }).getByText('Removable repository')).toBeVisible()
+  await expect(table.getByRole('row', { name: /^docker_hub/ }).getByText('https://client.example:8443', { exact: true })).toBeVisible()
+  const ghcr = table.getByRole('row', { name: /^ghcr/ })
+  await expect(ghcr.getByText('Image name prefix')).toBeVisible()
+  await expect(ghcr.getByText('client.example:8443/ghcr.io/', { exact: true })).toBeVisible()
+  await expect(page.getByRole('checkbox', { name: 'winget', exact: true })).toBeChecked()
+  await winget.getByRole('button', { name: 'Copy client address for winget' }).click()
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('https://client.example:8443/winget/cache')
+
+  await page.setViewportSize({ width: 320, height: 900 })
+  await expect(table.getByRole('columnheader', { name: 'Client proxy address' })).toHaveCount(0)
+  await expect(winget.getByText('Client proxy address', { exact: true })).toBeVisible()
+  await expect(winget.getByText('https://client.example:8443/winget/cache', { exact: true })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(320)
 })
 
 test('aligns administrator IP forms and footers across themes and widths', async ({ page }) => {
@@ -1903,11 +2109,13 @@ test('keeps settings actions compact and security and advanced forms readable', 
       await expect(page.getByRole('tooltip')).toContainText('Only forwarding headers from trusted reverse proxies')
       await page.keyboard.press('Tab')
       await expect(page.locator('.runtime-config-group-head p')).toHaveCount(0)
+      await page.getByRole('tab', { name: 'HTTPS certificates' }).click()
       await page.locator('button[aria-description="Certificate domains help"]').click()
       await expect(page.getByRole('tooltip', { name: /Separate domains with commas/ })).toContainText('Wildcard domains require DNS-01')
       await page.locator('button[aria-description="Certificate domains help"]').click()
       await page.keyboard.press('Tab')
       await expect(page.locator('.acme-status-card .ant-descriptions')).toBeVisible()
+      await page.getByRole('tab', { name: 'Runtime configuration' }).click()
       const cache = page.locator('.runtime-config-group').filter({ has: page.getByRole('heading', { name: 'Small-object disk cache', exact: true }) })
       const rows = await cache.locator('.runtime-config-fields > label').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()))
       expect(rows).toHaveLength(6)
@@ -1931,7 +2139,7 @@ test('keeps settings actions compact and security and advanced forms readable', 
         if (['access', 'advanced', 'security'].includes(route)) {
           const save = page.getByRole('button', { name: 'Save configuration', exact: true })
           await expect.poll(() => save.evaluate(button => {
-            const panel = document.querySelector('.admin-tab-panel')!.getBoundingClientRect()
+            const panel = document.querySelector('.admin-tab-panel:not([hidden])')!.getBoundingClientRect()
             const bounds = button.getBoundingClientRect()
             return { belowForm: bounds.top > panel.bottom, fitsViewport: bounds.left >= 0 && bounds.right <= window.innerWidth }
           }), { message: `Save position on ${route} at ${width}px` }).toEqual({ belowForm: true, fitsViewport: true })
@@ -2510,6 +2718,7 @@ test('configures DoH ECS and limits and checks saved upstreams without losing un
   })
   await page.goto('/admin')
   await page.getByRole('link', { name: 'Advanced', exact: true }).click()
+  await page.getByRole('tab', { name: 'DoH', exact: true }).click()
   const settings = page.locator('.runtime-config-group').filter({ has: page.getByRole('heading', { name: 'DNS over HTTPS (DoH)', exact: true }) })
   await expect(settings.locator('.doh-status-summary')).toHaveText('Cache hits 75.0%Coalesced 20SERVFAIL 2')
   await expect(settings.getByRole('combobox', { name: 'Upstreams for automatic ECS' })).toHaveCount(0)
