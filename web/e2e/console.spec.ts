@@ -1974,6 +1974,11 @@ test('polishes source cards, highlighted commands and single-column installation
   await expect(windows.locator('.command-token-string')).not.toHaveCount(0)
   await page.getByRole('button', { name: /npm \/ yarn \/ pnpm/ }).click()
   const modal = page.getByRole('dialog')
+  const closeSourceConfiguration = async () => {
+    await waitForDialogReady(modal)
+    await modal.getByRole('button', { name: 'Close configuration', exact: true }).click()
+    await expect(modal).toHaveCount(0)
+  }
   const code = modal.locator('.config-option').last().locator('code')
   await expect(code).toHaveText('npm config set registry https://mirror.example/npm/ --location=global')
   // The modal's entrance motion can outlive its content becoming visible.
@@ -2016,7 +2021,7 @@ test('polishes source cards, highlighted commands and single-column installation
       await page.screenshot({ path: test.info().outputPath(`source-modal-${theme}-${width}.png`), animations: 'disabled' })
     }
   }
-  await modal.getByRole('button', { name: 'Close configuration' }).click()
+  await closeSourceConfiguration()
   await page.setViewportSize({ width: 1440, height: 1000 })
   for (const [card, defaultTarget, distro, target] of [
     [/APT/, 'debian', 'Ubuntu', 'ubuntu'],
@@ -2033,16 +2038,16 @@ test('polishes source cards, highlighted commands and single-column installation
     await command.getByRole('button', { name: 'Copy command' }).click()
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expected)
     await expect(modal).not.toContainText('mirrorproxy.list')
-    await modal.getByRole('button', { name: 'Close configuration' }).click()
+    await closeSourceConfiguration()
   }
   for (const [name, code] of [['Python pip', 'pip'], ['Go modules', 'go'], ['Rust Cargo', 'cargo']]) {
     await page.getByRole('button', { name: new RegExp(name) }).click()
     await expect(modal.locator('.config-option').filter({ hasText: 'MirrorProxy CLI setup' }).locator('code')).toHaveText(`mirrorproxy set ${code}`)
-    await modal.getByRole('button', { name: 'Close configuration' }).click()
+    await closeSourceConfiguration()
   }
   await page.getByRole('button', { name: /OpenWrt/ }).click()
   await expect(modal.locator('.config-option').filter({ hasText: 'Switch system sources' }).locator('code')).toHaveText('mirrorproxy set openwrt')
-  await modal.getByRole('button', { name: 'Close configuration' }).click()
+  await closeSourceConfiguration()
   await setTheme(page, 'light')
   await page.locator('.source-workbench').screenshot({ path: test.info().outputPath('polished-source-cards.png') })
   await page.locator('#install').screenshot({ path: test.info().outputPath('polished-installation.png') })
